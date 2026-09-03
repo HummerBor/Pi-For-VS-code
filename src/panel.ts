@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -16,6 +17,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
   /** pi 侧 queue_update 报告的排队总数（steering+followUp），用于检测“队列变短=插话已被取走” */
   private lastQueueTotal = 0;
+  /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
+  private piCheckDone = false;
+  /** 本窗口是否已提醒过配置凭证（避免反复打扰） */
+  private authOfferShown = false;
   private selTimer: NodeJS.Timeout | undefined;
   private editorDisposables: vscode.Disposable[] = [];
 
@@ -60,9 +65,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // 面板第一次展示时，预热 pi 进程（不弹任何选择框；恢复历史走 ⏱ / 「会话」按钮）
     const prewarm = () => {
-      if (!this.client) {
+      // 首次可见：检测 pi 是否安装；没装则提供一键安装
+      if (!this.piCheckDone) {
+        this.piCheckDone = true;
+        void (async () => {
+          const v = await this.piVersion();
+          if (v === null) {
+            const pick = await vscode.window.showErrorMessage(
+              "未检测到 pi coding agent，面板需要它才能工作",
+              "一键安装 pi",
+              "打开 nodejs.org"
+            );
+            if (pick === "一键安装 pi") await this.installPi();
+            else if (pick === "打开 nodejs.org")
+              void vscode.env.openExternal(vscode.Uri.parse("https://nodejs.org"));
+          } else {
+            const c = this.ensureClient();
+            void c;
+            // pi 已装但没配过模型凭证 → 引导配置
+            void this.maybeOfferKeyConfig(false);
+          }
+        })();
+      } else if (!this.client) {
         const c = this.ensureClient();
-        // 触发 /命令和 @文件列表的懒加载缓存，后续秒开
         void c;
       }
     };
@@ -153,10 +178,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "status", text: "pi 进程已退出 (code " + code + ")" });
     };
     client.onError = (err) => {
-      this.post({
-        type: "notice",
-        text: "启动失败: " + err.message + " （请确认 pi 已全局安装并在 PATH 中）",
-      });
+      this.post({ type: "notice", text: "启动失败: " + err.message });
+      void vscode.window
+        .showErrorMessage("pi 启动失败: " + err.message, "一键安装 pi")
+        .then((pick) => {
+          if (pick === "一键安装 pi") void this.installPi();
+        });
     };
     client.events.on("event", (e: any) => void this.onPiEvent(e));
 
@@ -756,6 +783,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const items: Item[] = [];
 
     items.push({
+      label: "$(key) 配置模型 API key…",
+      detail: "写入 ~/.pi/agent/auth.json（Z.ai / OpenRouter / OpenAI / DeepSeek / Kimi…）",
+      run: async () => {
+        await this.configApiKey();
+      },
+    });
+    items.push({
+      label: "$(globe) 订阅登录 (/login)",
+      detail: "Claude Pro/Max、ChatGPT Plus/Pro、Codex 等订阅授权（浏览器流程）",
+      run: async () => {
+        this.post({ type: "user", text: "/login" });
+        await client.prompt("/login");
+      },
+    });
+    items.push({
+      label: "$(trash) 查看/删除已保存的凭证",
+      detail: "管理 ~/.pi/agent/auth.json 里的 key / 授权",
+      run: async () => {
+        await this.manageAuth();
+      },
+    });
+    items.push({
+      label: "$(cloud-download) 安装 / 更新 pi",
+      detail: "npm install -g @earendil-works/pi-coding-agent",
+      run: async () => {
+        await this.installPi();
+      },
+    });
+    items.push({
       label: "$(shield) 权限模式…",
       detail: "Manual / Edit automatically / Plan / Auto（对应 pi 的 /mode 扩展命令）",
       run: async () => {
@@ -868,6 +924,173 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       await pick.run();
     } catch (err: any) {
       this.post({ type: "notice", text: "设置失败: " + (err?.message ?? err) });
+    }
+  }
+
+  /** auth.json 里是否已有凭证 */
+  private hasAuthConfig(): boolean {
+    try {
+      const data = JSON.parse(
+        fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8")
+      );
+      return Object.keys(data).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 还没有模型凭证时引导用户去配 key（force=安装完立即弹） */
+  private async maybeOfferKeyConfig(force: boolean): Promise<void> {
+    if (this.hasAuthConfig()) return;
+    if (force) {
+      const pick = await vscode.window.showInformationMessage(
+        "pi 已就绪，还需要一个模型 API key 才能对话",
+        "现在配置",
+        "稍后"
+      );
+      if (pick === "现在配置") await this.configApiKey();
+    } else if (!this.authOfferShown) {
+      this.authOfferShown = true; // 每次窗口只提醒一次，不反复打扰
+      const pick = await vscode.window.showInformationMessage(
+        "检测到尚未配置任何模型凭证（API key / 订阅登录）",
+        "配置 API key",
+        "订阅登录 /login",
+        "稍后"
+      );
+      if (pick === "配置 API key") await this.configApiKey();
+      else if (pick === "订阅登录 /login") {
+        const c = this.ensureClient();
+        this.post({ type: "user", text: "/login" });
+        await c.prompt("/login");
+      }
+    }
+  }
+
+  /** 检测 pi 是否可用，返回版本号字符串，不可用返回 null */
+  private piVersion(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const p = spawn("pi", ["--version"], {
+        shell: process.platform === "win32",
+        windowsHide: true,
+      });
+      let out = "";
+      p.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+      p.on("error", () => resolve(null));
+      p.on("close", (code) => resolve(code === 0 ? out.trim().split("\n")[0] || "ok" : null));
+    });
+  }
+
+  /** 一键安装/更新 pi（npm 全局装），进度与结果显示在面板 */
+  private async installPi(): Promise<void> {
+    this.post({ type: "status", text: "正在安装/更新 pi…（可能需要 1~2 分钟）" });
+    this.post({ type: "notice", text: "📦 npm install -g @earendil-works/pi-coding-agent…" });
+    const proc = spawn("npm", ["install", "-g", "@earendil-works/pi-coding-agent"], {
+      shell: true,
+      windowsHide: true,
+    });
+    let tail = "";
+    const onOut = (d: Buffer) => (tail = (tail + d.toString()).slice(-300));
+    proc.stdout?.on("data", onOut);
+    proc.stderr?.on("data", onOut);
+    proc.on("error", () => {
+      this.post({ type: "status", text: "" });
+      void vscode.window.showErrorMessage(
+        "安装失败：未找到 npm，请先安装 Node.js（nodejs.org）"
+      );
+    });
+    proc.on("close", (code) => {
+      this.post({ type: "status", text: "" });
+      if (code === 0) {
+        this.post({ type: "notice", text: "✅ pi 安装/更新完成" });
+        // 装完后（重新）拉起客户端；还没有凭证则直接弹 key 配置
+        if (!this.client?.running) this.client = undefined;
+        const c = this.ensureClient();
+        void c;
+        void this.maybeOfferKeyConfig(true);
+      } else {
+        void vscode.window.showErrorMessage("安装失败: " + tail.slice(-200));
+      }
+    });
+  }
+
+  /** 配置模型 API key：写入 ~/.pi/agent/auth.json（与 pi 的 /login 存储格式一致） */
+  private async configApiKey(): Promise<void> {
+    const providers = [
+      { id: "zai", label: "Z.ai（GLM，全球）" },
+      { id: "zai-coding-cn", label: "Z.ai（GLM，中国区）" },
+      { id: "openrouter", label: "OpenRouter" },
+      { id: "anthropic", label: "Anthropic" },
+      { id: "openai", label: "OpenAI" },
+      { id: "deepseek", label: "DeepSeek" },
+      { id: "google", label: "Google Gemini" },
+      { id: "kimi-coding", label: "Kimi For Coding" },
+      { id: "qwen-token-plan-cn", label: "Qwen Token 套餐（中国）" },
+      { id: "xiaomi", label: "小米 MiMo" },
+    ];
+    const pick = await vscode.window.showQuickPick(
+      providers.map((p) => ({ label: p.label, description: p.id, id: p.id })),
+      { placeHolder: "选择 API key 所属服务商" }
+    );
+    if (!pick) return;
+    const key = await vscode.window.showInputBox({
+      prompt: "输入 API key（仅保存到本机 ~/.pi/agent/auth.json）",
+      password: true,
+    });
+    if (!key) return;
+    const file = path.join(os.homedir(), ".pi", "agent", "auth.json");
+    let data: any = {};
+    try {
+      data = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      // 文件不存在/损坏 → 新建
+    }
+    data[pick.id] = { type: "api_key", key };
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
+      this.post({ type: "notice", text: "✅ 已保存 " + pick.label + " 的 API key，点 ◇ 选择模型即可使用" });
+    } catch (err: any) {
+      this.post({ type: "notice", text: "保存失败: " + (err?.message ?? err) });
+    }
+  }
+
+  /** 查看/删除已保存的凭证（auth.json） */
+  private async manageAuth(): Promise<void> {
+    const file = path.join(os.homedir(), ".pi", "agent", "auth.json");
+    let data: any = {};
+    try {
+      data = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      this.post({ type: "notice", text: "没有已保存的凭证" });
+      return;
+    }
+    const ids = Object.keys(data);
+    if (!ids.length) {
+      this.post({ type: "notice", text: "没有已保存的凭证" });
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      ids.map((id) => ({
+        label: id,
+        description: data[id]?.type ?? "",
+        detail: "选中后将删除该凭证（订阅凭证删除后需重新 /login）",
+        id,
+      })),
+      { placeHolder: "查看/删除已保存的凭证（auth.json）" }
+    );
+    if (!pick) return;
+    const yes = await vscode.window.showWarningMessage(
+      "删除 " + pick.id + " 的凭证？",
+      { modal: true },
+      "删除"
+    );
+    if (yes !== "删除") return;
+    delete data[pick.id];
+    try {
+      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
+      this.post({ type: "notice", text: "已删除 " + pick.id });
+    } catch (err: any) {
+      this.post({ type: "notice", text: "删除失败: " + (err?.message ?? err) });
     }
   }
 

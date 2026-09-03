@@ -28,6 +28,9 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   agent_start 时同步真实会话记录（排队清空机制）；打开面板不弹任何选择框，静默预热；
   新会话自动补回记住的模型/思考等级（pi 的 new_session 会重置模型）
 - **模型/思考**：工具条点击切换，globalState 跨重启记忆（piChat.lastModel/lastThinking）
+- **pi 环境自助**：启动时 spawn `pi --version` 检测，没装→弹窗一键 npm 全局安装（进度/结果进面板）；
+  ⚙ 菜单可配 API key（写 ~/.pi/agent/auth.json，与 /login 同格式）、订阅登录 /login、
+  查看/删除凭证、安装/更新 pi；key 格式 `{ "zai": { "type": "api_key", "key": "..." } }`
 - **权限模式**：pi 扩展 `~/.pi/agent/extensions/modes.ts` 提供 /mode 命令（manual/edit-auto/plan/auto 四档，
   持久化到 ~/.pi/agent/mode.json，tool_call 事件拦截）；状态栏徽标点击弹出选择（插件直接写 mode.json）
 - **消息发送**：Enter 发送；agent 工作中 → steer 插队（虚线⏳排队气泡，agent_start 时清空并以
@@ -57,6 +60,8 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   （注意：乐观 busy 置位后必须用捕获的 wasBusy 调 prompt，否则空闲消息被当插话变慢）
 - **插话送达**：默认 one-at-a-time（CC 风格一条条处理，piChat.steeringMode 可配），启动时自动应用；
   ⚙ 菜单切换会持久化到配置
+- **会话记忆（按项目）**：globalState piChat.lastSessionByWs 存「工作区路径→会话文件」映射，
+  启动/重启自动恢复对应项目的上次会话（不串项目）；webview retainContextWhenHidden 保活
 - **历史重绘**：会话记录里的用户消息可能带 `--- 代码上下文: rel (range) ---` 前缀，renderAll 会解析剥离、
   还原成「附带代码」胶囊；未知 pi 事件若携带 error/reason 字段会透传为面板 notice（避免报错无反馈）
 - **启动**：面板首次可见即预热 pi 进程（PI_SKIP_VERSION_CHECK=1），消除首条消息延迟
