@@ -3,12 +3,26 @@
   "displayName": "pi Chat",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
   "version": "0.0.6",
-  "publisher": "local",
-  "private": true,
+  "publisher": "HummerBor",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HummerBor/Pi-For-VS-code.git"
+  },
+  "icon": "media/pi-icon.png",
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "ai",
+    "chat",
+    "claude-code"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
+    "AI",
+    "Chat",
     "Other"
   ],
   "main": "./out/extension.js",
@@ -18,7 +32,7 @@
         {
           "id": "piChat",
           "title": "pi",
-          "icon": "media/pi.svg"
+          "icon": "media/pi-icon.png"
         }
       ]
     },
