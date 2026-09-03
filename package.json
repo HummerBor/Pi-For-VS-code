@@ -1,0 +1,94 @@
+{
+  "name": "pi-vscode",
+  "displayName": "pi Chat",
+  "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
+  "version": "0.0.6",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "piChat",
+          "title": "pi",
+          "icon": "media/pi.svg"
+        }
+      ]
+    },
+    "views": {
+      "piChat": [
+        {
+          "type": "webview",
+          "id": "piChat.view",
+          "name": "pi Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "piChat.view.focus",
+        "title": "pi: 打开聊天面板",
+        "category": "pi"
+      }
+    ],
+    "configuration": {
+      "title": "pi Chat",
+      "properties": {
+        "piChat.sessionMode": {
+          "type": "string",
+          "enum": [
+            "ephemeral",
+            "continue",
+            "new"
+          ],
+          "enumDescriptions": [
+            "不保存会话（关闭即丢失）",
+            "启动时继续最近一次会话",
+            "新建持久会话（保存到 ~/.pi/agent/sessions）"
+          ],
+          "default": "ephemeral",
+          "description": "pi RPC 进程的会话模式（修改后重启调试生效）"
+        },
+        "piChat.sessionDir": {
+          "type": "string",
+          "default": "",
+          "description": "自定义 pi 会话存储目录（留空用默认 ~/.pi/agent/sessions，重启 pi 后生效）"
+        },
+        "piChat.autoRetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "模型请求失败时自动重试（超时/过载/限流），启动 pi 时自动应用"
+        },
+        "piChat.steeringMode": {
+          "type": "string",
+          "enum": [
+            "one-at-a-time",
+            "all"
+          ],
+          "enumDescriptions": [
+            "逐条：排队消息一条条送达，每条等上一轮回复结束（Claude Code 风格）",
+            "全部：所有排队插话在下一轮一次性送达"
+          ],
+          "default": "one-at-a-time",
+          "description": "插话送达方式（启动 pi 时自动应用，⚙ 菜单可切换）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
