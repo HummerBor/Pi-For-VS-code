@@ -15,6 +15,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private busy = false;
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
+  /** 最近一次已知会话名/文件（用于自动命名判断） */
+  private lastSessionName: string | null = null;
+  private lastSessionFile: string | null = null;
+  /** 已自动命名过的会话文件（避免重复 RPC） */
+  private autoTitledFor: string | null = null;
   /** pi 侧 queue_update 报告的排队总数（steering+followUp），用于检测“队列变短=插话已被取走” */
   private lastQueueTotal = 0;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
@@ -247,6 +252,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async onWebviewMessage(m: any): Promise<void> {
     switch (m.type) {
       case "prompt": {
+        // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
+        const tuiCmds: Record<string, string> = {
+          "/login": "订阅登录请点齿轮菜单 → 「订阅登录 (/login)」（会在终端打开 pi 完成授权）",
+          "/settings": "pi 终端设置在面板里不可用；面板相关设置在齿轮菜单里",
+          "/hotkeys": "/hotkeys 是 pi 终端专属命令，面板不支持",
+          "/theme": "/theme 是 pi 终端专属命令；面板主题点头部最后一个按钮切换",
+          "/help": "/help 是 pi 终端专属命令；面板用法可看扩展 README",
+        };
+        const trimmed = String(m.text ?? "").trim().toLowerCase();
+        if (tuiCmds[trimmed]) {
+          this.post({ type: "notice", text: "ⓘ " + tuiCmds[trimmed] });
+          if (trimmed === "/login") this.openTerminalLogin();
+          break;
+        }
         const client = this.ensureClient();
         let text = m.text;
         const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
@@ -264,6 +283,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         try {
           // agent 真的工作中 → steer 排队插话；空闲 → 直接发（不能用乐观置位的 busy，否则会被当成插话变慢）
           await client.prompt(text, wasBusy, m.images);
+          // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
+          if (!wasBusy && m.text) void this.autoTitleSession(m.text);
           if (wasBusy) {
             // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
             const qid = "q" + Date.now();
@@ -306,6 +327,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       case "openSession":
         await this.openSessionFile(m.file);
+        break;
+      case "revealSessionFile":
+        try {
+          const sdoc = await vscode.workspace.openTextDocument(vscode.Uri.file(m.file));
+          await vscode.window.showTextDocument(sdoc.uri, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+        } catch (err: any) {
+          this.post({ type: "notice", text: "打开会话文件失败: " + (err?.message ?? err) });
+        }
+        break;
+      case "openPath":
+        await this.openFilePath(m.path);
         break;
       case "deleteSession":
         try {
@@ -536,7 +568,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       fs.mkdirSync(path.dirname(modeFile), { recursive: true });
       fs.writeFileSync(modeFile, JSON.stringify({ mode: pick.id }, null, 2) + "\n", "utf8");
-      this.post({ type: "mode", text: "⚡ " + pick.label.replace(/^\$\([^)]+\) /, "") });
+      this.post({ type: "mode", text: pick.label.replace(/^\$\([^)]+\) /, "") });
       this.post({ type: "notice", text: "权限模式已切换: " + pick.label.replace(/^\$\([^)]*\) /, "") });
     } catch (err: any) {
       this.post({ type: "notice", text: "保存模式失败: " + (err?.message ?? err) });
@@ -565,9 +597,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { group: "模型", label: "切换模型…", description: "选择可用模型", builtin: "pickModel" },
       { group: "模型", label: "思考等级…", description: "off/low/medium/high…", builtin: "pickThinking" },
       { group: "模型", label: "权限模式…", description: "Manual / Edit auto / Plan / Auto", builtin: "pickMode" },
-      // 配置
-      { group: "配置", label: "pi 设置…", description: "送达方式 / 自动压缩 / 自动重试 / 会话", builtin: "settings" },
-      { group: "配置", label: "操作命令…", description: "压缩 / 分叉 / 导出 / 克隆 / shell / /命令", builtin: "more" },
+      // 配置（已合并进操作命令菜单，条目在菜单里分组展示）
+      { group: "配置", label: "pi 设置…", description: "API key / 登录 / 送达 / 自动压缩 / 会话", builtin: "settings" },
     ];
     const ext = cmds.map((c: any) => ({
       group: "命令 / 技能 / 模板",
@@ -636,6 +667,60 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       await this.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: "切换会话失败: " + (err?.message ?? err) });
+    }
+  }
+
+  /** /login 是 pi 终端内置命令，RPC 模式不可用 → 打开集成终端跑交互式 pi 完成 OAuth */
+  private openTerminalLogin(): void {
+    const term = vscode.window.createTerminal({ name: "pi 订阅登录" });
+    term.show();
+    term.sendText("pi");
+    this.post({
+      type: "notice",
+      text: "已在下方终端启动 pi：请输入 /login 选择订阅授权，完成后重载窗口（Ctrl+Shift+P → Reload Window）让面板使用新凭证",
+    });
+  }
+
+  /** 点击聊天里出现的文件路径 → 在编辑器打开（支持 path:line，相对路径按工作区解析） */
+  private async openFilePath(raw: string): Promise<void> {
+    if (!raw) return;
+    // 剩尾 :行号（或 :行:列）
+    const mm = raw.match(/^(.*?)(?::(\d{1,5})(?::(\d{1,5}))?)?$/);
+    let p = mm ? mm[1] : raw;
+    const line = mm && mm[2] ? parseInt(mm[2], 10) : undefined;
+    const col = mm && mm[3] ? parseInt(mm[3], 10) : undefined;
+    if (!p || /^[a-z]+:\/\//i.test(p)) return; // http(s):// 等非文件开头不处理
+    // 解析为绝对路径：相对路径依次尝试各工作区文件夹
+    let resolved: string | undefined;
+    const candidates = [p];
+    if (!path.isAbsolute(p)) {
+      for (const f of vscode.workspace.workspaceFolders ?? []) {
+        candidates.push(path.join(f.uri.fsPath, p));
+      }
+    }
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c) && fs.statSync(c).isFile()) { resolved = c; break; }
+      } catch { /* ignore */ }
+    }
+    if (!resolved) {
+      this.post({ type: "notice", text: "文件不存在: " + raw });
+      return;
+    }
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
+      let sel: vscode.Range | undefined;
+      if (line) {
+        const pos = new vscode.Position(Math.max(0, line - 1), col ? col - 1 : 0);
+        sel = new vscode.Range(pos, pos);
+      }
+      await vscode.window.showTextDocument(doc.uri, {
+        viewColumn: vscode.ViewColumn.Beside,
+        preview: true,
+        selection: sel,
+      });
+    } catch (err: any) {
+      this.post({ type: "notice", text: "打开失败: " + (err?.message ?? err) });
     }
   }
 
@@ -773,7 +858,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     ];
 
-    const pick = await vscode.window.showQuickPick(items, { placeHolder: "pi 操作命令" });
+    // 合并设置菜单（分组展示，原 ⚙ 按钮内容全部保留在此）
+    items.push({ label: "配置", kind: vscode.QuickPickItemKind.Separator });
+    items.push(...(await this.buildSettingsItems(client)));
+
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: "pi 菜单：会话操作 / 配置" });
     if (!pick?.run) return;
     try {
       await pick.run();
@@ -782,20 +871,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** ⚙ 设置菜单：pi 行为设置 + 扩展设置 + 配置文件入口 */
-  private async settingsMenu(): Promise<void> {
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
-    }
-    const client = this.ensureClient(true);
+  /** ⚙ 设置菜单条目（已合并进 ⚡ 菜单；/ 菜单「pi 设置…」仍单独打开） */
+  private async buildSettingsItems(client: PiClient): Promise<(vscode.QuickPickItem & { run?: () => Promise<void> })[]> {
     const st = await client.getState().catch(() => null);
     const cfg = vscode.workspace.getConfiguration("piChat");
     const mode = cfg.get<string>("sessionMode", "ephemeral");
     const sessionDir = cfg.get<string>("sessionDir", "");
 
-    type Item = vscode.QuickPickItem & { run?: () => Promise<void> };
-    const items: Item[] = [];
+    const items: (vscode.QuickPickItem & { run?: () => Promise<void> })[] = [];
 
     items.push({
       label: "$(key) 配置模型 API key…",
@@ -806,10 +889,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
     items.push({
       label: "$(globe) 订阅登录 (/login)",
-      detail: "Claude Pro/Max、ChatGPT Plus/Pro、Codex 等订阅授权（浏览器流程）",
+      detail: "Claude Pro/Max、ChatGPT Plus/Pro、Codex 等订阅授权（在集成终端完成浏览器流程）",
       run: async () => {
-        this.post({ type: "user", text: "/login" });
-        await client.prompt("/login");
+        await this.openTerminalLogin();
       },
     });
     items.push({
@@ -933,6 +1015,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     });
 
+    return items;
+  }
+
+  /** ⚙ 设置菜单（/ 菜单入口用） */
+  private async settingsMenu(): Promise<void> {
+    if (this.client?.running && this.clientNoSession) {
+      this.client.dispose();
+      this.client = undefined;
+    }
+    const client = this.ensureClient(true);
+    const items = await this.buildSettingsItems(client);
     const pick = await vscode.window.showQuickPick(items, { placeHolder: "pi 设置" });
     if (!pick?.run) return;
     try {
@@ -1016,7 +1109,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     proc.on("close", (code) => {
       this.post({ type: "status", text: "" });
       if (code === 0) {
-        this.post({ type: "notice", text: "✅ pi 安装/更新完成" });
+        this.post({ type: "notice", text: "✔ pi 安装/更新完成" });
         // 装完后（重新）拉起客户端；还没有凭证则直接弹 key 配置
         if (!this.client?.running) this.client = undefined;
         const c = this.ensureClient();
@@ -1063,7 +1156,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: "✅ 已保存 " + pick.label + " 的 API key，点 ◇ 选择模型即可使用" });
+      this.post({ type: "notice", text: "✔ 已保存 " + pick.label + " 的 API key，在工具条「模型」按钮选择即可使用" });
     } catch (err: any) {
       this.post({ type: "notice", text: "保存失败: " + (err?.message ?? err) });
     }
@@ -1249,6 +1342,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void this.globalState.update("piChat.lastSessionByWs", map);
   }
 
+  /** CC 风格自动命名：未命名会话收到首条真实用户消息后，用消息前 40 字做会话标题 */
+  private async autoTitleSession(text: string): Promise<void> {
+    try {
+      const client = this.client;
+      if (!client?.running) return;
+      if (this.lastSessionName) return; // 已有名字，不覆盖
+      const st = await client.getState().catch(() => null);
+      if (!st?.sessionFile || st.sessionName) return;
+      if (this.autoTitledFor === st.sessionFile) return;
+      const title = text.replace(/\s+/g, " ").trim().slice(0, 40);
+      if (!title) return;
+      await client.setSessionName(title);
+      this.autoTitledFor = st.sessionFile;
+      this.lastSessionName = title;
+      void this.refreshState(); // 头部「会话: …」立即更新
+    } catch {
+      // ignore
+    }
+  }
+
   /** 拉取当前模型/思考等级/token 用量并更新头部状态栏 */
   private async refreshState(): Promise<void> {
     const client = this.client;
@@ -1263,6 +1376,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
+      this.lastSessionName = st?.sessionName ?? null;
+      this.lastSessionFile = st?.sessionFile ?? null;
       this.post({
         type: "state",
         model: st?.model
@@ -1411,12 +1526,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({
             type: "notice",
             text:
-              "❌ 重试 " + (e.attempt ?? "?") + " 次仍失败: " +
+              "✘ 重试 " + (e.attempt ?? "?") + " 次仍失败: " +
               (e.finalError ? String(e.finalError).slice(0, 150) : "网络/服务端错误") +
               "，可重发消息再试",
           });
         } else if (e.attempt && e.attempt > 1) {
-          this.post({ type: "notice", text: "✅ 重试成功（第 " + e.attempt + " 次）" });
+          this.post({ type: "notice", text: "✔ 重试成功（第 " + e.attempt + " 次）" });
         }
         break;
       }
@@ -1558,7 +1673,15 @@ function readSessionMeta(file: string): { name?: string; cwd?: string; preview?:
       }
       const msg = e.message && e.message.role ? e.message : e.role ? e : null;
       if (!preview && msg?.role === "user") {
-        preview = extractText(msg.content).replace(/\s+/g, " ").slice(0, 60);
+        let t = extractText(msg.content);
+        if (t) {
+          // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
+          const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
+          if (mm) t = mm[1];
+          else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
+          t = t.replace(/\s+/g, " ").trim();
+          if (t && t !== "请看这段代码" && t !== "请看这张图片") preview = t.slice(0, 60);
+        }
       }
       if (preview && cwd) break;
     }
@@ -1604,11 +1727,10 @@ function getHtml(theme = "auto"): string {
     '<div id="hdr-row1">',
     '<span id="title">pi Chat</span>',
     '<span class="spacer"></span>',
-    '<span id="history" class="ico-btn" title="历史会话">⏱</span>',
-    '<span id="newchat" class="ico-btn" title="新建会话">＋</span>',
-    '<span id="more" class="ico-btn" title="操作命令：压缩 / 分叉 / 导出 / 克隆 / 执行shell / /命令">⚡</span>',
-    '<span id="settings" class="ico-btn" title="设置：送达方式 / 自动压缩 / 自动重试 / 会话模式">⚙</span>',
-    '<span id="theme" class="ico-btn" title="主题 / 背景">🎨</span>',
+    '<span id="history" class="ico-btn" title="历史会话"></span>',
+    '<span id="newchat" class="ico-btn" title="新建会话"></span>',
+    '<span id="more" class="ico-btn" title="菜单：会话操作 / 配置"></span>',
+    '<span id="theme" class="ico-btn" title="主题 / 背景"></span>',
     "</div>",
     '<div id="hdr-row2">',
     '<span id="session" class="hdr-btn" title="点击查看 / 切换历史会话">会话: —</span>',
@@ -1618,25 +1740,25 @@ function getHtml(theme = "auto"): string {
     '<div id="his-list"></div>',
     "</div>",
     "</div>",
-    '<div id="messages"><div class="notice">直接输入消息即可开始。工作中再发送会自动排队插话，Esc 或 ■ 停止。</div></div>',
+    '<div id="messages"><div class="notice">直接输入消息即可开始。工作中再发送会自动排队插话，Esc 或停止按钮可中断。</div></div>',
     '<div id="queuebar"></div>',
     '<div id="composer">',
     '<div id="suggest"></div>',
     '<div id="plusmenu">',
-    '<div class="pm-item" id="pm-upload">⬆ 上传图片</div>',
-    '<div class="pm-item" id="pm-at">＠ 引用文件</div>',
+    '<div class="pm-item" id="pm-upload"></div>',
+    '<div class="pm-item" id="pm-at"></div>',
     '</div>',
     '<input type="file" id="file" accept="image/*" multiple style="display:none">',
     '<div id="attachbar"></div>',
     '<textarea id="input" placeholder="给 pi 发消息… (Enter 发送，Shift+Enter 换行)"></textarea>',
     '<div id="ctoolbar">',
-    '<span id="attach" class="tb-btn" title="添加图片">＋</span>',
+    '<span id="attach" class="tb-btn" title="添加图片"></span>',
     '<span id="codechip" class="tb-btn" style="display:none"></span>',
-    '<span id="model" class="tb-btn" title="切换模型">◇ —</span>',
+    '<span id="model" class="tb-btn" title="切换模型">—</span>',
     '<span id="think" class="tb-btn" title="思考等级">思考 —</span>',
     '<span class="tb-spacer"></span>',
-    '<button id="stop" title="停止 (Esc)">■</button>',
-    '<button id="send" title="Enter 发送">↑</button>',
+    '<button id="stop" title="停止 (Esc)"></button>',
+    '<button id="send" title="Enter 发送"></button>',
     "</div>",
     "</div>",
     '<div id="footer">',
@@ -1660,7 +1782,7 @@ function css(): string {
     "#hdr-row1 { display: flex; align-items: center; gap: 6px; }",
     "#title { font-weight: bold; font-size: 12px; }",
     "#hdr-row2 { margin-top: 4px; font-size: 11px; opacity: .55; }",
-    ".ico-btn { cursor: pointer; padding: 1px 6px; border-radius: 4px; opacity: .75; font-size: 13px; }",
+    ".ico-btn { cursor: pointer; padding: 3px 5px; border-radius: 4px; opacity: .8; display: inline-flex; align-items: center; line-height: 0; }",
     ".ico-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }",
     ".spacer { flex: 1; }",
     ".spacer-right { margin-left: auto; }",
@@ -1698,7 +1820,7 @@ function css(): string {
     "@keyframes pulse { 50% { opacity: .3; } }",
     ".tool .t-name { font-weight: bold; color: var(--vscode-editor-foreground); }",
     ".tool .t-detail { opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }",
-    ".tool .t-arrow { opacity: .35; font-size: 9px; transition: transform .15s; }",
+    ".tool .t-arrow { opacity: .4; display: inline-flex; align-items: center; transition: transform .15s; }",
     ".tool.open .t-arrow { transform: rotate(90deg); }",
     ".tool-box { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; max-width: 92%; }",
     ".tool-box .tb-row { display: flex; gap: 8px; padding: 6px 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; }",
@@ -1722,7 +1844,7 @@ function css(): string {
     ".sg-header { padding: 6px 10px 2px; font-size: 10px; font-weight: bold; opacity: .45; text-transform: uppercase; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); margin-top: 2px; }",
     ".sg-header:first-child { margin-top: 0; border-top: none; }",
     "#plusmenu { display: none; position: absolute; bottom: 42px; left: 8px; min-width: 170px; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; overflow: hidden; }",
-    ".pm-item { padding: 6px 12px; font-size: 12px; cursor: pointer; }",
+    ".pm-item { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }",
     ".pm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }",
     "#history-panel { display: none; position: absolute; top: 30px; right: 8px; width: min(340px, 90%); max-height: 60%; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; display: none; flex-direction: column; }",
     "#his-search { margin: 8px; padding: 5px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 6px; outline: none; font-family: inherit; font-size: 12px; }",
@@ -1732,15 +1854,19 @@ function css(): string {
     ".his-main { flex: 1; overflow: hidden; }",
     ".his-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
     ".his-sub { font-size: 10px; opacity: .5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
-    ".his-del { opacity: .4; cursor: pointer; padding: 2px 4px; }",
+    ".his-del { opacity: .4; cursor: pointer; padding: 2px 4px; display: inline-flex; align-items: center; line-height: 0; }",
     ".his-del:hover { opacity: 1; color: var(--vscode-inputValidation-errorForeground, #f66); }",
+    ".his-open { opacity: .4; cursor: pointer; padding: 2px 4px; display: inline-flex; align-items: center; line-height: 0; }",
+    ".his-open:hover { opacity: 1; }",
+    ".fp { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }",
+    ".fp:hover { color: var(--vscode-textLink-foreground, #4daafc); }",
     "#input { display: block; width: 100%; box-sizing: border-box; resize: none; height: 54px; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 8px 10px; font-family: inherit; font-size: var(--vscode-font-size, 13px); }",
     "#ctoolbar { display: flex; align-items: center; gap: 4px; padding: 2px 8px 7px; }",
     ".tb-btn { cursor: pointer; padding: 2px 8px; border-radius: 5px; font-size: 12px; opacity: .8; white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }",
     "#codechip.off { opacity: .4; text-decoration: line-through; }",
     ".tb-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }",
     ".tb-spacer { flex: 1; }",
-    "#send, #stop { border: none; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }",
+    "#send, #stop { border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 13px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); display: inline-flex; align-items: center; justify-content: center; line-height: 0; }",
     "#send:hover, #stop:hover { background: var(--vscode-button-hoverBackground); }",
     "#stop { display: none; background: var(--vscode-inputValidation-errorBackground, #b91c1c); }",
     "",
@@ -1787,7 +1913,6 @@ function webviewJs(): string {
     "  var thinkEl = document.getElementById('think');",
     "  var sessionEl = document.getElementById('session');",
     "  var moreEl = document.getElementById('more');",
-    "  var settingsEl = document.getElementById('settings');",
   "  var themeEl = document.getElementById('theme');",
     "  var usageEl = document.getElementById('usage');",
     "  var newChatEl = document.getElementById('newchat');",
@@ -1803,6 +1928,71 @@ function webviewJs(): string {
     "  var hisSearch = document.getElementById('his-search');",
     "  var hisList = document.getElementById('his-list');",
     "  var sessionCache = null;",
+    "",
+    "  // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──",
+    "  var ICON_PATHS = {",
+    "    clock: '<circle cx=\"8\" cy=\"8\" r=\"6.2\"/><path d=\"M8 4.8V8l2.4 1.6\"/>',",
+    "    plus: '<path d=\"M8 3.5v9M3.5 8h9\"/>',",
+    "    term: '<path d=\"M3 5.5l3 2.5-3 2.5\"/><path d=\"M8.5 10.5H13\"/>',",
+    "    gear: '<circle cx=\"8\" cy=\"8\" r=\"2.1\"/><path d=\"M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2M3.5 3.5l1.6 1.6M10.9 10.9l1.6 1.6M12.5 3.5l-1.6 1.6M5.1 10.9l-1.6 1.6\"/>',",
+    "    theme: '<circle cx=\"8\" cy=\"8\" r=\"6.2\"/><path d=\"M8 1.8a6.2 6.2 0 0 1 0 12.4Z\" fill=\"currentColor\" stroke=\"none\"/>',",
+    "    image: '<rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\"/><circle cx=\"5.8\" cy=\"6.3\" r=\"1.1\"/><path d=\"M2.5 11.5L6 8.5l2.3 1.9 2.7-2.6 2.6 2.4\"/>',",
+    "    file: '<path d=\"M4 1.8h5.2L12.5 5v9.2H4Z\"/><path d=\"M9 1.8V5h3.5\"/>',",
+    "    filecode: '<path d=\"M4 1.8h5.2L12.5 5v9.2H4Z\"/><path d=\"M9 1.8V5h3.5\"/><path d=\"M6.2 8L5 9.2l1.2 1.2M9.8 8L11 9.2 9.8 10.4\"/>',",
+    "    cpu: '<rect x=\"4.5\" y=\"4.5\" width=\"7\" height=\"7\" rx=\"1\"/><path d=\"M8 1.8v2.7M8 11.5v2.7M1.8 8h2.7M11.5 8h2.7\"/>',",
+    "    up: '<path d=\"M8 13V3.5M4.2 7.3L8 3.5l3.8 3.8\"/>',",
+    "    stop: '<rect x=\"4.5\" y=\"4.5\" width=\"7\" height=\"7\" rx=\"1.2\" fill=\"currentColor\" stroke=\"none\"/>',",
+    "    x: '<path d=\"M4 4l8 8M12 4L4 12\"/>',",
+    "    chev: '<path d=\"M6 3.5L10.5 8 6 12.5\"/>',",
+    "    check: '<path d=\"M3.2 8.6l3 3L12.8 4.4\"/>',",
+    "    at: '<circle cx=\"8\" cy=\"8\" r=\"2.2\"/><path d=\"M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9\"/>'",
+    "  };",
+    "  function ico(name, size) {",
+    "    var s = size || 14;",
+    "    return '<svg viewBox=\"0 0 16 16\" width=\"' + s + '\" height=\"' + s + '\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"vertical-align:-2px\" aria-hidden=\"true\">' + (ICON_PATHS[name] || '') + '</svg>';",
+    "  }",
+    "  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }",
+    "  // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──",
+    "  var FILE_RE = /([A-Za-z]:[\\/][\\w.\\- \\u4e00-\\u9fff\\/]*[\\w.\\-\\u4e00-\\u9fff]\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w.\\-]+(?:[\\/][\\w.\\- \\u4e00-\\u9fff]+)+\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?)/g;",
+    "  function cleanPath(p) {",
+    "    p = p.replace(/[.,;:!?)}\\]⟩】»]+$/, '');",
+    "    var parts = p.split(' ');",
+    "    while (parts.length > 1 && parts[parts.length - 1].indexOf('/') === -1 && parts[parts.length - 1].indexOf('\\\\') === -1) parts.pop();",
+    "    return parts.join(' ');",
+    "  }",
+    "  function linkify(root) {",
+    "    if (!root) return;",
+    "    var nodes = [];",
+    "    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);",
+    "    while (w.nextNode()) { var n = w.currentNode; if (n.parentNode.nodeName !== 'PRE' && n.parentNode.classList && !n.parentNode.classList.contains('fp')) nodes.push(n); }",
+    "    for (var i = 0; i < nodes.length; i++) {",
+    "      var n = nodes[i]; var txt = n.nodeValue; if (!txt) continue;",
+    "      FILE_RE.lastIndex = 0; if (!FILE_RE.test(txt)) continue;",
+    "      FILE_RE.lastIndex = 0;",
+    "      var frag = document.createDocumentFragment(); var last = 0, m2;",
+    "      while ((m2 = FILE_RE.exec(txt)) !== null) {",
+    "        if (m2.index > 0 && txt.charAt(m2.index - 1) === '/') { continue; } // URL 的一部分，不当作路径",
+    "        var p = cleanPath(m2[0]);",
+    "        if (m2.index > last) frag.appendChild(document.createTextNode(txt.slice(last, m2.index)));",
+    "        if (p) { var sp = document.createElement('span'); sp.className = 'fp'; sp.textContent = p; sp.setAttribute('data-p', p); frag.appendChild(sp); }",
+    "        else frag.appendChild(document.createTextNode(m2[0]));",
+    "        last = m2.index + m2[0].length;",
+    "      }",
+    "      if (last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last)));",
+    "      n.parentNode.replaceChild(frag, n);",
+    "    }",
+    "  }",
+    "  // ── 头部/工具条图标注入（统一 SVG）──",
+    "  historyEl.innerHTML = ico('clock');",
+    "  newChatEl.innerHTML = ico('plus');",
+    "  moreEl.innerHTML = ico('gear');",
+    "  themeEl.innerHTML = ico('theme');",
+    "  attachEl.innerHTML = ico('image');",
+    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传图片</span>';",
+    "  pmAt.innerHTML = ico('at', 13) + '<span>引用文件</span>';",
+    "  modelEl.innerHTML = ico('cpu') + ' —';",
+    "  stopBtn.innerHTML = ico('stop', 11);",
+    "  sendBtn.innerHTML = ico('up', 14);",
     "",
     "  // ── ＋菜单：上传图片 / 引用文件 ──",
     "  attachEl.addEventListener('click', function (e) {",
@@ -1831,7 +2021,7 @@ function webviewJs(): string {
     "    var n = 0;",
     "    for (var i = 0; i < sessionCache.length && n < 50; i++) {",
     "      var s = sessionCache[i];",
-    "      var label = s.name || s.preview || '会话';",
+    "      var label = s.name || s.preview || '未命名会话';",
     "      if (q && (label + ' ' + s.time).toLowerCase().indexOf(q) === -1) continue;",
     "      n++;",
     "      (function(sess) {",
@@ -1840,10 +2030,14 @@ function webviewJs(): string {
     "        main.appendChild(el('div', 'his-name', label));",
     "        main.appendChild(el('div', 'his-sub', sess.time));",
     "        row.appendChild(main);",
-    "        var del = el('span', 'his-del', '\\u2715');",
+    "        var open = el('span', 'his-open'); open.innerHTML = ico('file', 12); open.title = '在编辑器打开会话文件 (.jsonl)';",
+    "        open.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'revealSessionFile', file: sess.file }); });",
+    "        row.appendChild(open);",
+    "        var del = el('span', 'his-del'); del.innerHTML = ico('x', 12);",
     "        del.title = '删除会话';",
     "        del.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'deleteSession', file: sess.file }); });",
     "        row.appendChild(del);",
+    "        row.title = sess.file;",
     "        row.addEventListener('click', function () { histPanel.style.display = 'none'; vscode.postMessage({ type: 'openSession', file: sess.file }); });",
     "        hisList.appendChild(row);",
     "      })(s);",
@@ -1861,7 +2055,7 @@ function webviewJs(): string {
     "  function renderCodeChip() {",
     "    if (!codeCtx) { codechipEl.style.display = 'none'; return; }",
     "    codechipEl.style.display = 'inline-block';",
-    "    codechipEl.textContent = '\\ud83d\\udcc4 ' + codeCtx.name + ' ' + codeCtx.range;",
+    "    codechipEl.innerHTML = ico('filecode', 12) + ' ' + esc(codeCtx.name + ' ' + codeCtx.range);",,
     "    codechipEl.className = 'tb-btn' + (codeOn ? '' : ' off');",
     "    codechipEl.title = (codeOn ? '\\u00d7 点击不附带' : '\\u2713 点击附带') + '\\n' + codeCtx.rel + ' (' + codeCtx.range + ')';",
     "  }",
@@ -1878,12 +2072,12 @@ function webviewJs(): string {
     "  function setStatus(t) { baseStatus = t || ''; renderStatus(); }",
     "  var baseStatus = '';",
     "  var queueN = 0;",
-    "  var modeText = '⚡ Auto';",
+    "  var modeText = 'Auto';",
     "  var busyTimer = null; var busyStart = 0;",
     "  function renderStatus() { modeBadge.textContent = modeText; statusEl.textContent = baseStatus + (queueN > 0 ? ' · 排队 ' + queueN + ' 条' : ''); }",
     "  function setBusy(v) {",
     "    streaming = v;",
-    "    stopBtn.style.display = v ? 'inline-block' : 'none';",
+    "    stopBtn.style.display = v ? 'inline-flex' : 'none';",
     "    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }",
     "    if (v) {",
     "      busyStart = Date.now();",
@@ -1937,15 +2131,16 @@ function webviewJs(): string {
     "        renderPlain(parent, parts[i]);",
     "      }",
     "    }",
+    "    linkify(parent);",
     "  }",
     "",
-    "  function addUser(text, imageCount, codeInfo) { var b = el('div', 'bubble user', text || '\ud83d\udcc4 (代码上下文)'); if (codeInfo) b.appendChild(el('div', 'notice', '\ud83d\udcc4 附带代码: ' + codeInfo)); if (imageCount) b.appendChild(el('div', 'notice', '\ud83d\udcbc ' + imageCount + ' 张图片')); messages.appendChild(b); scroll(); }",
+    "  function addUser(text, imageCount, codeInfo) { var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
     "  var queuedItems = [];",
     "  function addQueued(q) {",
     "    queuedItems.push(q);",
     "    var b = el('div', 'q-item');",
     "    b.setAttribute('data-qid', q.qid);",
-    "    b.appendChild(el('span', 'q-ico', '\\u23f3'));",
+    "    var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);",,
     "    b.appendChild(el('span', 'q-text', q.text || '(图片/代码)'));",
     "    // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流",
     "    document.getElementById('queuebar').appendChild(b);",
@@ -1993,8 +2188,8 @@ function webviewJs(): string {
     "    var t = el('div', 'tool run');",
     "    t.appendChild(el('span', 't-dot'));",
     "    t.appendChild(el('span', 't-name', name));",
-    "    if (detail) { var d = el('span', 't-detail', detail); d.title = detail; t.appendChild(d); }",
-    "    t.appendChild(el('span', 't-arrow', '\\u25b8'));",
+    "    if (detail) { var d = el('span', 't-detail', detail); d.title = detail; t.appendChild(d); linkify(d); }",
+    "    var arr = el('span', 't-arrow'); arr.innerHTML = ico('chev', 12); t.appendChild(arr);",
     "    var box = el('div', 'tool-box');",
     "    if (detail) {",
     "      var inRow = el('div', 'tb-row');",
@@ -2002,6 +2197,7 @@ function webviewJs(): string {
     "      inRow.appendChild(el('span', 'tb-val', detail));",
     "      box.appendChild(inRow);",
     "    }",
+    "    linkify(box);",
     "    box.style.display = collapsed ? 'none' : 'block';",
     "    if (!collapsed) t.classList.add('open');",
     "    t.addEventListener('click', function () {",
@@ -2029,8 +2225,8 @@ function webviewJs(): string {
     "    t.innerHTML = '';",
     "    t.appendChild(el('span', 't-dot'));",
     "    t.appendChild(el('span', 't-name', name));",
-    "    if (detail) { var d2 = el('span', 't-detail', detail); d2.title = detail; t.appendChild(d2); }",
-    "    t.appendChild(el('span', 't-arrow', '\\u25b8'));",
+    "    if (detail) { var d2 = el('span', 't-detail', detail); d2.title = detail; t.appendChild(d2); linkify(d2); }",
+    "    var arr2 = el('span', 't-arrow'); arr2.innerHTML = ico('chev', 12); t.appendChild(arr2);",
     "    ref.box.innerHTML = '';",
     "    if (detail) {",
     "      var r1 = el('div', 'tb-row');",
@@ -2038,6 +2234,7 @@ function webviewJs(): string {
     "      r1.appendChild(el('span', 'tb-val', detail));",
     "      ref.box.appendChild(r1);",
     "    }",
+    "    linkify(ref.box);",
     "    if (text) {",
     "      var r2 = el('div', 'tb-row');",
     "      r2.appendChild(el('span', 'tb-tag', 'OUT'));",
@@ -2049,7 +2246,7 @@ function webviewJs(): string {
     "    if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');",
     "    scroll();",
     "  }",
-    "  function notice(text) { messages.appendChild(el('div', 'notice', text)); scroll(); }",
+    "  function notice(text) { var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }",
     "  function textOf(content) {",
     "    if (typeof content === 'string') return content;",
     "    var out = '';",
@@ -2109,12 +2306,12 @@ function webviewJs(): string {
     "      var det0 = lines[0] && lines[0].d ? '  ' + lines[0].d : '';",
     "      var dsum = el('span', 't-detail', '\\u00d7' + run.length + det0);",
     "      dsum.title = lines.map(function(l) { return (l.d || '(无参数)') + (l.out ? '  → ' + l.out : ''); }).join('\\n');",
-    "      t.appendChild(dsum);",
-    "      t.appendChild(el('span', 't-arrow', '\\u25b8'));",
+    "      t.appendChild(dsum); linkify(dsum);",
+    "      var arrA = el('span', 't-arrow'); arrA.innerHTML = ico('chev', 12); t.appendChild(arrA);",,
     "      var box = el('div', 'tool-box');",
     "      for (var li = 0; li < lines.length; li++) {",
     "        var row = el('div', 'tb-row');",
-    "        var tag = el('span', 'tb-tag', lines[li].err ? '\\u2717' : '\\u2713');",
+    "        var tag = el('span', 'tb-tag'); tag.innerHTML = ico(lines[li].err ? 'x' : 'check', 11);",,
     "        tag.style.color = lines[li].err ? '#f66' : '#4ec96e';",
     "        row.appendChild(tag);",
     "        row.appendChild(el('span', 'tb-val', (lines[li].d || '(无参数)') + (lines[li].out ? ('  \u2192 ' + lines[li].out) : '')));",
@@ -2174,7 +2371,7 @@ function webviewJs(): string {
     "    return s.split(/[\\\\/]/).pop() || '临时(未保存)';",
     "  }",
     "  function applyState(m) {",
-    "    modelEl.textContent = m.model ? (m.model.name || m.model.id) : '◇ —';",
+    "    modelEl.innerHTML = ico('cpu') + ' ' + esc(m.model ? (m.model.name || m.model.id) : '—');",
     "    modelEl.title = m.model ? ('切换模型 (当前: ' + (m.model.provider || '') + '/' + (m.model.id || '') + ')') : '切换模型';",
     "    thinkEl.textContent = '思考 ' + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');",
     "    var sessName = fmtSession(m.sessionFile, m.sessionName);",
@@ -2311,8 +2508,7 @@ function webviewJs(): string {
     "  stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });",
     "  fileInput.addEventListener('change', function () { handleFiles(fileInput.files || []); fileInput.value = ''; });",
     "  sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
-    "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",
-    "  settingsEl.addEventListener('click', function () { vscode.postMessage({ type: 'settings' }); });",
+    "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",,
     "  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });",
     "  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });",
     "  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });",

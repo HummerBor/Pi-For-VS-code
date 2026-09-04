@@ -1,18 +1,18 @@
 # pi-for-vscode 插件交接文档
 
 > 给新会话的 pi：本项目是一个 VS Code 扩展，为 pi coding agent 提供 Claude Code 风格的聊天面板。
-> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-03（晚间）
+> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-04
 
 ## 项目概览
 
 - 位置：`D:\work\docs\pi test\pi-vscode`（git 仓库根就在这里，**不是上级目录**）
 - GitHub：https://github.com/HummerBor/Pi-For-VS-code （公开，MIT LICENSE，README 已重写为正式项目说明）
-- 插件名：已从 pi-vscode 改为 **pi-for-vscode**（商店重名规避），publisher=HummerBor，版本 0.0.6
+- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.6
 - Marketplace 上架材料已备齐（publisher/license/repository/PNG 图标），**用户还没上传**——
   流程：marketplace.visualstudio.com/manage → 建发布者 → Upload VSIX（或 vsce publish）
-- ⚠️ **待办**：本地有一笔未推送的提交（工作中新建会话防误触确认），当时 GitHub 网络超时，
-  恢复后 `git push origin main` 即可
-- 用户环境：Windows，pi 已全局安装，Z.ai GLM 5.3 模型（偶尔切免费模型）
+- 用户环境：Windows，pi 已全局安装；**已切智谱中国区**（`zai-coding-cn` / `glm-5.3-flash`，
+  已写入 `~/.pi/agent/settings.json` 的 defaultProvider/defaultModel）；
+  Zai 全球站(`zai`/api.z.ai)与中国区(`zai-coding-cn`/open.bigmodel.cn)账号体系不通用，key 二选一
 - 用户不熟悉命令行，所有 pi 能力都要求做成面板可视化操作
 
 ## 架构
@@ -34,8 +34,23 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   agent_start 时同步真实会话记录（排队清空机制）；打开面板不弹任何选择框，静默预热；
   新会话自动补回记住的模型/思考等级（pi 的 new_session 会重置模型）；
   **工作中点 ＋ 会弹确认**（防误终止运行中的任务）
-- **主题**：头部 🎨 按钮，跟随 VS Code / CC 暗黑 / 午夜蓝（css() 里 body[data-theme=...] 规则，
+- **主题**：头部 ◐ 按钮，跟随 VS Code / CC 暗黑 / 午夜蓝（css() 里 body[data-theme=...] 规则，
   加新主题就在那里加一段），piChat.theme 持久化，getHtml(theme) 启动即应用
+- **统一 SVG 图标（2026-09-04）**：webviewJs 顶部 `ICON_PATHS` + `ico(name,size)` + `esc()`，
+  全部图标（时钟/加号/齿轮/主题圆/图片/文档/芯片/箭头/叉/对勾/@/终端…）16 网格描边风、
+  currentColor 跟随主题；静态 HTML 里按钮留空壳，JS 注入（见「图标注入」块）。
+  ⚠️ **定义必须在使用之前**（脚本自上而下执行，ICON_PATHS 放注入之后会 TypeError 全面板死）
+- **菜单合并（2026-09-04）**：头部只留 4 按钮（历史/新会话/齿轮菜单/主题）；齿轮=runCommand
+  合并菜单（QuickPick 分隔线分「会话操作」「配置」两组）；settingsMenu() 保留供 / 菜单
+  「pi 设置…」单独打开；buildSettingsItems() 是条目工厂
+- **会话自动命名（2026-09-04）**：autoTitleSession()——未命名会话首条真实文字消息 →
+  前 40 字 setSessionName；readSessionMeta 预览跳过纯代码上下文/占位消息；兜底「未命名会话」
+- **历史面板打开文件（2026-09-04）**：会话行悬停有 📄(revealSessionFile→旁栏打开 .jsonl)
+  和 ✕(删除)两钮；行悬停 title 显示完整路径；点行=切换会话
+- **聊天内文件路径可点击（2026-09-04）**：webviewJs `FILE_RE`+`cleanPath()`+`linkify()` 把文本里
+  路径包成 .fp span（绝对/相对/中文/空格路径，支持 `:行:列` 后缀；跳过 URL 与代码块）；
+  messages 捕获阶段点击拦截（不触发工具行折叠）→ `openPath` → openFilePath() 解析打开
+  （按工作区解析相对路径，showTextDocument 旁栏+跳行）；renderRich/工具行 detail/明细块/notice 都接入
 - **模型/思考**：工具条点击切换，globalState 跨重启记忆（piChat.lastModel/lastThinking）
 - **pi 环境自助**：启动时 spawn `pi --version` 检测，没装→弹窗一键 npm 全局安装（进度/结果进面板）；
   ⚙ 菜单可配 API key（写 ~/.pi/agent/auth.json，与 /login 同格式）、订阅登录 /login、
@@ -47,7 +62,10 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - **代码上下文**：监听编辑器选区（250ms 防抖），选中→附带选中行，无选区→整个文件（>80KB 跳过）；
   工具条胶囊可点击切换带/不带走；发送时拼 "--- 代码上下文: rel (range) ---" 代码块
 - **图片**：粘贴/拖拽/＋菜单上传，base64 走 prompt.images，缩略图胶囊可删除（最多4张）
-- **/ 菜单**：分组（上下文/会话/模型/配置/命令技能模板），内置项直接触发面板动作（builtin 字段）
+- **/ 菜单**：分组（上下文/会话/模型/配置/命令技能模板），内置项直接触发面板动作（builtin 字段）；
+  TUI 内置命令（/login /settings /theme /hotkeys /help）prompt case 拦截提示正确入口，
+  不再静默变成对话消息；**订阅登录**走 openTerminalLogin()（集成终端跑交互式 pi，
+  用户在里面输 /login 完成 OAuth——RPC 模式下 TUI 内置命令不可用，这是 pi 官方行为）
 - **@ 文件引用**：工作区文件索引（跳过 node_modules/out/隐藏目录，深度6，上限2000）
 - **⚡ 命令菜单**：重命名会话/compact/清空排队/导出HTML/fork/clone/bash/get_commands
 - **⚙ 设置菜单**：权限模式/插话送达/追问送达/自动压缩/自动重试/会话模式/sessionDir/打开pi配置目录
@@ -82,9 +100,15 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   开新会话即可
 - Z.ai 免费档请求超时/过载常见（服务端行为）：auto-retry 已默认开启，失败原因和 ✅/❌ 结果面板可见
 - webview JS 是字符串数组拼接，历史上多次因「漏引号/换行」产生语法错误导致整个面板静默失效——
-  改动后务必 compile + 重装验证；面板全死时 Ctrl+Shift+I 看 Console 红色报错
+  改动后务必 compile + 重装验证；面板全死时 Ctrl+Shift+I 看 Console 红色报错。
+  **另一个同类型坑（2026-09-04）：脚本是自上而下执行的，库/常量定义必须放在调用之前**——
+  图标注入代码写在 `var ICON_PATHS` 定义之前，首次 `ico()` 调用抛 TypeError 整个脚本死掉
+  （图标全消失 + 所有事件监听没绑上，症状像「面板全死」）。新增帮助函数时永远定义在最前面
 - 同一项目开多个 VS Code 窗口会恢复同一个会话文件（lastSessionByWs 按文件夹映射），
   两窗口的 pi 同时写一个会话文件有冲突风险——多标签功能做掉前，同项目别开双窗口干不同的活
+- 编译后可用一行命令快速验证 webview JS 语法（不重装 VSIX）：
+  `node -e "const fs=require('fs');let src=fs.readFileSync('out/panel.js','utf8');const html=new Function(src.slice(src.indexOf('function getHtml'),src.indexOf('//# sourceMappingURL'))+';return getHtml(\"auto\")')();new Function(html.match(/<script nonce=\"[^\"]*\">([\\s\\S]*)<\\/script>/)[1]);console.log('OK')"`
+  （只能查语法，查不出运行时顺序问题——库定义务必放使用之前）
 
 ## 下一个大功能：面板内多标签并行会话（用户已提出，未开工）
 
@@ -92,8 +116,16 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - 每个标签页一个独立 PiClient 进程（clients 从单例变 Map<tabId, {client, queued, busy,...}>）
 - 所有 post 事件带 tabId，webview 加标签栏 + 每标签独立消息 DOM（或切签时重渲染）
 - 后台标签任务完成时标签上亮提示；关闭标签要 dispose 进程
-- lastSessionByWs 逻辑需同步扩展为按标签；注意多进程写同一会话文件的隔离
+- lastSessionByWs 逻辑需同步扩展为按标签；会话自动命名后标签标题可直接用会话名；
+  注意多进程写同一会话文件的隔离
 - **架构级改动，改动后需充分测试**（多进程并行/事件路由/资源回收），建议单独排一个会话
+
+## 2026-09-04 会话待验收清单（用户正在测）
+
+① 图标统一显示 ② 齿轮合并菜单两组 ③ 新会话首条消息自动命名
+④ 历史面板 📄 打开 .jsonl / 行点击切换 ⑤ 聊天内路径点击打开（含 :行号跳转）
+⑥ 输入框敲 /login 有提示并自动开终端 ⑦ 重载后默认模型 glm-5.3-flash（中国区）。
+全部通过后：git 提交推送（本轮改动一笔）+ 用户上传 Marketplace VSIX
 
 ## 移植/嵌入到其他 App 的注意事项（以后嵌入时读这段）
 
