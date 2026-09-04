@@ -1,19 +1,25 @@
-# pi-vscode 插件交接文档
+# pi-for-vscode 插件交接文档
 
 > 给新会话的 pi：本项目是一个 VS Code 扩展，为 pi coding agent 提供 Claude Code 风格的聊天面板。
-> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-03
+> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-03（晚间）
 
 ## 项目概览
 
-- 位置：`D:\work\docs\pi test\pi-vscode`
-- 用户环境：Windows，pi 已全局安装（npm 方式），Z.ai GLM 5.3 Flash 模型
+- 位置：`D:\work\docs\pi test\pi-vscode`（git 仓库根就在这里，**不是上级目录**）
+- GitHub：https://github.com/HummerBor/Pi-For-VS-code （公开，MIT LICENSE，README 已重写为正式项目说明）
+- 插件名：已从 pi-vscode 改为 **pi-for-vscode**（商店重名规避），publisher=HummerBor，版本 0.0.6
+- Marketplace 上架材料已备齐（publisher/license/repository/PNG 图标），**用户还没上传**——
+  流程：marketplace.visualstudio.com/manage → 建发布者 → Upload VSIX（或 vsce publish）
+- ⚠️ **待办**：本地有一笔未推送的提交（工作中新建会话防误触确认），当时 GitHub 网络超时，
+  恢复后 `git push origin main` 即可
+- 用户环境：Windows，pi 已全局安装，Z.ai GLM 5.3 模型（偶尔切免费模型）
 - 用户不熟悉命令行，所有 pi 能力都要求做成面板可视化操作
 
 ## 架构
 
 ```
-src/extension.ts   - 扩展入口：注册 WebviewViewProvider + 状态栏按钮
-src/panel.ts       - 核心（~1800行）：ChatPanelProvider，RPC 事件→UI，所有功能菜单
+src/extension.ts   - 扩展入口：注册 WebviewViewProvider（retainContextWhenHidden 保活）+ 状态栏按钮
+src/panel.ts       - 核心（~2100行）：ChatPanelProvider，RPC 事件→UI，所有功能菜单
 src/piClient.ts    - RPC 客户端：spawn pi --mode rpc，stdin/stdout JSONL（LF 分帧，勿用 readline）
 src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是字符串数组拼的 JS，改时注意转义！
                      每行必须独立包裹引号；TS 字符串里的 \n 会变成真实换行导致语法错误，要写 \\n）
@@ -26,7 +32,10 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 
 - **会话**：⏱ 历史面板（搜索/删除/切换，项目级过滤 ~/.pi/agent/sessions）、＋新会话、
   agent_start 时同步真实会话记录（排队清空机制）；打开面板不弹任何选择框，静默预热；
-  新会话自动补回记住的模型/思考等级（pi 的 new_session 会重置模型）
+  新会话自动补回记住的模型/思考等级（pi 的 new_session 会重置模型）；
+  **工作中点 ＋ 会弹确认**（防误终止运行中的任务）
+- **主题**：头部 🎨 按钮，跟随 VS Code / CC 暗黑 / 午夜蓝（css() 里 body[data-theme=...] 规则，
+  加新主题就在那里加一段），piChat.theme 持久化，getHtml(theme) 启动即应用
 - **模型/思考**：工具条点击切换，globalState 跨重启记忆（piChat.lastModel/lastThinking）
 - **pi 环境自助**：启动时 spawn `pi --version` 检测，没装→弹窗一键 npm 全局安装（进度/结果进面板）；
   ⚙ 菜单可配 API key（写 ~/.pi/agent/auth.json，与 /login 同格式）、订阅登录 /login、
@@ -62,17 +71,29 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   ⚙ 菜单切换会持久化到配置
 - **会话记忆（按项目）**：globalState piChat.lastSessionByWs 存「工作区路径→会话文件」映射，
   启动/重启自动恢复对应项目的上次会话（不串项目）；webview retainContextWhenHidden 保活
-- **历史重绘**：会话记录里的用户消息可能带 `--- 代码上下文: rel (range) ---` 前缀，renderAll 会解析剥离、
-  还原成「附带代码」胶囊；未知 pi 事件若携带 error/reason 字段会透传为面板 notice（避免报错无反馈）
+- **错误反馈**：auto_retry_start 带 errorMessage 弹 notice + 状态栏；auto_retry_end 成功→✅、
+  耗尽→❌ 带 finalError；piChat.autoRetry 默认 true，启动自动应用；
+  未知 pi 事件若携带 error/reason 字段会透传为面板 notice（避免报错无反馈）
 - **启动**：面板首次可见即预热 pi 进程（PI_SKIP_VERSION_CHECK=1），消除首条消息延迟
 
 ## 已知问题/限制
 
 - 旧会话文件里存的空文字消息（bug 时期产生的）重绘时显示「📄 (代码上下文)」占位，无法追溯修复，
   开新会话即可
-- Z.ai GLM 首字延迟偶尔很长（服务端行为），计时器秒数已可视化；停止按钮测试正常
+- Z.ai 免费档请求超时/过载常见（服务端行为）：auto-retry 已默认开启，失败原因和 ✅/❌ 结果面板可见
 - webview JS 是字符串数组拼接，历史上多次因「漏引号/换行」产生语法错误导致整个面板静默失效——
   改动后务必 compile + 重装验证；面板全死时 Ctrl+Shift+I 看 Console 红色报错
+- 同一项目开多个 VS Code 窗口会恢复同一个会话文件（lastSessionByWs 按文件夹映射），
+  两窗口的 pi 同时写一个会话文件有冲突风险——多标签功能做掉前，同项目别开双窗口干不同的活
+
+## 下一个大功能：面板内多标签并行会话（用户已提出，未开工）
+
+用户想在一个面板里开多个会话让 agent 并行干不同的活。设计草案：
+- 每个标签页一个独立 PiClient 进程（clients 从单例变 Map<tabId, {client, queued, busy,...}>）
+- 所有 post 事件带 tabId，webview 加标签栏 + 每标签独立消息 DOM（或切签时重渲染）
+- 后台标签任务完成时标签上亮提示；关闭标签要 dispose 进程
+- lastSessionByWs 逻辑需同步扩展为按标签；注意多进程写同一会话文件的隔离
+- **架构级改动，改动后需充分测试**（多进程并行/事件路由/资源回收），建议单独排一个会话
 
 ## 移植/嵌入到其他 App 的注意事项（以后嵌入时读这段）
 
