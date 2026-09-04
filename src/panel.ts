@@ -360,6 +360,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async newSession(): Promise<void> {
     const client = this.ensureClient();
+    // 防误触：agent 正在干活时，新会话会终止当前任务，先确认
+    if (this.busy) {
+      const pick = await vscode.window.showWarningMessage(
+        "pi 正在工作中，新建会话会终止当前任务，确定？",
+        { modal: true },
+        "终止并新建",
+        "取消"
+      );
+      if (pick !== "终止并新建") return;
+      try {
+        await client.abort();
+      } catch {
+        // ignore
+      }
+    }
     try {
       const result = await client.newSession();
       if (result?.cancelled) {
