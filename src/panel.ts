@@ -729,12 +729,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     // 打开在「用户正在用的那一列」：优先活动编辑器组，否则第一组——不另起新栏
     // （不用 ViewColumn.Active：焦点在侧边栏 webview 时它有歧义，实测仍可能新分一栏）
-    let col = vscode.ViewColumn.One;
+    let openCol = vscode.ViewColumn.One;
     const tgs = vscode.window.tabGroups.all;
     const act = tgs.find((g) => g.isActive) ?? tgs[0];
-    if (act) col = act.viewColumn;
+    if (act) openCol = act.viewColumn;
     await vscode.window.showTextDocument(doc.uri, {
-      viewColumn: col,
+      viewColumn: openCol,
       preview: true,
       selection: sel,
     });
