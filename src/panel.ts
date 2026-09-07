@@ -303,7 +303,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       case "abort":
         try {
-          await this.client?.abort();
+          if (this.client?.running) {
+            await this.client.abort();
+            // 终止反馈：CC 同款，中断后明确告知（消息已进会话记录，重绘后会保留）
+            this.post({ type: "notice", text: "⏹ 已中断当前任务（已发送的消息保留在会话中）" });
+          }
         } catch {
           // ignore
         }
@@ -2331,7 +2335,7 @@ function webviewJs(): string {
     "    if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');",
     "    scroll();",
     "  }",
-    "  function notice(text) { var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }",
+    "  function notice(text) { var last = messages.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }",
     "  function textOf(content) {",
     "    if (typeof content === 'string') return content;",
     "    var out = '';",
