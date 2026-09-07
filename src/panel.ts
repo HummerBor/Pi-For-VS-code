@@ -2732,7 +2732,7 @@ function webviewJs(): string {
     "  function applySuggest(item) {",
     "    if (!item || item.header) return; // 防止选中分组标题出现 /undefined",
     "    if (item.builtin === 'mentionFile') { var v = input.value.replace(/[\\s/@]+$/, ''); input.value = (v ? v + ' ' : '') + '@'; hideSuggest(); input.focus(); updateSuggest(); return; }",
-    "    if (item.builtin) { if (item.builtin !== 'uploadImage') input.value = ''; hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
+    "    if (item.builtin) { input.value = input.value.replace(/(^|\\s)[\\/@][^\\s]*$/, '$1'); hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
     "    var t = input.value;",
     "    var m = t.match(/(^|\\s)([\\/@])([^\\s]*)$/);",
     "    var label = sgKind === 'slash' ? ('/' + item.name) : (m && m[2] === '@' ? '@' : '') + item.rel;",
