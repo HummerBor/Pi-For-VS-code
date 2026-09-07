@@ -1942,6 +1942,7 @@ function css(): string {
     "",
     "/* ── 底部状态栏 ── */",
     "#bottombar { display: flex; align-items: center; gap: 10px; padding: 0 12px 6px; font-size: 11px; opacity: .8; }",
+    "#bottombar #usage { margin-left: auto; white-space: nowrap; opacity: .8; }",
     "#statusline { display: flex; align-items: center; min-height: 16px; padding: 0 14px 2px; font-size: 11px; }",
     "#bottombar #ver { opacity: .45; }",
     "#status.busy { font-weight: 600; color: var(--vscode-textLink-foreground, #4daafc); animation: wpulse 1.2s ease-in-out infinite; }",
