@@ -2133,7 +2133,7 @@ function webviewJs(): string {
     "    return e;",
     "  }",
     "  function scroll() { messages.scrollTop = messages.scrollHeight; }",
-    "  function setStatus(t) { statusEl.classList.remove('busy'); statusEl.textContent = t || ''; }",
+    "  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }", // 忙碌时不许清空 Working
     "  var queueN = 0;",
     "  var modeText = 'Auto';",
     "  var busyTimer = null; var busyStart = 0;",
