@@ -2120,7 +2120,7 @@ function webviewJs(): string {
     "  moreEl.innerHTML = ico('gear');",
     "  themeEl.innerHTML = ico('theme');",
     "  attachEl.innerHTML = ico('image');",
-    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传文件…</span><span style="opacity:.5;font-size:10px;margin-left:auto;">拖拽进面板需按 Shift</span>';",
+    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传文件…</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>拖拽进面板需按 Shift</span>';",
     "  pmAt.innerHTML = ico('at', 13) + '<span>引用文件</span>';",
     "  modelEl.innerHTML = ico('cpu') + ' —';",
     "  stopBtn.innerHTML = ico('stop', 11);",
