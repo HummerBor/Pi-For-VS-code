@@ -2151,7 +2151,7 @@ function webviewJs(): string {
     "  function renderCodeChip() {",
     "    if (!codeCtx) { codechipEl.style.display = 'none'; return; }",
     "    codechipEl.style.display = 'inline-flex';",
-    "    codechipEl.innerHTML = ico('filecode', 12) + ' ' + esc(codeCtx.name + ' ' + codeCtx.range);",,
+    "    codechipEl.innerHTML = ico('filecode', 12) + ' ' + esc(codeCtx.name);",
     "    codechipEl.className = 'tb-btn' + (codeOn ? '' : ' off');",
     "    codechipEl.title = (codeOn ? '\\u00d7 点击不附带' : '\\u2713 点击附带') + '\\n' + codeCtx.rel + ' (' + codeCtx.range + ')';",
     "  }",
