@@ -1763,7 +1763,6 @@ function getHtml(theme = "auto"): string {
     '<body data-theme="' + theme + '">',
     '<div id="header">',
     '<div id="hdr-row1">',
-    '<span id="title">pi Chat</span>',
     '<span class="spacer"></span>',
     '<span id="usage"></span>',
     '<span id="history" class="ico-btn" title="历史会话"></span>',
