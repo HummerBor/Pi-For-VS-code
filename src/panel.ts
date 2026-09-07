@@ -323,7 +323,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         await this.newSession();
         break;
       case "uploadImage":
-        await this.pickLocalImages();
+        await this.pickLocalFiles();
+        break;
+      case "attachFile":
+        // 上传的非图片文件 → 读成文本注入上下文
+        if (typeof m.text === "string" && m.text.length) {
+          this.codeCtx = { name: String(m.name || "file"), rel: String(m.name || "file"), range: "文件", text: m.text };
+          this.post({ type: "codeCtx", ctx: { name: this.codeCtx.name, rel: this.codeCtx.rel, range: this.codeCtx.range } });
+        }
         break;
       case "pickMode":
         await this.pickModeMenu();
@@ -520,28 +527,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** 从电脑选择图片 → 转为 base64 塞进 webview 的附件栏（/ 菜单「附加图片」用） */
-  private async pickLocalImages(): Promise<void> {
+  /** 从电脑选择图片/文件 → 图片转 base64 塞进附件栏，其他文件读成文本注入上下文（/ 菜单「上传文件」用） */
+  private async pickLocalFiles(): Promise<void> {
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
-      filters: { 图片: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] },
+      filters: { "所有文件": ["*"], 图片: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] },
     });
     if (!uris?.length) return;
     const images: any[] = [];
+    const imgExts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
+    let ctxAttached = false;
     for (const uri of uris) {
       try {
-        const data = fs.readFileSync(uri.fsPath).toString("base64");
         const ext = path.extname(uri.fsPath).toLowerCase();
-        const mime =
-          ext === ".png" ? "image/png" :
-          ext === ".gif" ? "image/gif" :
-          ext === ".webp" ? "image/webp" :
-          ext === ".bmp" ? "image/bmp" : "image/jpeg";
-        images.push({
-          data,
-          mimeType: mime,
-          name: path.basename(uri.fsPath),
-        });
+        if (imgExts.includes(ext)) {
+          const data = fs.readFileSync(uri.fsPath).toString("base64");
+          const mime =
+            ext === ".png" ? "image/png" :
+            ext === ".gif" ? "image/gif" :
+            ext === ".webp" ? "image/webp" :
+            ext === ".bmp" ? "image/bmp" : "image/jpeg";
+          images.push({
+            data,
+            mimeType: mime,
+            name: path.basename(uri.fsPath),
+          });
+        } else if (!ctxAttached) {
+          // 非图片 → 读成文本注入上下文（一次一个，超 200KB 跳过）
+          const stat = fs.statSync(uri.fsPath);
+          if (stat.size > 200 * 1024) {
+            this.post({ type: "notice", text: "ⓘ 文件超过 200KB，跳过: " + path.basename(uri.fsPath) });
+            continue;
+          }
+          const text = fs.readFileSync(uri.fsPath, "utf8");
+          this.codeCtx = { name: path.basename(uri.fsPath), rel: path.basename(uri.fsPath), range: "文件", text };
+          this.post({ type: "codeCtx", ctx: { name: this.codeCtx.name, rel: this.codeCtx.rel, range: this.codeCtx.range } });
+          ctxAttached = true;
+        }
       } catch {
         // ignore
       }
@@ -596,7 +618,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     const builtin: any[] = [
       // 上下文
-      { group: "上下文", label: "上传图片…", description: "从电脑选择图片发送", builtin: "uploadImage" },
+      { group: "上下文", label: "上传文件…", description: "从电脑选择图片或文件注入上下文", builtin: "uploadImage" },
       { group: "上下文", label: "引用项目文件…", description: "在输入框插入 @ 搜索", builtin: "mentionFile" },
       // 会话
       { group: "会话", label: "新建会话", description: "清空并开始新对话", builtin: "newSession" },
@@ -1784,7 +1806,7 @@ function getHtml(theme = "auto"): string {
     '<div class="pm-item" id="pm-upload"></div>',
     '<div class="pm-item" id="pm-at"></div>',
     '</div>',
-    '<input type="file" id="file" accept="image/*" multiple style="display:none">',
+    '<input type="file" id="file" multiple style="display:none">',
     '<div id="attachbar"></div>',
     '<textarea id="input" placeholder="给 pi 发消息… (Enter 发送，Shift+Enter 换行)"></textarea>',
     '<div id="ctoolbar">',
@@ -2573,9 +2595,21 @@ function webviewJs(): string {
     "  }",
     "",
     "  function handleFiles(files) {",
+    "    var textDone = false;",
     "    for (var i = 0; i < files.length; i++) {",
     "      var f = files[i];",
-    "      if (f.type.indexOf('image/') !== 0) continue;",
+    "      if (f.type.indexOf('image/') !== 0) {",
+    "        // 非图片 → 读成文本注入上下文（一次一个，超 200KB 跳过）",
+    "        if (textDone) continue;",
+    "        if (f.size > 200 * 1024) { notice('文件超过 200KB，跳过: ' + (f.name || '')); textDone = true; continue; }",
+    "        textDone = true;",
+    "        (function(file) {",
+    "          var r = new FileReader();",
+    "          r.onload = function() { vscode.postMessage({ type: 'attachFile', name: file.name || 'file', text: String(r.result || '') }); };",
+    "          r.readAsText(file);",
+    "        })(f);",
+    "        continue;",
+    "      }",
     "      if (pendingImages.length >= 4) { notice('最多附 4 张图片'); break; }",
     "      (function(file) {",
     "        var r = new FileReader();",
@@ -2671,6 +2705,7 @@ function webviewJs(): string {
     "    if (items[sgSel]) items[sgSel].scrollIntoView({ block: 'nearest' });",
     "  }",
     "  function applySuggest(item) {",
+    "    if (!item || item.header) return; // 防止选中分组标题出现 /undefined",
     "    if (item.builtin === 'mentionFile') { var v = input.value.replace(/[\\s/@]+$/, ''); input.value = (v ? v + ' ' : '') + '@'; hideSuggest(); input.focus(); updateSuggest(); return; }",
     "    if (item.builtin) { if (item.builtin !== 'uploadImage') input.value = ''; hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
     "    var label = sgKind === 'slash' ? ('/' + item.name) : item.rel;",
