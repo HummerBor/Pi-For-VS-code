@@ -14,6 +14,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private sessionPickerShown = false;
   private busy = false;
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
+  /** 聊天链接打开文件的栏位：第一次 Beside 分一栏，之后都复用这一栏（不再每次点都往右新分一栏） */
+  private linkColumn: vscode.ViewColumn | undefined = undefined;
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
   /** 最近一次已知会话名/文件（用于自动命名判断） */
   private lastSessionName: string | null = null;
@@ -280,19 +282,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "busy", value: true });
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
         const displayText = m.text || (codeInfo ? "请看这段代码" : m.images?.length ? "请看这张图片" : m.text);
+        // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
+        if (wasBusy) {
+          // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
+          const qid = "q" + Date.now();
+          this.queued.push({ qid, sentText: text, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
+          this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
+        } else {
+          this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
+        }
         try {
           // agent 真的工作中 → steer 排队插话；空闲 → 直接发（不能用乐观置位的 busy，否则会被当成插话变慢）
           await client.prompt(text, wasBusy, m.images);
           // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
           if (!wasBusy && m.text) void this.autoTitleSession(m.text);
-          if (wasBusy) {
-            // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
-            const qid = "q" + Date.now();
-            this.queued.push({ qid, sentText: text, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-            this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-          } else {
-            this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-          }
         } catch (err: any) {
           this.busy = false;
           this.post({ type: "busy", value: false });
@@ -703,8 +706,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (fs.existsSync(c) && fs.statSync(c).isFile()) { resolved = c; break; }
       } catch { /* ignore */ }
     }
+    // 直接路径没找到 → 全工作区按文件名搜（兜底光文件名/深层相对路径）
     if (!resolved) {
-      this.post({ type: "notice", text: "文件不存在: " + raw });
+      try {
+        const hits = await vscode.workspace.findFiles("**/" + path.basename(p), "**/node_modules/**", 2);
+        if (hits.length) resolved = hits[0].fsPath;
+      } catch { /* ignore */ }
+    }
+    if (!resolved) {
+      this.post({ type: "notice", text: "工作区里没找到文件: " + raw });
+      return;
+    }
+    // 二进制文件开了也是报错页，直接提示
+    if (/\.(vsix|zip|exe|dll|jar|7z|tar|gz|rar|bin|iso|class|pyc|woff2?|ttf|eot)$/i.test(resolved)) {
+      this.post({ type: "notice", text: "ⓘ 二进制文件，不在编辑器打开: " + path.basename(resolved) });
       return;
     }
     try {
@@ -715,10 +730,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         sel = new vscode.Range(pos, pos);
       }
       await vscode.window.showTextDocument(doc.uri, {
-        viewColumn: vscode.ViewColumn.Beside,
+        viewColumn: this.linkColumn ?? vscode.ViewColumn.Beside,
         preview: true,
         selection: sel,
       });
+      this.linkColumn = this.linkColumn ?? vscode.window.activeTextEditor?.viewColumn;
     } catch (err: any) {
       this.post({ type: "notice", text: "打开失败: " + (err?.message ?? err) });
     }
@@ -1469,6 +1485,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "delta", text: d.delta, ci: d.contentIndex ?? 0 });
         } else if (d?.type === "thinking_delta" && d.delta) {
           this.post({ type: "thinking", text: d.delta, ci: d.contentIndex ?? 0 });
+        } else if (d?.type === "toolcall_start") {
+          // 大参数工具（如 write 整个文件）光生成参数就要几十秒：转发开始事件，面板显示呼吸工具行
+          this.post({ type: "toolCallStart", ci: d.contentIndex ?? 0, id: d.id, name: d.toolName });
+        } else if (d?.type === "toolcall_delta") {
+          this.post({ type: "toolCallDelta", ci: d.contentIndex ?? 0, chunk: d.delta ?? "" });
         }
         break;
       }
@@ -1800,7 +1821,8 @@ function css(): string {
     ".bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }",
     ".md-p { white-space: pre-wrap; }",
     ".md-h { font-weight: bold; margin: 6px 0 2px; }",
-    ".md-li { padding-left: 12px; text-indent: -8px; }",
+    ".md-li { padding-left: 12px; }",
+    ".md-quote { border-left: 3px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin: 2px 0; opacity: .85; }",
     "code { font-family: var(--vscode-editor-font-family, monospace); font-size: .92em; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.2)); padding: 0 3px; border-radius: 3px; }",
     "pre.code { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.15)); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 6px 0; }",
     "details.think { margin: 6px 0; opacity: .55; font-size: 12px; }",
@@ -1953,15 +1975,16 @@ function webviewJs(): string {
     "  }",
     "  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }",
     "  // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──",
-    "  var FILE_RE = /([A-Za-z]:[\\/][\\w.\\- \\u4e00-\\u9fff\\/]*[\\w.\\-\\u4e00-\\u9fff]\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w.\\-]+(?:[\\/][\\w.\\- \\u4e00-\\u9fff]+)+\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?)/g;",
+    "  var FILE_RE = /([A-Za-z]:[\\/][\\w.\\- \\u4e00-\\u9fff\\/]*[\\w.\\-\\u4e00-\\u9fff]\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w.\\-]+(?:[\\/][\\w.\\- \\u4e00-\\u9fff]+)+\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w\\u4e00-\\u9fff][\\w\\-]*\\.(?:ts|tsx|js|jsx|mjs|json|md|txt|html?|css|scss|less|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log)(?::\\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验",
     "  function cleanPath(p) {",
     "    p = p.replace(/[.,;:!?)}\\]⟩】»]+$/, '');",
     "    var parts = p.split(' ');",
     "    while (parts.length > 1 && parts[parts.length - 1].indexOf('/') === -1 && parts[parts.length - 1].indexOf('\\\\') === -1) parts.pop();",
     "    return parts.join(' ');",
     "  }",
+    "  var linkifyEnabled = true; // renderAll 批量重绘时关掉老消息的 linkify，只留最近几条（全量扫正则是大会话卡顿的主因）",
     "  function linkify(root) {",
-    "    if (!root) return;",
+    "    if (!root || !linkifyEnabled) return;",
     "    var nodes = [];",
     "    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);",
     "    while (w.nextNode()) { var n = w.currentNode; if (n.parentNode.nodeName !== 'PRE' && n.parentNode.classList && !n.parentNode.classList.contains('fp')) nodes.push(n); }",
@@ -1972,6 +1995,8 @@ function webviewJs(): string {
     "      var frag = document.createDocumentFragment(); var last = 0, m2;",
     "      while ((m2 = FILE_RE.exec(txt)) !== null) {",
     "        if (m2.index > 0 && txt.charAt(m2.index - 1) === '/') { continue; } // URL 的一部分，不当作路径",
+    "        if (m2[0].indexOf('://') !== -1) { continue; } // URL 协议头（如 https://）被盘符分支误认，跳过",
+    "        if (/\\.(?:vsix|zip|exe|dll|jar|7z|tar|gz|rar|bin|iso|pyc|woff2?|ttf|eot)$/i.test(m2[0])) { continue; } // 二进制文件不做成链接，点了也是报错页",
     "        var p = cleanPath(m2[0]);",
     "        if (m2.index > last) frag.appendChild(document.createTextNode(txt.slice(last, m2.index)));",
     "        if (p) { var sp = document.createElement('span'); sp.className = 'fp'; sp.textContent = p; sp.setAttribute('data-p', p); frag.appendChild(sp); }",
@@ -1982,6 +2007,17 @@ function webviewJs(): string {
     "      n.parentNode.replaceChild(frag, n);",
     "    }",
     "  }",
+    "  // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）",
+    "  messages.addEventListener('click', function (e) {",
+    "    var t = e.target;",
+    "    while (t && t !== messages) {",
+    "      if (t.classList && t.classList.contains('fp')) {",
+    "        e.stopPropagation(); vscode.postMessage({ type: 'openPath', path: t.getAttribute('data-p') });",
+    "        return;",
+    "      }",
+    "      t = t.parentNode;",
+    "    }",
+    "  }, true);",,
     "  // ── 头部/工具条图标注入（统一 SVG）──",
     "  historyEl.innerHTML = ico('clock');",
     "  newChatEl.innerHTML = ico('plus');",
@@ -2073,11 +2109,12 @@ function webviewJs(): string {
     "  var baseStatus = '';",
     "  var queueN = 0;",
     "  var modeText = 'Auto';",
-    "  var busyTimer = null; var busyStart = 0;",
-    "  function renderStatus() { modeBadge.textContent = modeText; statusEl.textContent = baseStatus + (queueN > 0 ? ' · 排队 ' + queueN + ' 条' : ''); }",
+    "  var busyTimer = null; var busyStart = 0; var lastEvt = 0;",
+    "  function renderStatus() { var gap = streaming && lastEvt ? Math.round((Date.now() - lastEvt) / 1000) : 0; modeBadge.textContent = modeText; statusEl.textContent = baseStatus + (gap > 4 ? ' · 静默 ' + gap + 's' : '') + (queueN > 0 ? ' · 排队 ' + queueN + ' 条' : ''); }",
     "  function setBusy(v) {",
     "    streaming = v;",
     "    stopBtn.style.display = v ? 'inline-flex' : 'none';",
+    "    if (v) lastEvt = Date.now();",
     "    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }",
     "    if (v) {",
     "      busyStart = Date.now();",
@@ -2088,7 +2125,7 @@ function webviewJs(): string {
     "    } else {",
     "      setStatus('');",
     "    }",
-    "    if (!v) { liveMsg = null; liveDiv = null; }",
+    "    if (!v) { finalizeLive(); liveReset(); }",
     "  }",
     "",
     "  // 轻量 Markdown：代码块 / 标题 / 列表 / 行内 code / 粗体",
@@ -2113,8 +2150,14 @@ function webviewJs(): string {
     "      if (/^#{1,6}\\s/.test(line)) {",
     "        var h = el('div', 'md-h'); renderInline(h, line.replace(/^#{1,6}\\s*/, '')); parent.appendChild(h); div = null; continue;",
     "      }",
-    "      if (/^\\s*([-*]|\\d+\\.)\\s/.test(line)) {",
-    "        var li = el('div', 'md-li'); renderInline(li, line.replace(/^\\s*([-*]|\\d+\\.)\\s*/, '')); parent.appendChild(li); div = null; continue;",
+    "      var lm = line.match(/^(\\s*)([-*]|\\d+\\.)\\s+(.*)$/);",
+    "      if (lm) {",
+    "        var li = el('div', 'md-li'); li.style.paddingLeft = (12 + lm[1].length * 10) + 'px';",
+    "        li.appendChild(document.createTextNode((lm[2] === '-' || lm[2] === '*' ? '•' : lm[2]) + ' '));",
+    "        renderInline(li, lm[3]); parent.appendChild(li); div = null; continue;",
+    "      }",
+    "      if (/^>\\s?/.test(line)) {",
+    "        var qt = el('div', 'md-quote'); renderInline(qt, line.replace(/^>\\s?/, '')); parent.appendChild(qt); div = null; continue;",
     "      }",
     "      if (!div) { div = el('div', 'md-p'); parent.appendChild(div); }",
     "      renderInline(div, line);",
@@ -2150,39 +2193,61 @@ function webviewJs(): string {
     "    var els = document.getElementById('queuebar').querySelectorAll('[data-qid=\"' + qid + '\"]');",
     "    for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);",
     "  }",
-    "  var liveMsg = null; var liveDiv = null;",
-    "  function renderLive() {",
+    "  var liveMsg = null; var liveDiv = null; var pdet = null;",
+    "  // 增量渲染（照 pi TUI 的思路：只往已有节点追加，不整气泡重绘；文本块结束时才做一次 markdown 渲染，settled 再全量纠偏）",
+    "  var liveParts = null;",
+    "  function liveEnsure() {",
     "    if (!liveDiv) { liveDiv = el('div', 'bubble assistant'); messages.appendChild(liveDiv); }",
-    "    liveDiv.innerHTML = '';",
-    "    for (var i = 0; i < liveMsg.content.length; i++) {",
-    "      var c = liveMsg.content[i];",
-    "      if (!c) continue;",
-    "      if (c.type === 'thinking' && c.thinking) {",
-    "        var d = document.createElement('details');",
-    "        d.className = 'think'; d.open = true;",
+    "    if (!liveMsg) liveMsg = { content: [] };",
+    "    if (!liveParts) liveParts = {};",
+    "  }",
+    "  function liveBlock(ci, kind, name) {",
+    "    liveEnsure();",
+    "    while (liveMsg.content.length <= ci) liveMsg.content.push(null);",
+    "    var p = liveParts[ci];",
+    "    if (p && p.kind !== kind) { finalizeLive(); p = null; }",
+    "    if (!p) {",
+    "      var wrap = document.createElement('div'); var body;",
+    "      if (kind === 'thinking') {",
+    "        var d = document.createElement('details'); d.className = 'think'; d.open = true;",
     "        var sm = document.createElement('summary'); sm.textContent = '思考过程';",
-    "        var body = el('div', 'think-body', c.thinking);",
-    "        d.appendChild(sm); d.appendChild(body);",
-    "        liveDiv.appendChild(d);",
-    "      } else if (c.type === 'text' && c.text) {",
-    "        var td = document.createElement('div'); renderRich(td, c.text); liveDiv.appendChild(td);",
+    "        body = el('div', 'think-body', ''); d.appendChild(sm); d.appendChild(body); wrap.appendChild(d);",
+    "      } else if (kind === 'toolCall') {",
+    "        var tl = el('div', 'tool run'); tl.appendChild(el('span', 't-dot')); tl.appendChild(el('span', 't-name', name || 'tool'));",
+    "        body = el('span', 't-detail', ' 正在生成调用参数… 0 字符'); tl.appendChild(body); wrap.appendChild(tl); pdet = body;",
+    "        wrap.className = 'prow'; // 占位行标记：工具真正开跑时按 class 全局清除",
+    "        var abox = el('pre', 'code'); abox.style.display = 'none'; wrap.appendChild(abox);",
+    "        tl.addEventListener('click', function () { abox.style.display = abox.style.display === 'none' ? 'block' : 'none'; });",
+    "      } else {",
+    "        body = el('div', 'md-p', ''); wrap.appendChild(body);",
+    "      }",
+    "      liveDiv.appendChild(wrap);",
+    "      p = { kind: kind, wrap: wrap, body: body, buf: '' };",
+    "      if (kind === 'toolCall') { p.raw = ''; p.box = abox; }",
+    "      liveParts[ci] = p;",
+    "    }",
+    "    return p;",
+    "  }",
+    "  function finalizeLive() {",
+    "    if (!liveParts) return;",
+    "    for (var k in liveParts) {",
+    "      var p = liveParts[k];",
+    "      if (p && p.kind === 'text' && !p.done) {",
+    "        p.done = true;",
+    "        var d = document.createElement('div'); renderRich(d, p.buf); p.body.innerHTML = ''; p.body.appendChild(d);",
     "      }",
     "    }",
+    "  }",
+    "  function liveReset() { liveMsg = null; liveDiv = null; pdet = null; liveParts = null; }",
+    "  function appendDelta(t, ci) {",
+    "    var p = liveBlock(ci, 'text');",
+    "    p.buf += t; p.body.appendChild(document.createTextNode(t));",
     "    scroll();",
     "  }",
-    "  function appendDelta(t, ci) {",
-    "    if (!liveMsg) liveMsg = { content: [] };",
-    "    while (liveMsg.content.length <= ci) liveMsg.content.push(null);",
-    "    if (!liveMsg.content[ci] || liveMsg.content[ci].type !== 'text') liveMsg.content[ci] = { type: 'text', text: '' };",
-    "    liveMsg.content[ci].text += t;",
-    "    renderLive();",
-    "  }",
     "  function appendThink(t, ci) {",
-    "    if (!liveMsg) liveMsg = { content: [] };",
-    "    while (liveMsg.content.length <= ci) liveMsg.content.push(null);",
-    "    if (!liveMsg.content[ci] || liveMsg.content[ci].type !== 'thinking') liveMsg.content[ci] = { type: 'thinking', thinking: '' };",
-    "    liveMsg.content[ci].thinking += t;",
-    "    renderLive();",
+    "    var p = liveBlock(ci, 'thinking');",
+    "    p.buf += t; p.body.appendChild(document.createTextNode(t));",
+    "    scroll();",
     "  }",
     "  function toolStart(id, name, detail, collapsed) {",
     "    var t = el('div', 'tool run');",
@@ -2268,9 +2333,10 @@ function webviewJs(): string {
     "  }",
     "  function renderAll(list) {",
     "    messages.innerHTML = '';",
-    "    liveMsg = null; liveDiv = null;",
+    "    liveReset();",
     "    toolEls = {};",
     "    if (!list || !list.length) return;",
+    "    linkifyEnabled = false; // 老消息不 linkify，循环到最近 15 条时再打开",
     "    var results = {};",
     "    var resultList = [];",
     "    for (var k = 0; k < list.length; k++) {",
@@ -2326,6 +2392,7 @@ function webviewJs(): string {
     "      messages.appendChild(box);",
     "    }",
     "    for (var i = 0; i < list.length; i++) {",
+    "      if (i >= list.length - 15) linkifyEnabled = true;",
     "      var m = list[i];",
     "      if (m.role === 'user') {",
     "        var ut = textOf(m.content); var ui = null;",
@@ -2335,12 +2402,14 @@ function webviewJs(): string {
     "      }",
     "      else if (m.role === 'assistant') {",
     "        var b = el('div', 'bubble assistant');",
+    "        var flushB = function () { if (b.childNodes.length) { messages.appendChild(b); b = el('div', 'bubble assistant'); } };",
     "        if (Array.isArray(m.content)) {",
     "          for (var j = 0; j < m.content.length; j++) {",
     "            var c = m.content[j];",
     "            if (c && c.type === 'thinking' && c.thinking) b.appendChild(makeThink(c.thinking));",
     "            else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }",
     "            else if (c && c.type === 'toolCall') {",
+    "              flushB();",
     "              var run = [c];",
     "              while (j + 1 < m.content.length && m.content[j+1] && m.content[j+1].type === 'toolCall' && m.content[j+1].name === c.name) { run.push(m.content[++j]); }",
     "              if (run.length === 1) {",
@@ -2356,7 +2425,7 @@ function webviewJs(): string {
     "            }",
     "          }",
     "        } else { renderRich(b, textOf(m.content)); }",
-    "        messages.appendChild(b);",
+    "        flushB();",,
     "      }",
     "      else if (m.role === 'bashExecution') { messages.appendChild(el('div', 'tool ok', '! ' + m.command)); }",
     "    }",
@@ -2541,15 +2610,25 @@ function webviewJs(): string {
     "  input.addEventListener('dragover', function (e) { e.preventDefault(); });",
     "  input.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files); });",
     "  window.addEventListener('message', function (ev) {",
-    "    var m = ev.data;",
+    "    var m = ev.data; lastEvt = Date.now();",
     "    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo);",
-    "    else if (m.type === 'newLive') { liveMsg = null; liveDiv = null; }",
+    "    else if (m.type === 'newLive') { finalizeLive(); liveReset(); }",
     "    else if (m.type === 'delta') appendDelta(m.text, m.ci);",
     "    else if (m.type === 'thinking') appendThink(m.text, m.ci);",
-    "    else if (m.type === 'toolStart') { liveMsg = null; liveDiv = null; toolStart(m.id, m.name, m.detail); }",
+    "    else if (m.type === 'toolStart') {",
+    "      finalizeLive();",
+    "      var olds = messages.querySelectorAll('.prow'); for (var oi = 0; oi < olds.length; oi++) olds[oi].parentNode.removeChild(olds[oi]);",
+    "      liveReset(); toolStart(m.id, m.name, m.detail);",
+    "    }",
+    "    else if (m.type === 'toolCallStart') {",
+    "      var tp = liveBlock(m.ci, 'toolCall', m.name);",
+    "      tp._len = 0; tp.raw = '';",
+    "      liveMsg.content[m.ci] = tp; scroll();",
+    "    }",
+    "    else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = ' 正在生成调用参数… ' + tb._len + ' 字符'; if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }",
     "    else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);",
     "    else if (m.type === 'busy') setBusy(m.value);",
-    "    else if (m.type === 'render') renderAll(m.messages);",
+    "    else if (m.type === 'render') setTimeout(function () { renderAll(m.messages); }, 0); // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页",
     "    else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }",
     "    else if (m.type === 'notice') notice(m.text);",
     "    else if (m.type === 'status') setStatus(m.text);",

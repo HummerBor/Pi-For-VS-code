@@ -47,10 +47,13 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   前 40 字 setSessionName；readSessionMeta 预览跳过纯代码上下文/占位消息；兜底「未命名会话」
 - **历史面板打开文件（2026-09-04）**：会话行悬停有 📄(revealSessionFile→旁栏打开 .jsonl)
   和 ✕(删除)两钮；行悬停 title 显示完整路径；点行=切换会话
-- **聊天内文件路径可点击（2026-09-04）**：webviewJs `FILE_RE`+`cleanPath()`+`linkify()` 把文本里
-  路径包成 .fp span（绝对/相对/中文/空格路径，支持 `:行:列` 后缀；跳过 URL 与代码块）；
-  messages 捕获阶段点击拦截（不触发工具行折叠）→ `openPath` → openFilePath() 解析打开
-  （按工作区解析相对路径，showTextDocument 旁栏+跳行）；renderRich/工具行 detail/明细块/notice 都接入
+- **聊天内文件路径可点击（2026-09-04 晚补完）**：webviewJs `FILE_RE`+`cleanPath()`+`linkify()` 把文本里
+  路径包成 .fp span（绝对/相对/中文/空格路径、光文件名（扩展名白名单）、支持 `:行:列` 后缀；
+  跳过 URL 与代码块；修复 `s://` `p://` 被盘符分支误认的 bug）；
+  **点击监听器在 messages 捕获阶段**（没有它 .fp 就是死样式——曾漏写导致点击无反应）；
+  宿主 openFilePath：直接路径找不到 → findFiles 全工作区按文件名搜；二进制扩展名（vsix/zip/exe…）
+  不做成链接也不打开；打开栏位固定（第一次 Beside 分栏后记住 viewColumn，不再每次点都往右新分栏）；
+  renderRich/工具行 detail/明细块/notice 都接入；renderAll 只对最近 15 条 linkify（老消息跳过，重绘提速）
 - **模型/思考**：工具条点击切换，globalState 跨重启记忆（piChat.lastModel/lastThinking）
 - **pi 环境自助**：启动时 spawn `pi --version` 检测，没装→弹窗一键 npm 全局安装（进度/结果进面板）；
   ⚙ 菜单可配 API key（写 ~/.pi/agent/auth.json，与 /login 同格式）、订阅登录 /login、
@@ -72,14 +75,22 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - **工具渲染**：CC 风格——状态圆点（绿✓/红✗/蓝圈呼吸=运行中）+ 粗体工具名 + 灰色参数摘要，
   点击展开 IN/OUT 块（tool-box）；工作中默认展开，结束/历史默认收起；
   renderAll 把连续同名工具合并为 `● name ×N ▸` 组（展开是每次调用的明细行）
-- **流式渲染**：照搬 pi 的模型——维护 liveMsg.content 数组（按 contentIndex 写入），
-  每次 delta 后整条消息重绘（renderLive），保证思考/文本按消息结构有序（勿改回按到达顺序拼块）。
-  **严禁在 busy/流式中途做整页 renderAll**（会导致同一条回复被拆散、顺序割裂），重绘只发生在 settled。
-  **必须处理 message_start**：每条助手消息（含 steer 后继续生成的下一条）都要轮换新气泡
-  （post newLive，webview 置空 liveMsg/liveDiv）——插话后 contentIndex 从 0 重新计数，
-  不轮换会把新消息增量拼进上一条旧气泡（思考被覆盖成文本、越写越大），工具行却在底部，
-  造成 working 与 settled 两套布局错位。toolStart 消息也先切断当前气泡（文本落到工具行下方）
-- **状态栏**：模式徽标 + 工作计时秒数 + 排队计数 + 上下文% + 费用
+- **流式渲染（2026-09-04 晚重构：对标 pi TUI 增量追加）**：**严禁每个 delta 全量重绘整条消息**
+  （旧 renderLive 做法，大消息时 O(n²) 拖死 UI——曾导致「很卡不流畅」）。现在 liveBlock 机制：
+  思考/文本块只往已有节点追加文本节点（appendDelta/appendThink），块结束时 finalizeLive 做
+  一次 renderRich markdown 化，settled 仍以会话记录重读全量纠偏。必须处理 message_start
+  （newLive→finalizeLive+liveReset，新气泡）——插话后 contentIndex 重新计数的坑不变。
+  **宿主转发 toolcall_start/toolcall_delta**（之前丢弃）：大 write/edit 光生成参数就要几十秒，
+  期间显示呼吸占位行「正在生成调用参数… N 字符」（class=prow，可点击展开看原始参数流），
+  工具真正开跑（toolStart）时按 .prow class 全局清除（曾因只置空引用不清 DOM 出现占位行与
+  真实行同框的 bug）。toolStart 仍先切断当前气泡（文本落到工具行下方）
+- **乐观气泡（2026-09-04 晚）**：prompt case 里 user 气泡/排队项在 `await client.prompt()` **之前**
+  就 post（pi 冷启动+发送要几秒，等 await 完才画会被用户当成消息丢了）
+- **renderAll 提速（2026-09-04 晚）**：整页重绘是大会话卡顿主因——老消息（非最近 15 条）跳过
+  linkify 正则；'render' 消息 setTimeout(0) 延后一拍（用户气泡先上屏再重绘）。
+  严禁在 busy/流式中途整页 renderAll 的规则不变
+- **状态栏**：模式徽标 + 工作计时秒数 + 静默秒数（工作中 >4s 无事件时显示「· 静默 Ns」，
+  区分「在憋大招」和「真断流」）+ 排队计数 + 上下文% + 费用
 - **排队反馈**：工作中发消息→输入框上方 queuebar 单行 ⏳（紧凑不占位）；
   **steering 是插进当前运行，不会触发 agent_start**——转正信号靠 queue_update 队列变短
   （lastQueueTotal 计数差 → 最早的 ⏳ 逐条转正为普通气泡）；agent_settled 才整页重绘
@@ -104,7 +115,12 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   **另一个同类型坑（2026-09-04）：脚本是自上而下执行的，库/常量定义必须放在调用之前**——
   图标注入代码写在 `var ICON_PATHS` 定义之前，首次 `ico()` 调用抛 TypeError 整个脚本死掉
   （图标全消失 + 所有事件监听没绑上，症状像「面板全死」）。新增帮助函数时永远定义在最前面
-- 同一项目开多个 VS Code 窗口会恢复同一个会话文件（lastSessionByWs 按文件夹映射），
+- **迷你 markdown 渲染器（renderPlain/renderInline）**：代码块/标题/列表（- * → • 圆点、
+  编号、嵌套缩进）/引用块 >/行内 code/粗体；表格等不支持（按普通文本显示）
+- **pi RPC 实测事件名（2026-09-04 实测）**：assistantMessageEvent 有 text_delta/thinking_delta/
+  toolcall_start{id,toolName,contentIndex}/toolcall_delta{delta为args原始JSON片段}/toolcall_end；
+  auto 模式下 edit/write 不需要审批（modes.ts 只在 manual/edit-auto 拦）
+- **同一项目开多个 VS Code 窗口会恢复同一个会话文件（lastSessionByWs 按文件夹映射），
   两窗口的 pi 同时写一个会话文件有冲突风险——多标签功能做掉前，同项目别开双窗口干不同的活
 - 编译后可用一行命令快速验证 webview JS 语法（不重装 VSIX）：
   `node -e "const fs=require('fs');let src=fs.readFileSync('out/panel.js','utf8');const html=new Function(src.slice(src.indexOf('function getHtml'),src.indexOf('//# sourceMappingURL'))+';return getHtml(\"auto\")')();new Function(html.match(/<script nonce=\"[^\"]*\">([\\s\\S]*)<\\/script>/)[1]);console.log('OK')"`
