@@ -2684,9 +2684,9 @@ function webviewJs(): string {
     "          var data = url.split(',')[1] || '';",
     "          if (!data) return;",
     "          var probe = new Image();",
-    "          probe.onload = function() {
-            // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
-            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ 图片尺寸过小 (' + probe.naturalWidth + '×' + probe.naturalHeight + ')，模型无法解析，已跳过'); return; }",
+    "          probe.onload = function() {",
+    "            // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下",
+    "            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 图片尺寸过小 (' + probe.naturalWidth + '\\u00d7' + probe.naturalHeight + ')，模型无法解析，已跳过'); return; }",
     "            pendingImages.push({ data: data, mimeType: file.type, name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });",
     "            renderAttach();",
     "          };",
