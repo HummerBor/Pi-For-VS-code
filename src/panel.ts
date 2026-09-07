@@ -14,8 +14,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private sessionPickerShown = false;
   private busy = false;
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
-  /** 聊天链接打开文件的栏位：第一次 Beside 分一栏，之后都复用这一栏（不再每次点都往右新分一栏） */
-  private linkColumn: vscode.ViewColumn | undefined = undefined;
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
   /** 最近一次已知会话名/文件（用于自动命名判断） */
   private lastSessionName: string | null = null;
@@ -730,11 +728,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         sel = new vscode.Range(pos, pos);
       }
       await vscode.window.showTextDocument(doc.uri, {
-        viewColumn: this.linkColumn ?? vscode.ViewColumn.Beside,
+        viewColumn: vscode.ViewColumn.Active, // 在当前活动编辑器组里开（预览标签），不另起一栏
         preview: true,
         selection: sel,
       });
-      this.linkColumn = this.linkColumn ?? vscode.window.activeTextEditor?.viewColumn;
     } catch (err: any) {
       this.post({ type: "notice", text: "打开失败: " + (err?.message ?? err) });
     }
