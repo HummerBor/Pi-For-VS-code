@@ -325,6 +325,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           // ignore
         }
         break;
+      case "retryFromLast": {
+        // 模型请求失败后回退：fork 到最近一条用户消息（错误消息从活跃分支清除），原文填回输入框供修改重发
+        try {
+          const fm = await this.client?.getForkMessages();
+          const list: any[] = fm?.messages ?? [];
+          const last = list[list.length - 1];
+          if (!last) {
+            this.post({ type: "notice", text: "⚠ 没有可回退的用户消息" });
+            break;
+          }
+          const fr = await this.client!.fork(last.entryId);
+          if (fr?.cancelled) {
+            this.post({ type: "notice", text: "⚠ 回退被 pi 扩展取消" });
+            break;
+          }
+          let text = String(last.text ?? "");
+          // 与 renderAll 同款剥离：去掉「代码上下文」前缀，避免回填后又当普通文本重发
+          const ccm = text.match(/^--- 代码上下文: .+? \((.+?)\) ---\n```\n/);
+          if (ccm) {
+            const ci = text.lastIndexOf("\n```\n\n");
+            text = ci > ccm[0].length ? text.slice(ci + 6) : text.slice(ccm[0].length);
+          }
+          this.post({ type: "fillInput", text });
+          this.syncRenderKeepQueued();
+          this.post({ type: "notice", text: "↩ 已回退到上一条用户消息，错误消息已清除；修改后重发即可" });
+        } catch (err) {
+          this.post({ type: "notice", text: "⚠ 回退失败: " + (err as Error).message });
+        }
+        break;
+      }
       case "pickSession":
         await this.pickSession("project");
         break;
@@ -1817,7 +1847,7 @@ function getHtml(theme = "auto"): string {
     '<div id="attachbar"></div>',
     '<textarea id="input" placeholder="给 pi 发消息… (Enter 发送，Shift+Enter 换行)"></textarea>',
     '<div id="ctoolbar">',
-    '<span id="attach" class="tb-btn" title="添加图片"></span>',
+    '<span id="attach" class="tb-btn" title="添加图片；拖文件进面板需按住 Shift（VS Code 限制）"></span>',
     '<span id="codechip" style="display:none"></span>',
     '<span class="tb-spacer"></span>',
     '<button id="stop" title="停止 (Esc)"></button>',
@@ -1869,6 +1899,9 @@ function css(): string {
     ".bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; }",
     ".bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }",
     ".bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }",
+    ".bubble.errmsg { background: transparent; border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c); color: var(--vscode-errorForeground, #f66); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }",
+    ".errmsg-retry { cursor: pointer; text-decoration: underline; font-family: var(--vscode-font-family, sans-serif); opacity: .9; }",
+    ".errmsg-retry:hover { opacity: 1; }",
     ".md-p { white-space: pre-wrap; }",
     ".md-h { font-weight: bold; margin: 6px 0 2px; }",
     ".md-li { padding-left: 12px; }",
@@ -2087,7 +2120,7 @@ function webviewJs(): string {
     "  moreEl.innerHTML = ico('gear');",
     "  themeEl.innerHTML = ico('theme');",
     "  attachEl.innerHTML = ico('image');",
-    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传图片</span>';",
+    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传文件…</span><span style="opacity:.5;font-size:10px;margin-left:auto;">拖拽进面板需按 Shift</span>';",
     "  pmAt.innerHTML = ico('at', 13) + '<span>引用文件</span>';",
     "  modelEl.innerHTML = ico('cpu') + ' —';",
     "  stopBtn.innerHTML = ico('stop', 11);",
@@ -2275,7 +2308,7 @@ function webviewJs(): string {
     "    linkify(parent);",
     "  }",
     "",
-    "  function addUser(text, imageCount, codeInfo) { var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
+    "  function addUser(text, imageCount, codeInfo, fileCount) { var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + ' 个附件'; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
     "  var queuedItems = [];",
     "  function addQueued(q) {",
     "    queuedItems.push(q);",
@@ -2543,14 +2576,24 @@ function webviewJs(): string {
     "      if (i >= list.length - 15) linkifyEnabled = true;",
     "      var m = list[i];",
     "      if (m.role === 'user') {",
-    "        var ut = textOf(m.content); var ui = null;",
-    "        var ccm = ut.match(/^--- 代码上下文: (.+?) \\((.+?)\\) ---\\n```\\n/);",
+    "        var ut = textOf(m.content); var ui = null; var ufiles = 0;",
+    "        var ccm = ut.match(/^--- 代码上下文: (.+?) \\((.+?)\\) ---\\n/);",
     "        if (ccm) {",
     "          ui = ccm[1] + ' ' + ccm[2];",
-    "          var ci2 = ut.lastIndexOf('\\n```\\n\\n'); // 附带文件里可能有 ```，取最后一个闭合围栏（与发送时拼接结构对应）",
-    "          ut = ci2 > ccm[0].length ? ut.slice(ci2 + 6) : ut.slice(ccm[0].length);",
+    "          var eIdx = ut.indexOf('\\n--- 代码上下文结束 ---\\n');",
+    "          if (eIdx > 0) { ut = ut.slice(eIdx + '\\n--- 代码上下文结束 ---\\n'.length); if (ut.charAt(0) === '\\n') ut = ut.slice(1); }",
+    "          else { var ci2 = ut.lastIndexOf('\\n```\\n\\n'); ut = ci2 > ccm[0].length ? ut.slice(ci2 + 6) : ut.slice(ccm[0].length); } // 老格式兑底",
     "        }",
-    "        addUser(ut, m.attachments ? m.attachments.length : 0, ui);",
+    "        var am2;",
+    "        while ((am2 = ut.match(/^--- 附件: ([^\\n]*) ---\\n/))) {",
+    "          var term2 = '\\n--- 附件结束: ' + am2[1] + ' ---\\n';",
+    "          var ei2 = ut.indexOf(term2);",
+    "          if (ei2 < 0) break;",
+    "          ufiles++;",
+    "          ut = ut.slice(ei2 + term2.length);",
+    "          if (ut.charAt(0) === '\\n') ut = ut.slice(1);",
+    "        }",
+    "        addUser(ut, m.attachments ? m.attachments.length : 0, ui, ufiles);",
     "      }",
     "      else if (m.role === 'assistant') {",
     "        var b = el('div', 'bubble assistant');",
@@ -2577,7 +2620,16 @@ function webviewJs(): string {
     "            }",
     "          }",
     "        } else { renderRich(b, textOf(m.content)); }",
-    "        flushB();",,
+    "        flushB();",
+    "        if (m.stopReason === 'error' && m.errorMessage) {", // 模型请求失败（400/鉴权/图片格式等）：pi 落盘为空 content + errorMessage，终端显示为红字，面板必须同样可见
+    "          var eb = el('div', 'bubble assistant errmsg');",
+    "          eb.textContent = '✘ ' + String(m.errorMessage).slice(0, 300);",
+    "          var rb = el('span', 'errmsg-retry', '↺ 修改后重试');",
+    "          rb.addEventListener('click', function () { vscode.postMessage({ type: 'retryFromLast' }); });",
+    "          eb.appendChild(document.createElement('br'));",
+    "          eb.appendChild(rb);",
+    "          messages.appendChild(eb);",
+    "        }",
     "      }",
     "      else if (m.role === 'bashExecution') { messages.appendChild(el('div', 'tool ok', '! ' + m.command)); }",
     "    }",
@@ -2632,7 +2684,9 @@ function webviewJs(): string {
     "          var data = url.split(',')[1] || '';",
     "          if (!data) return;",
     "          var probe = new Image();",
-    "          probe.onload = function() {",
+    "          probe.onload = function() {
+            // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
+            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ 图片尺寸过小 (' + probe.naturalWidth + '×' + probe.naturalHeight + ')，模型无法解析，已跳过'); return; }",
     "            pendingImages.push({ data: data, mimeType: file.type, name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });",
     "            renderAttach();",
     "          };",
@@ -2817,6 +2871,7 @@ function webviewJs(): string {
     "    else if (m.type === 'render') setTimeout(function () { renderAll(m.messages); }, 0); // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页",
     "    else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }",
     "    else if (m.type === 'notice') notice(m.text);",
+    "    else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }",
     "    else if (m.type === 'status') setStatus(m.text);",
     "    else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }",
     "    else if (m.type === 'queuedAdd') addQueued(m);",
