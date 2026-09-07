@@ -2379,7 +2379,7 @@ function webviewJs(): string {
     "    if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');",
     "    scroll();",
     "  }",
-    "  function notice(text) { var last = messages.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }",
+    "  function notice(text) { if (/扩展已加载/.test(text)) return; var last = messages.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }",
     "  function textOf(content) {",
     "    if (typeof content === 'string') return content;",
     "    var out = '';",
