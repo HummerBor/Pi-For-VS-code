@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi for VS Code",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
