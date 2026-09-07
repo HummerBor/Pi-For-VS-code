@@ -272,6 +272,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const client = this.ensureClient();
         let text = m.text;
         const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
+        // 附件文件（顶部胶囊行，可多个）→ 拼进消息文本
+        if (Array.isArray(m.files) && m.files.length) {
+          for (const f of m.files) {
+            if (f && typeof f.text === "string" && f.text.length) {
+              text = "--- 附件: " + (f.name || "file") + " ---\n```\n" + f.text + "\n```\n\n" + text;
+            }
+          }
+        }
         if (m.attachCode && this.codeCtx) {
           const c = this.codeCtx;
           text =
@@ -282,7 +290,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.busy = true;
         this.post({ type: "busy", value: true });
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
-        const displayText = m.text || (codeInfo ? "请看这段代码" : m.images?.length ? "请看这张图片" : m.text);
+        const displayText = m.text || (codeInfo ? "请看这段代码" : m.images?.length ? "请看这张图片" : m.files?.length ? "请看附件文件" : m.text);
         // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
         if (wasBusy) {
           // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
@@ -327,10 +335,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         await this.pickLocalFiles();
         break;
       case "attachFile":
-        // 上传的非图片文件 → 读成文本注入上下文
+        // 非图片文件 → 顶部附件行胶囊（与拖拽/粘贴/上传同一模型）
         if (typeof m.text === "string" && m.text.length) {
-          this.codeCtx = { name: String(m.name || "file"), rel: String(m.name || "file"), range: "文件", text: m.text };
-          this.post({ type: "codeCtx", ctx: { name: this.codeCtx.name, rel: this.codeCtx.rel, range: this.codeCtx.range } });
+          this.post({ type: "addFiles", files: [{ name: String(m.name || "file"), text: m.text }] });
         }
         break;
       case "pickMode":
@@ -537,7 +544,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!uris?.length) return;
     const images: any[] = [];
     const imgExts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
-    let ctxAttached = false;
+    const textFiles: { name: string; text: string }[] = [];
     for (const uri of uris) {
       try {
         const ext = path.extname(uri.fsPath).toLowerCase();
@@ -553,23 +560,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             mimeType: mime,
             name: path.basename(uri.fsPath),
           });
-        } else if (!ctxAttached) {
-          // 非图片 → 读成文本注入上下文（一次一个，超 200KB 跳过）
+        } else if (textFiles.length < 5) {
+          // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）
           const stat = fs.statSync(uri.fsPath);
           if (stat.size > 200 * 1024) {
             this.post({ type: "notice", text: "ⓘ 文件超过 200KB，跳过: " + path.basename(uri.fsPath) });
             continue;
           }
-          const text = fs.readFileSync(uri.fsPath, "utf8");
-          this.codeCtx = { name: path.basename(uri.fsPath), rel: path.basename(uri.fsPath), range: "文件", text };
-          this.post({ type: "codeCtx", ctx: { name: this.codeCtx.name, rel: this.codeCtx.rel, range: this.codeCtx.range } });
-          ctxAttached = true;
+          textFiles.push({ name: path.basename(uri.fsPath), text: fs.readFileSync(uri.fsPath, "utf8") });
         }
       } catch {
         // ignore
       }
     }
     if (images.length) this.post({ type: "addImages", images });
+    if (textFiles.length) this.post({ type: "addFiles", files: textFiles });
   }
 
   /** 点击状态栏模式徽标 → 弹出权限模式选择（直接写 mode.json，pi 扩展在下次工具调用时生效） */
@@ -1907,6 +1912,7 @@ function css(): string {
     ".chip-img { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; border-radius: 7px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; }",
     ".chip-img img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; }",
     ".chip-x { cursor: pointer; opacity: .6; padding: 0 2px; }",
+    ".chip-file { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 10px; border-radius: 999px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
     ".chip-x:hover { opacity: 1; }",
     "#suggest { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }",
     ".sg-item { display: flex; align-items: center; gap: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }",
@@ -2149,6 +2155,7 @@ function webviewJs(): string {
     "  var workspaceFiles = null;",
     "  var streaming = false;",
     "  var pendingImages = [];",
+    "  var pendingFiles = [];",
     "",
     "  function renderCodeChip() {",
     "    if (!codeCtx) { codechipEl.style.display = 'none'; return; }",
@@ -2603,16 +2610,16 @@ function webviewJs(): string {
     "",
     "  function handleFiles(files) {",
     "    var textDone = false;",
+    "    var fileCount = 0;",
     "    for (var i = 0; i < files.length; i++) {",
     "      var f = files[i];",
     "      if (f.type.indexOf('image/') !== 0) {",
-    "        // 非图片 → 读成文本注入上下文（一次一个，超 200KB 跳过）",
-    "        if (textDone) continue;",
-    "        if (f.size > 200 * 1024) { notice('文件超过 200KB，跳过: ' + (f.name || '')); textDone = true; continue; }",
-    "        textDone = true;",
+    "        // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）",
+    "        if (pendingFiles.length >= 5) { notice('附件最多 5 个'); break; }",
+    "        if (f.size > 200 * 1024) { notice('文件超过 200KB，跳过: ' + (f.name || '')); continue; }",
     "        (function(file) {",
     "          var r = new FileReader();",
-    "          r.onload = function() { vscode.postMessage({ type: 'attachFile', name: file.name || 'file', text: String(r.result || '') }); };",
+    "          r.onload = function() { pendingFiles.push({ name: file.name || 'file', text: String(r.result || '') }); renderAttach(); };",
     "          r.readAsText(file);",
     "        })(f);",
     "        continue;",
@@ -2651,7 +2658,18 @@ function webviewJs(): string {
     "        attachbarEl.appendChild(chip);",
     "      })(i);",
     "    }",
-    "    attachbarEl.style.display = pendingImages.length ? 'flex' : 'none';",
+    "    for (var j = 0; j < pendingFiles.length; j++) {",
+    "      (function(idx) {",
+    "        var p = pendingFiles[idx];",
+    "        var chip = el('span', 'chip-file');",
+    "        chip.innerHTML = ico('filecode', 12) + ' ' + esc(p.name);",
+    "        var x = el('span', 'chip-x', '\\u00d7');",
+    "        x.addEventListener('click', function() { pendingFiles.splice(idx, 1); renderAttach(); });",
+    "        chip.appendChild(x);",
+    "        attachbarEl.appendChild(chip);",
+    "      })(j);",
+    "    }",
+    "    attachbarEl.style.display = (pendingImages.length + pendingFiles.length) ? 'flex' : 'none';",
     "  }",
     "  function hideSuggest() { suggestEl.style.display = 'none'; }",
     "  function updateSuggest() {",
@@ -2725,13 +2743,14 @@ function webviewJs(): string {
     "  }",
     "  function send() {",
     "    var t = input.value.trim();",
-    "    if (!t && !pendingImages.length) return;",
+    "    if (!t && !pendingImages.length && !pendingFiles.length) return;",
     "    var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });",
+    "    var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text }; });",
     "    var attachCode = codeCtx && codeOn;",
     "    input.value = '';",
     "    autoSize();",
-    "    pendingImages = []; renderAttach();",
-    "    vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? '请看这张图片' : (attachCode ? '请看这段代码' : '')), images: imgs, attachCode: !!attachCode });",
+    "    pendingImages = []; pendingFiles = []; renderAttach();",
+    "    vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? '请看这张图片' : (fs2.length ? '请看附件文件' : (attachCode ? '请看这段代码' : ''))), images: imgs, files: fs2, attachCode: !!attachCode });",
     "  }",
     "  sendBtn.addEventListener('click', send);",
     "  stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });",
@@ -2805,6 +2824,7 @@ function webviewJs(): string {
     "    else if (m.type === 'queuedClear') { queuedItems = []; document.getElementById('queuebar').innerHTML = ''; }",
     "    else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChip(); }",
     "    else if (m.type === 'addImages') { for (var ai = 0; ai < (m.images || []).length; ai++) { if (pendingImages.length < 4) pendingImages.push(m.images[ai]); } renderAttach(); }",
+    "    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat(m.files || []); renderAttach(); }",
     "    else if (m.type === 'sessionList') { sessionCache = m.sessions || []; renderHistory(); }",
     "    else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }",
     "    else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }",
