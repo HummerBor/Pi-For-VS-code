@@ -1852,6 +1852,7 @@ function css(): string {
     "",
     "/* ── 消息区 ── */",
     "#messages { flex: 1; overflow-y: auto; padding: 10px 10px 4px; }",
+    "* { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.5) transparent; } // 标准属性兼底：部分 Chromium 环境里 webkit 伪元素滚动条不生效",
     "::-webkit-scrollbar { width: 3px; height: 3px; }",
     "::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 1.5px; }",
     "::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,.65); }",
