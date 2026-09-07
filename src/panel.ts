@@ -596,7 +596,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     const builtin: any[] = [
       // 上下文
-      { group: "上下文", label: "附加图片…", description: "从电脑选择图片发送", builtin: "uploadImage" },
+      { group: "上下文", label: "上传图片…", description: "从电脑选择图片发送", builtin: "uploadImage" },
       { group: "上下文", label: "引用项目文件…", description: "在输入框插入 @ 搜索", builtin: "mentionFile" },
       // 会话
       { group: "会话", label: "新建会话", description: "清空并开始新对话", builtin: "newSession" },
@@ -1827,8 +1827,8 @@ function css(): string {
     "",
     "/* ── 消息区 ── */",
     "#messages { flex: 1; overflow-y: auto; padding: 10px 10px 4px; }",
-    "::-webkit-scrollbar { width: 8px; height: 8px; }",
-    "::-webkit-scrollbar-thumb { background: rgba(128,128,128,.4); border-radius: 4px; }",
+    "::-webkit-scrollbar { width: 3px; height: 3px; }",
+    "::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 1.5px; }",
     "::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,.65); }",
     "::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }",
     "#queuebar { padding: 0 12px 3px; }",
@@ -2671,8 +2671,8 @@ function webviewJs(): string {
     "    if (items[sgSel]) items[sgSel].scrollIntoView({ block: 'nearest' });",
     "  }",
     "  function applySuggest(item) {",
-    "    if (item.builtin === 'mentionFile') { input.value += '@'; hideSuggest(); input.focus(); updateSuggest(); return; }",
-    "    if (item.builtin) { input.value = ''; hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
+    "    if (item.builtin === 'mentionFile') { var v = input.value.replace(/[\\s/@]+$/, ''); input.value = (v ? v + ' ' : '') + '@'; hideSuggest(); input.focus(); updateSuggest(); return; }",
+    "    if (item.builtin) { if (item.builtin !== 'uploadImage') input.value = ''; hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
     "    var label = sgKind === 'slash' ? ('/' + item.name) : item.rel;",
     "    var t = input.value;",
     "    var m = t.match(/(^|\\s)([\\/@])([^\\s]*)$/);",
