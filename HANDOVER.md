@@ -75,11 +75,13 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - **工具渲染**：CC 风格——状态圆点（绿✓/红✗/蓝圈呼吸=运行中）+ 粗体工具名 + 灰色参数摘要，
   点击展开 IN/OUT 块（tool-box）；工作中默认展开，结束/历史默认收起；
   renderAll 把连续同名工具合并为 `● name ×N ▸` 组（展开是每次调用的明细行）
-- **流式渲染（2026-09-04 晚重构：对标 pi TUI 增量追加）**：**严禁每个 delta 全量重绘整条消息**
-  （旧 renderLive 做法，大消息时 O(n²) 拖死 UI——曾导致「很卡不流畅」）。现在 liveBlock 机制：
-  思考/文本块只往已有节点追加文本节点（appendDelta/appendThink），块结束时 finalizeLive 做
-  一次 renderRich markdown 化，settled 仍以会话记录重读全量纠偏。必须处理 message_start
-  （newLive→finalizeLive+liveReset，新气泡）——插话后 contentIndex 重新计数的坑不变。
+- **流式渲染（2026-09-04 晚三轮迭代后的最终形态：事件驱动 + 行级增量）**：
+  **两严禁**：严禁每个 delta 全量重绘整条消息（O(n²) 拖死 UI）；严禁定时攒批重渲染（顿挫感）。
+  正确做法（与 pi TUI/CC 同构）：appendDelta 事件驱动，每个增量立刻 streamTick——
+  已完成的行（换行结尾且不在未闭合围栏内）调用 renderRich 定型后**永不再碰**；
+  当前未完成行只更新一个小尾巴 textContent；代码围栏内原样流进 pre，闭合时整块定型。
+  settle 后仍以会话记录重读全量纠偏。必须处理 message_start（newLive→finalizeLive+liveReset，
+  新气泡）——插话后 contentIndex 重新计数的坑不变。
   **宿主转发 toolcall_start/toolcall_delta**（之前丢弃）：大 write/edit 光生成参数就要几十秒，
   期间显示呼吸占位行「正在生成调用参数… N 字符」（class=prow，可点击展开看原始参数流），
   工具真正开跑（toolStart）时按 .prow class 全局清除（曾因只置空引用不清 DOM 出现占位行与
@@ -89,8 +91,8 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - **renderAll 提速（2026-09-04 晚）**：整页重绘是大会话卡顿主因——老消息（非最近 15 条）跳过
   linkify 正则；'render' 消息 setTimeout(0) 延后一拍（用户气泡先上屏再重绘）。
   严禁在 busy/流式中途整页 renderAll 的规则不变
-- **状态栏**：模式徽标 + 工作计时秒数 + 静默秒数（工作中 >4s 无事件时显示「· 静默 Ns」，
-  区分「在憋大招」和「真断流」）+ 排队计数 + 上下文% + 费用
+- **状态栏**：模式徽标 + 工作计时秒数 + 排队计数 + 上下文% + 费用
+  （曾加过「静默/无响应 Ns」又移除：与工作计时重复、措辞误导；真故障由 auto-retry 提示兜底）
 - **排队反馈**：工作中发消息→输入框上方 queuebar 单行 ⏳（紧凑不占位）；
   **steering 是插进当前运行，不会触发 agent_start**——转正信号靠 queue_update 队列变短
   （lastQueueTotal 计数差 → 最早的 ⏳ 逐条转正为普通气泡）；agent_settled 才整页重绘
@@ -115,8 +117,14 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   **另一个同类型坑（2026-09-04）：脚本是自上而下执行的，库/常量定义必须放在调用之前**——
   图标注入代码写在 `var ICON_PATHS` 定义之前，首次 `ico()` 调用抛 TypeError 整个脚本死掉
   （图标全消失 + 所有事件监听没绑上，症状像「面板全死」）。新增帮助函数时永远定义在最前面
-- **迷你 markdown 渲染器（renderPlain/renderInline）**：代码块/标题/列表（- * → • 圆点、
-  编号、嵌套缩进）/引用块 >/行内 code/粗体；表格等不支持（按普通文本显示）
+- **迷你 markdown 渲染器（renderPlain/renderInline/renderTable）**：代码块（**围栏必须行首**，
+  行内 ``` 曾把大段内容吞进原始代码框）/标题/表格（| 语法 → md-table）/列表（- * → • 圆点、
+  编号、嵌套缩进）/引用块 >/行内 code/粗体；表格之外的复杂嵌套不支持
+- **中断保留现场（abortSkipRender）**：pi 不把被中断的部分内容写进会话文件（content 为空），
+  中断后的 settled 重绘会抹掉已流出的思考/工具行——中断后跳过一次重绘，现场保留到下一轮；
+  彻底持久化需 pi 侧支持
+- **代码上下文剥离（renderAll 用户分支）**：附带文件里可能含 ```，不能非贪婪找第一个闭合围栏，
+  要 lastIndexOf 取最后一个，否则剩余原始 markdown 会灌满用户气泡
 - **pi RPC 实测事件名（2026-09-04 实测）**：assistantMessageEvent 有 text_delta/thinking_delta/
   toolcall_start{id,toolName,contentIndex}/toolcall_delta{delta为args原始JSON片段}/toolcall_end；
   auto 模式下 edit/write 不需要审批（modes.ts 只在 manual/edit-auto 拦）
@@ -142,6 +150,12 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 ④ 历史面板 📄 打开 .jsonl / 行点击切换 ⑤ 聊天内路径点击打开（含 :行号跳转）
 ⑥ 输入框敲 /login 有提示并自动开终端 ⑦ 重载后默认模型 glm-5.3-flash（中国区）。
 全部通过后：git 提交推送（本轮改动一笔）+ 用户上传 Marketplace VSIX
+
+## 2026-09-04 晚间会话：已验收通过（用户确认「很漂亮」）
+
+流式行级增量、链接当前列打开、乐观气泡、中断保留现场+⏹提示、表格/列表/引用渲染、
+光文件名点击+findFiles 兑底、二进制不链接、通知去重/过滤、状态栏精简、代码上下文剥离修复。
+后续：git push（等网络）+ Marketplace 上传（最新 VSIX）+ 多标签并行会话（单独排会话）
 
 ## 移植/嵌入到其他 App 的注意事项（以后嵌入时读这段）
 
