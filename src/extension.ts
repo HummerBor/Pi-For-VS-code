@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ChatPanelProvider } from "./panel";
 
 export function activate(ctx: vscode.ExtensionContext): void {
-  const provider = new ChatPanelProvider(ctx.extensionUri, ctx.globalState);
+  const provider = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, ctx.extension.packageJSON.version);
   ctx.subscriptions.push(
     // retainContextWhenHidden：切到其他侧边栏时保活 webview，回来不重建、不丢会话
     vscode.window.registerWebviewViewProvider(

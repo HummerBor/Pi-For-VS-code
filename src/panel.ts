@@ -33,7 +33,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly globalState: vscode.Memento
+    private readonly globalState: vscode.Memento,
+    private readonly version: string
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -1429,6 +1430,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.lastSessionFile = st?.sessionFile ?? null;
       this.post({
         type: "state",
+        ver: this.version,
         model: st?.model
           ? { name: st.model.name, provider: st.model.provider, id: st.model.id }
           : null,
@@ -1822,6 +1824,7 @@ function getHtml(theme = "auto"): string {
     '<span id="think" class="tb-btn" title="思考等级">思考 —</span>',
     '<span id="modebadge" class="tb-btn" title="权限模式（点击切换）"></span>',
     '<span id="usage"></span>',
+    '<span id="ver"></span>',
     "</div>",
     '<script nonce="' + nonce + '">' + webviewJs() + "</script>",
     "</body>",
@@ -1939,7 +1942,7 @@ function css(): string {
     "/* ── 底部状态栏 ── */",
     "#bottombar { display: flex; align-items: center; gap: 10px; padding: 0 12px 6px; font-size: 11px; opacity: .8; }",
     "#statusline { display: flex; align-items: center; min-height: 16px; padding: 0 14px 2px; font-size: 11px; }",
-    "#bottombar #usage { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; opacity: .8; }",
+    "#bottombar #ver { opacity: .45; }",
     "#status.busy { font-weight: 600; color: var(--vscode-textLink-foreground, #4daafc); animation: wpulse 1.2s ease-in-out infinite; }",
     "#bottombar .tb-btn { padding: 0 6px; height: 20px; }",
     ".working-row { padding: 4px 14px; font-size: 12px; opacity: .7; }",
