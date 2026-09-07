@@ -14,6 +14,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private sessionPickerShown = false;
   private busy = false;
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
+  /** 中断后跳过一次 settled 重绘（会话里被中断的消息是空的，重绘会抹掉现场） */
+  private abortSkipRender = false;
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
   /** 最近一次已知会话名/文件（用于自动命名判断） */
   private lastSessionName: string | null = null;
@@ -305,7 +307,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         try {
           if (this.client?.running) {
             await this.client.abort();
-            // 终止反馈：CC 同款，中断后明确告知（消息已进会话记录，重绘后会保留）
+            // pi 不把中断时的部分内容写进会话文件（content 为空），
+            // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场
+            this.abortSkipRender = true;
             this.post({ type: "notice", text: "⏹ 已中断当前任务（已发送的消息保留在会话中）" });
           }
         } catch {
@@ -1599,6 +1603,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.busy = false;
         this.post({ type: "busy", value: false });
         this.lastQueueTotal = 0;
+        if (this.abortSkipRender) {
+          // 中断后的重绘会抹掉现场（会话文件里被中断的消息是空的），跳过
+          this.abortSkipRender = false;
+          await this.refreshState();
+          break;
+        }
         // 用完整会话消息重绘，纠正流式过程中的偏差；尚未送达的排队项保留气泡
         this.syncRenderKeepQueued();
         await this.refreshState();
