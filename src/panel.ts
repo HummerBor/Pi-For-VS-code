@@ -1911,6 +1911,7 @@ function css(): string {
     "",
     "/* ── 底部状态栏 ── */",
     "#footer { display: flex; align-items: center; min-height: 18px; padding: 2px 12px 5px; font-size: 11px; opacity: .6; }",
+    "#modebadge { margin-right: 8px; }",
     "#usage { white-space: nowrap; margin-left: auto; font-variant-numeric: tabular-nums; }",
     "",
     "/* ── 主题（🎨 切换，跟随 VS Code / CC 暗黑 / 午夜蓝）── */",
