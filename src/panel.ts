@@ -532,7 +532,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async pickLocalFiles(): Promise<void> {
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
-      filters: { "所有文件": ["*"], 图片: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] },
+      filters: { "所有文件": ["*"] },
     });
     if (!uris?.length) return;
     const images: any[] = [];
@@ -2712,9 +2712,9 @@ function webviewJs(): string {
     "    if (!item || item.header) return; // 防止选中分组标题出现 /undefined",
     "    if (item.builtin === 'mentionFile') { var v = input.value.replace(/[\\s/@]+$/, ''); input.value = (v ? v + ' ' : '') + '@'; hideSuggest(); input.focus(); updateSuggest(); return; }",
     "    if (item.builtin) { if (item.builtin !== 'uploadImage') input.value = ''; hideSuggest(); vscode.postMessage({ type: item.builtin }); return; }",
-    "    var label = sgKind === 'slash' ? ('/' + item.name) : item.rel;",
     "    var t = input.value;",
     "    var m = t.match(/(^|\\s)([\\/@])([^\\s]*)$/);",
+    "    var label = sgKind === 'slash' ? ('/' + item.name) : (m && m[2] === '@' ? '@' : '') + item.rel;",
     "    if (m) t = t.slice(0, t.length - m[0].length) + m[1] + label + ' ';",
     "    input.value = t;",
     "    hideSuggest();",
@@ -2734,7 +2734,7 @@ function webviewJs(): string {
     "  stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });",
     "  fileInput.addEventListener('change', function () { handleFiles(fileInput.files || []); fileInput.value = ''; });",
     "  sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
-    "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",,
+    "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",
     "  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });",
     "  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });",
     "  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });",
@@ -2754,7 +2754,7 @@ function webviewJs(): string {
     "    if (sgOpen) {",
     "      if (e.key === 'ArrowDown') { e.preventDefault(); nextSel(1); paintSuggest(); return; }",
     "      if (e.key === 'ArrowUp') { e.preventDefault(); nextSel(-1); paintSuggest(); return; }",
-    "      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); applySuggest(sgList[sgSel]); return; }",
+    "      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); var r0 = sgList[sgSel]; if (r0) applySuggest(r0.item); return; }",
     "      if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); return; }",
     "    }",
     "    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }",
