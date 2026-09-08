@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient } from "./piClient";
+import { STRINGS, Lang, bilingual, fmt, fmt2 } from "./i18n";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
@@ -30,73 +31,70 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private authOfferShown = false;
   private selTimer: NodeJS.Timeout | undefined;
   private editorDisposables: vscode.Disposable[] = [];
+  /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换，globalState 持久化 */
+  private lang: Lang = "zh";
+  /** 鸭子 logo 的 data URI（重生成 HTML 时复用，不必每次读盘） */
+  private duckUri = "";
+  /** 最近一次权限模式徽标文本（webview 重建后补发用：session_start 的 setStatus 只推一次） */
+  private lastModeText = "";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly globalState: vscode.Memento,
     private readonly version: string
-  ) {}
+  ) {
+    this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
+  }
+
+  /** 当前语言字典 */
+  private get L(): Record<string, any> {
+    return bilingual();
+  }
+
+  /** 按当前语言/主题/背景重生成 webview HTML（语言切换、背景变更共用） */
+  private applyHtml(): void {
+    const view = this.view;
+    if (!view) return;
+    if (!this.duckUri) {
+      this.duckUri =
+        "data:image/png;base64," +
+        fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
+    }
+    const kind = vscode.window.activeColorTheme.kind;
+    const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
+    const floorColor =
+      theme === "midnight" ? "#0b1220" : theme === "cc-dark" ? "#0a0a0c" : kind === vscode.ColorThemeKind.Light ? "#f3f3f3" : kind === vscode.ColorThemeKind.HighContrast ? "#000000" : "#1f1f1f";
+    // 面板自带壁纸：本地路径转 data URI（避开 CSP 资源限制），http(s) 直接用
+    const c = vscode.workspace.getConfiguration("piChat");
+    const img = c.get<string>("backgroundImage", "").trim();
+    const op = c.get<number>("backgroundOpacity", 0.35);
+    let url = "";
+    if (img) {
+      if (/^https?:/i.test(img)) {
+        url = img;
+      } else {
+        try {
+          const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
+          const ext = path.extname(p).toLowerCase();
+          const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : ext === ".bmp" ? "image/bmp" : "image/jpeg";
+          url = `data:${mime};base64,${fs.readFileSync(p).toString("base64")}`;
+        } catch {
+          url = ""; // 文件读不到则不启用
+        }
+      }
+    }
+    view.webview.html = getHtml(theme, this.duckUri, floorColor, url.replace(/'/g, "%27"), op, "", this.lang);
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     // retainContextWhenHidden：切到其他侧边栏时保活 webview，回来不重建、不丢会话
     view.webview.options = { enableScripts: true };
-    // 彩色鸭 logo：直接内嵌 base64 data URI（asWebviewUri 的 CSP origin 在部分版本解析为 null 导致裂图，弃用）
-    const duckUri =
-      "data:image/png;base64," +
-      fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
-    // 背景“地板色”：防背景类插件（如 BackgroundCover）把 --vscode-* 颜色变量毒成透明时，
-    // html 层垫一层不透明色挡住穿透。auto 主题按当前 VS Code 深浅取色，固定主题取各自底色
-    const kind = vscode.window.activeColorTheme.kind;
-    const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
-    const floorColor =
-      theme === "midnight" ? "#0b1220" : theme === "cc-dark" ? "#0a0a0c" : kind === vscode.ColorThemeKind.Light ? "#f3f3f3" : kind === vscode.ColorThemeKind.HighContrast ? "#000000" : "#1f1f1f";
-    const solidBg = ""; // 实验结束：BackgroundCover 已卸除，主题色本身就干净
-    view.webview.html = getHtml(theme, duckUri, solidBg || floorColor, ...(() => {
-      // 面板自带壁纸：本地路径转 data URI（避开 CSP 资源限制），http(s) 直接用
-      const c = vscode.workspace.getConfiguration("piChat");
-      const img = c.get<string>("backgroundImage", "").trim();
-      const op = c.get<number>("backgroundOpacity", 0.35);
-      let url = "";
-      if (img) {
-        if (/^https?:/i.test(img)) {
-          url = img;
-        } else {
-          try {
-            const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
-            const ext = path.extname(p).toLowerCase();
-            const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
-            url = `data:${mime};base64,${fs.readFileSync(p).toString("base64")}`;
-          } catch {
-            url = ""; // 文件读不到则不启用
-          }
-        }
-      }
-      return [url.replace(/'/g, "%27"), op] as [string, number];
-    })());
+    this.applyHtml();
     // 背景图/透明度配置变更 → 重置 webview（webviewReady 握手会自动重绘历史）
     const bgWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("piChat.backgroundImage") || e.affectsConfiguration("piChat.backgroundOpacity")) {
-        const c = vscode.workspace.getConfiguration("piChat");
-        const img = c.get<string>("backgroundImage", "").trim();
-        const op = c.get<number>("backgroundOpacity", 0.35);
-        let url = "";
-        if (img) {
-          if (/^https?:/i.test(img)) {
-            url = img;
-          } else {
-            try {
-              const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
-              const ext = path.extname(p).toLowerCase();
-              const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
-              url = `data:${mime};base64,${fs.readFileSync(p).toString("base64")}`;
-            } catch {
-              url = "";
-            }
-          }
-        }
-        const solidBg = "";
-        view.webview.html = getHtml(theme, duckUri, solidBg || floorColor, url.replace(/'/g, "%27"), op, solidBg);
+        this.applyHtml();
       }
     });
     view.onDidDispose(() => bgWatcher.dispose());
@@ -142,12 +140,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const v = await this.piVersion();
           if (v === null) {
             const pick = await vscode.window.showErrorMessage(
-              "未检测到 pi coding agent，面板需要它才能工作",
-              "一键安装 pi",
-              "打开 nodejs.org"
+              this.L.piNotDetected,
+              this.L.installPiBtn,
+              this.L.openNodejs
             );
-            if (pick === "一键安装 pi") await this.installPi();
-            else if (pick === "打开 nodejs.org")
+            if (pick === this.L.installPiBtn) await this.installPi();
+            else if (pick === this.L.openNodejs)
               void vscode.env.openExternal(vscode.Uri.parse("https://nodejs.org"));
           } else {
             const c = this.ensureClient();
@@ -218,7 +216,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "codeCtx", ctx: null });
         return;
       }
-      range = "整个文件";
+      range = this.L.wholeFile;
     } else {
       const s = Math.min(sel.start.line, sel.end.line) + 1;
       const e = Math.max(sel.start.line, sel.end.line) + 1;
@@ -259,21 +257,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     client.onExit = (code, detail) => {
       this.busy = false;
       this.post({ type: "busy", value: false });
-      this.post({ type: "status", text: "pi 进程已退出 (code " + code + ")" + (detail ? "，详情见通知" : "") });
+      this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
       // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
-      if (detail) this.post({ type: "notice", text: "⚠ pi 进程已退出 (code " + code + ")" + String.fromCharCode(10) + detail });
+      if (detail) this.post({ type: "notice", text: this.L.piExitedNotice + code + this.L.piExitedSuf + String.fromCharCode(10) + detail });
     };
     client.onError = (err) => {
-      this.post({ type: "notice", text: "启动失败: " + err.message });
+      this.post({ type: "notice", text: this.L.startFail + err.message });
       void vscode.window
-        .showErrorMessage("pi 启动失败: " + err.message, "一键安装 pi")
+        .showErrorMessage(this.L.piStartFail + err.message, this.L.installPiBtn)
         .then((pick) => {
-          if (pick === "一键安装 pi") void this.installPi();
+          if (pick === this.L.installPiBtn) void this.installPi();
         });
     };
     client.events.on("event", (e: any) => void this.onPiEvent(e));
 
-    this.post({ type: "status", text: "正在启动 pi…" });
+    this.post({ type: "status", text: this.L.startingPi });
     // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
     // 这里把 VSCode 内置 http.proxy 设置透传给 pi（HTTP_PROXY/HTTPS_PROXY）
     const proxyUrl = vscode.workspace.getConfiguration("http").get<string>("proxy", "").trim();
@@ -348,6 +346,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             const d = await this.client?.getMessages();
             this.post({ type: "render", messages: d?.messages ?? [] });
             this.post({ type: "busy", value: this.busy });
+            // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建（切语言/改背景）后不会重发，
+            // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
+            this.post({ type: "mode", text: this.modeBadgeText() });
           } catch {
             // ignore
           }
@@ -358,11 +359,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "prompt": {
         // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
         const tuiCmds: Record<string, string> = {
-          "/login": "订阅登录请点齿轮菜单 → 「订阅登录 (/login)」（会在终端打开 pi 完成授权）",
-          "/settings": "pi 终端设置在面板里不可用；面板相关设置在齿轮菜单里",
-          "/hotkeys": "/hotkeys 是 pi 终端专属命令，面板不支持",
-          "/theme": "/theme 是 pi 终端专属命令；面板主题点头部最后一个按钮切换",
-          "/help": "/help 是 pi 终端专属命令；面板用法可看扩展 README",
+          "/login": this.L.tuiLogin,
+          "/settings": this.L.tuiSettings,
+          "/hotkeys": this.L.tuiHotkeys,
+          "/theme": this.L.tuiTheme,
+          "/help": this.L.tuiHelp,
         };
         const trimmed = String(m.text ?? "").trim().toLowerCase();
         if (tuiCmds[trimmed]) {
@@ -392,7 +393,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.busy = true;
         this.post({ type: "busy", value: true });
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
-        const displayText = m.text || (codeInfo ? "请看这段代码" : m.images?.length ? "请看这张图片" : m.files?.length ? "请看附件文件" : m.text);
+        const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
         // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
         if (wasBusy) {
           // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
@@ -410,7 +411,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } catch (err: any) {
           this.busy = false;
           this.post({ type: "busy", value: false });
-          this.post({ type: "notice", text: "发送失败: " + (err?.message ?? err) });
+          this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
         }
         break;
       }
@@ -421,7 +422,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             // pi 不把中断时的部分内容写进会话文件（content 为空），
             // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场
             this.abortSkipRender = true;
-            this.post({ type: "notice", text: "⏹ 已中断当前任务（已发送的消息保留在会话中）" });
+            this.post({ type: "notice", text: this.L.aborted });
           }
         } catch {
           // ignore
@@ -434,12 +435,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const list: any[] = fm?.messages ?? [];
           const last = list[list.length - 1];
           if (!last) {
-            this.post({ type: "notice", text: "⚠ 没有可回退的用户消息" });
+            this.post({ type: "notice", text: this.L.noMsgToFork });
             break;
           }
           const fr = await this.client!.fork(last.entryId);
           if (fr?.cancelled) {
-            this.post({ type: "notice", text: "⚠ 回退被 pi 扩展取消" });
+            this.post({ type: "notice", text: this.L.forkCancelled });
             break;
           }
           let text = String(last.text ?? "");
@@ -466,9 +467,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           this.post({ type: "fillInput", text });
           this.syncRenderKeepQueued();
-          this.post({ type: "notice", text: "↩ 已回退到上一条用户消息，错误消息已清除；修改后重发即可" });
+          this.post({ type: "notice", text: this.L.forked });
         } catch (err) {
-          this.post({ type: "notice", text: "⚠ 回退失败: " + (err as Error).message });
+          this.post({ type: "notice", text: this.L.forkFail + (err as Error).message });
         }
         break;
       }
@@ -504,7 +505,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const sdoc = await vscode.workspace.openTextDocument(vscode.Uri.file(m.file));
           await vscode.window.showTextDocument(sdoc.uri, { viewColumn: vscode.ViewColumn.Beside, preview: true });
         } catch (err: any) {
-          this.post({ type: "notice", text: "打开会话文件失败: " + (err?.message ?? err) });
+          this.post({ type: "notice", text: this.L.openSessionFileFail + (err?.message ?? err) });
         }
         break;
       case "openPath":
@@ -536,29 +537,39 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "pickTheme":
         await this.pickTheme();
         break;
+      case "pickLang":
+        await this.toggleLang();
+        break;
     }
+  }
+
+  /** 中/EN 语言切换：持久化后重生成 HTML（webviewReady 握手会自动重绘历史） */
+  private async toggleLang(): Promise<void> {
+    this.lang = this.lang === "zh" ? "en" : "zh";
+    await this.globalState.update("piChat.lang", this.lang);
+    this.applyHtml();
   }
 
   /** 🎨 主题/背景选择，持久化 globalState，重载后自动应用 */
   private async pickTheme(): Promise<void> {
     const themes = [
-      { id: "midnight", label: "午夜蓝（默认）" },
-      { id: "auto", label: "跟随 VS Code" },
-      { id: "cc-dark", label: "CC 暗黑（Claude Code 风格）" },
+      { id: "midnight", label: this.L.themeMidnight },
+      { id: "auto", label: this.L.themeAuto },
+      { id: "cc-dark", label: this.L.themeCcDark },
     ];
     const cur = this.globalState.get<string>("piChat.theme") ?? "midnight";
     const pick = await vscode.window.showQuickPick(
       themes.map((t) => ({
         label: t.label,
-        description: t.id === cur ? "✓ 当前" : "",
+        description: t.id === cur ? this.L.themeCurrent : "",
         id: t.id,
       })),
-      { placeHolder: "面板主题 / 背景" }
+      { placeHolder: this.L.themePicker }
     );
     if (!pick) return;
     await this.globalState.update("piChat.theme", pick.id);
     this.post({ type: "theme", name: pick.id });
-    this.post({ type: "notice", text: "主题: " + pick.label });
+    this.post({ type: "notice", text: this.L.themeSet + pick.label });
   }
 
   private async newSession(): Promise<void> {
@@ -566,12 +577,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 防误触：agent 正在干活时，新会话会终止当前任务，先确认
     if (this.busy) {
       const pick = await vscode.window.showWarningMessage(
-        "pi 正在工作中，新建会话会终止当前任务，确定？",
+        this.L.nsConfirm,
         { modal: true },
-        "终止并新建",
-        "取消"
+        this.L.nsAbortAndNew,
+        this.L.cancel
       );
-      if (pick !== "终止并新建") return;
+      if (pick !== this.L.nsAbortAndNew) return;
       try {
         await client.abort();
       } catch {
@@ -581,7 +592,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       const result = await client.newSession();
       if (result?.cancelled) {
-        this.post({ type: "notice", text: "新建会话被扩展取消" });
+        this.post({ type: "notice", text: this.L.nsCancelled });
         return;
       }
       this.post({ type: "render", messages: [] });
@@ -601,7 +612,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       await this.refreshState();
     } catch (err: any) {
-      this.post({ type: "notice", text: "新建会话失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.nsFail + (err?.message ?? err) });
     }
   }
 
@@ -616,7 +627,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (this.client?.running && this.clientNoSession) {
       this.client.dispose();
       this.client = undefined;
-      this.post({ type: "status", text: "正在以持久模式重启 pi…" });
+      this.post({ type: "status", text: this.L.restartingPi });
     }
 
     const sessions = scope === "all" ? listSessions() : listSessions(wsPath);
@@ -631,9 +642,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     };
     const items: Item[] = [];
     if (scope !== "all") {
-      items.push({ label: "$(add) 开始新会话", action: "new" });
+      items.push({ label: this.L.startNewSession, action: "new" });
       if (scope === "auto") {
-        items.push({ label: "$(folder) 浏览所有项目的会话…", action: "all" });
+        items.push({ label: this.L.browseAllSessions, action: "all" });
       }
     }
     for (const s of sessions) {
@@ -646,14 +657,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
     }
     if (!items.length) {
-      this.post({ type: "notice", text: "没有找到历史会话（~/.pi/agent/sessions 为空）" });
+      this.post({ type: "notice", text: this.L.noSessions });
       return;
     }
     const pick = await vscode.window.showQuickPick(items, {
       placeHolder:
         scope === "all"
-          ? "选择要恢复的历史会话（全部项目，按最近使用排序）"
-          : "选择当前项目的历史会话继续工作，或开始新会话",
+          ? this.L.pickSessionAll
+          : this.L.pickSessionProj,
     });
     if (!pick) return; // 用户取消 → 保持现状，首次输入消息时再启动 pi
 
@@ -667,17 +678,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } else if (pick.file) {
         const r = await client.switchSession(pick.file);
         if (r?.cancelled) {
-          this.post({ type: "notice", text: "切换会话被扩展取消" });
+          this.post({ type: "notice", text: this.L.switchCancelled });
           return;
         }
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
         const name = (pick.label ?? "").replace(/^\$\(history\) /, "");
-        this.post({ type: "notice", text: "已恢复会话: " + name });
+        this.post({ type: "notice", text: this.L.sessionRestored + name });
       }
       await this.refreshState();
     } catch (err: any) {
-      this.post({ type: "notice", text: "会话操作失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
   }
 
@@ -685,7 +696,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async pickLocalFiles(): Promise<void> {
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
-      filters: { "所有文件": ["*"] },
+      filters: { [this.L.allFiles]: ["*"] },
     });
     if (!uris?.length) return;
     const images: any[] = [];
@@ -710,7 +721,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）
           const stat = fs.statSync(uri.fsPath);
           if (stat.size > 200 * 1024) {
-            this.post({ type: "notice", text: "ⓘ 文件超过 200KB，跳过: " + path.basename(uri.fsPath) });
+            this.post({ type: "notice", text: this.L.fileTooBigI + path.basename(uri.fsPath) });
             continue;
           }
           textFiles.push({ name: path.basename(uri.fsPath), text: fs.readFileSync(uri.fsPath, "utf8") });
@@ -733,28 +744,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // ignore
     }
     const modes = [
-      { id: "manual", label: "$(pencil) Manual", detail: "每次编辑/命令前确认" },
-      { id: "edit-auto", label: "$(edit) Edit automatically", detail: "编辑自动，危险命令需确认" },
-      { id: "plan", label: "$(file-text) Plan", detail: "只读：禁止修改文件" },
-      { id: "auto", label: "$(zap) Auto", detail: "全部自动批准" },
+      { id: "manual", label: this.L.modeManual, detail: this.L.modeManualDetail },
+      { id: "edit-auto", label: this.L.modeEditAuto, detail: this.L.modeEditAutoDetail },
+      { id: "plan", label: this.L.modePlan, detail: this.L.modePlanDetail },
+      { id: "auto", label: this.L.modeAuto, detail: this.L.modeAutoDetail },
     ];
     const pick = await vscode.window.showQuickPick(
       modes.map((m) => ({
         label: m.label,
-        description: m.id === cur ? "✓ 当前" : "",
+        description: m.id === cur ? this.L.themeCurrent : "",
         detail: m.detail,
         id: m.id,
       })),
-      { placeHolder: "权限模式" }
+      { placeHolder: this.L.modePicker }
     );
     if (!pick) return;
     try {
       fs.mkdirSync(path.dirname(modeFile), { recursive: true });
       fs.writeFileSync(modeFile, JSON.stringify({ mode: pick.id }, null, 2) + "\n", "utf8");
-      this.post({ type: "mode", text: pick.label.replace(/^\$\([^)]+\) /, "") });
-      this.post({ type: "notice", text: "权限模式已切换: " + pick.label.replace(/^\$\([^)]*\) /, "") });
+      const badge = pick.label.replace(/^\$\([^)]+\) /, "");
+      this.lastModeText = badge;
+      this.post({ type: "mode", text: badge });
+      this.post({ type: "notice", text: this.L.modeSet + pick.label.replace(/^\$\([^)]*\) /, "") });
     } catch (err: any) {
-      this.post({ type: "notice", text: "保存模式失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.modeSaveFail + (err?.message ?? err) });
     }
   }
 
@@ -770,21 +783,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     const builtin: any[] = [
       // 上下文
-      { group: "上下文", label: "上传文件…", description: "从电脑选择图片或文件注入上下文", builtin: "uploadImage" },
-      { group: "上下文", label: "引用项目文件…", description: "在输入框插入 @ 搜索", builtin: "mentionFile" },
+      { group: this.L.grpContext, label: this.L.slashUpload, description: this.L.slashUploadDesc, builtin: "uploadImage" },
+      { group: this.L.grpContext, label: this.L.slashMention, description: this.L.slashMentionDesc, builtin: "mentionFile" },
       // 会话
-      { group: "会话", label: "新建会话", description: "清空并开始新对话", builtin: "newSession" },
-      { group: "会话", label: "恢复历史会话…", description: "选择当前项目的历史对话", builtin: "pickSession" },
-      { group: "会话", label: "回退 / 分叉 / 导出…", description: "打开操作命令菜单", builtin: "more" },
+      { group: this.L.grpSession, label: this.L.slashNew, description: this.L.slashNewDesc, builtin: "newSession" },
+      { group: this.L.grpSession, label: this.L.slashResume, description: this.L.slashResumeDesc, builtin: "pickSession" },
+      { group: this.L.grpSession, label: this.L.slashMore, description: this.L.slashMoreDesc, builtin: "more" },
       // 模型
-      { group: "模型", label: "切换模型…", description: "选择可用模型", builtin: "pickModel" },
-      { group: "模型", label: "思考等级…", description: "off/low/medium/high…", builtin: "pickThinking" },
-      { group: "模型", label: "权限模式…", description: "Manual / Edit auto / Plan / Auto", builtin: "pickMode" },
+      { group: this.L.grpModel, label: this.L.slashModel, description: this.L.slashModelDesc, builtin: "pickModel" },
+      { group: this.L.grpModel, label: this.L.slashThinking, description: this.L.slashThinkingDesc, builtin: "pickThinking" },
+      { group: this.L.grpModel, label: this.L.slashMode, description: this.L.slashModeDesc, builtin: "pickMode" },
       // 配置（已合并进操作命令菜单，条目在菜单里分组展示）
-      { group: "配置", label: "pi 设置…", description: "API key / 登录 / 送达 / 自动压缩 / 会话", builtin: "settings" },
+      { group: this.L.grpConfig, label: this.L.slashSettings, description: this.L.slashSettingsDesc, builtin: "settings" },
     ];
     const ext = cmds.map((c: any) => ({
-      group: "命令 / 技能 / 模板",
+      group: this.L.grpCmds,
       label: "/" + c.name,
       description: c.description || c.source || "",
       name: c.name,
@@ -846,21 +859,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (r?.cancelled) return;
       const d = await client.getMessages();
       this.post({ type: "render", messages: d?.messages ?? [] });
-      this.post({ type: "notice", text: "已恢复会话" });
+      this.post({ type: "notice", text: this.L.sessionRestored });
       await this.refreshState();
     } catch (err: any) {
-      this.post({ type: "notice", text: "切换会话失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
   }
 
   /** /login 是 pi 终端内置命令，RPC 模式不可用 → 打开集成终端跑交互式 pi 完成 OAuth */
   private openTerminalLogin(): void {
-    const term = vscode.window.createTerminal({ name: "pi 订阅登录" });
+    const term = vscode.window.createTerminal({ name: this.L.loginTermName });
     term.show();
     term.sendText("pi");
     this.post({
       type: "notice",
-      text: "已在下方终端启动 pi：请输入 /login 选择订阅授权，完成后重载窗口（Ctrl+Shift+P → Reload Window）让面板使用新凭证",
+      text: this.L.loginNotice,
     });
   }
 
@@ -894,12 +907,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } catch { /* ignore */ }
     }
     if (!resolved) {
-      this.post({ type: "notice", text: "工作区里没找到文件: " + raw });
+      this.post({ type: "notice", text: this.L.fileNotFound + raw });
       return;
     }
     // 二进制文件开了也是报错页，直接提示
     if (/\.(vsix|zip|exe|dll|jar|7z|tar|gz|rar|bin|iso|class|pyc|woff2?|ttf|eot)$/i.test(resolved)) {
-      this.post({ type: "notice", text: "ⓘ 二进制文件，不在编辑器打开: " + path.basename(resolved) });
+      this.post({ type: "notice", text: this.L.binaryFile + path.basename(resolved) });
       return;
     }
     // 图片/PDF 等二进制但 VS Code 自带预览器的文件 → vscode.open（和 VSC 直接点开图片一致）
@@ -926,7 +939,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       selection: sel,
     });
     } catch (err: any) {
-      this.post({ type: "notice", text: "打开失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.openFail + (err?.message ?? err) });
     }
   }
 
@@ -949,49 +962,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     type Item = vscode.QuickPickItem & { run?: () => Promise<void> };
     const items: Item[] = [
       {
-        label: "$(pencil) 重命名当前会话…",
-        detail: "对应 pi 的 --name / set_session_name",
+        label: this.L.cmdRename,
         run: async () => {
           const name = await vscode.window.showInputBox({
-            prompt: "输入会话名称",
+            prompt: this.L.renamePrompt,
             value: "",
           });
           if (name === undefined || name === "") return;
           await client.setSessionName(name);
-          this.post({ type: "notice", text: "会话已重命名: " + name });
+          this.post({ type: "notice", text: this.L.renamed + name });
         },
       },
       {
-        label: "$(output) 手动压缩上下文 (compact)…",
-        detail: "上下文快满时手动压缩，可附加说明",
+        label: this.L.cmdCompact,
         run: async () => {
           const inst = await vscode.window.showInputBox({
-            prompt: "压缩提示（可选，直接回车跳过）",
+            prompt: this.L.compactPrompt,
           });
           if (inst === undefined) return;
-          this.post({ type: "status", text: "正在压缩上下文…" });
+          this.post({ type: "status", text: this.L.compacting });
           const r = await client.compact(inst || undefined);
           this.post({ type: "status", text: "" });
           this.post({
             type: "notice",
             text: r?.result
-              ? "压缩完成: " + (r.result.tokensBefore ?? "?") + " → 约 " + (r.result.estimatedTokensAfter ?? "?") + " tokens"
-              : "压缩已结束",
+              ? this.L.compactDone + (r.result.tokensBefore ?? "?") + " → ≈ " + (r.result.estimatedTokensAfter ?? "?") + " tokens"
+              : this.L.compactEnded,
           });
         },
       },
       {
-        label: "$(clear-all) 清空排队消息 (clear_queue)",
-        detail: "取消已排队但未发送的插话/追问，内容会贴回输入框",
+        label: this.L.cmdClearQueue,
         run: async () => {
           const r = await client.clearQueue();
           const all = [...(r?.steering ?? []), ...(r?.followUp ?? [])];
-          this.post({ type: "notice", text: all.length ? "已取消排队: " + all.join(" / ") : "没有排队的消息" });
+          this.post({ type: "notice", text: all.length ? this.L.queueCleared + all.join(" / ") : this.L.queueEmpty });
         },
       },
       {
-        label: "$(link-external) 导出会话为 HTML…",
-        detail: "export_html，导出后自动用浏览器打开",
+        label: this.L.cmdExport,
         run: async () => {
           const target = await vscode.window.showSaveDialog({
             defaultUri: vscode.Uri.file(path.join(os.homedir(), "Desktop", "pi-session.html")),
@@ -1001,62 +1010,58 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const r = await client.exportHtml(target.fsPath);
           if (r?.path) {
             void vscode.env.openExternal(vscode.Uri.file(r.path));
-            this.post({ type: "notice", text: "已导出: " + r.path });
+            this.post({ type: "notice", text: this.L.exported + r.path });
           }
         },
       },
       {
-        label: "$(git-branch) 从历史消息分叉 (fork)…",
-        detail: "回到某条用户消息重新开始，后续消息被丢弃",
+        label: this.L.cmdFork,
         run: async () => {
           const d = await client.getForkMessages();
           const msgs: any[] = d?.messages ?? [];
           if (!msgs.length) {
-            this.post({ type: "notice", text: "没有可分叉的历史消息" });
+            this.post({ type: "notice", text: this.L.noForkMsgs });
             return;
           }
           const pick = await vscode.window.showQuickPick(
             msgs.map((m) => ({ label: m.text?.slice(0, 80) ?? "", entryId: m.entryId })),
-            { placeHolder: "选择要回到的用户消息（之后的对话将被丢弃）" }
+            { placeHolder: this.L.forkPick }
           );
           if (!pick) return;
           const r = await client.fork(pick.entryId);
           if (r?.cancelled) return;
           const md = await client.getMessages();
           this.post({ type: "render", messages: md?.messages ?? [] });
-          this.post({ type: "notice", text: "已分叉到: " + (r?.text ?? "").slice(0, 50) });
+          this.post({ type: "notice", text: this.L.forkedTo + (r?.text ?? "").slice(0, 50) });
         },
       },
       {
-        label: "$(copy) 克隆当前会话 (clone)",
-        detail: "把当前对话复制为一个新会话继续",
+        label: this.L.cmdClone,
         run: async () => {
           const r = await client.clone();
           if (r?.cancelled) return;
-          this.post({ type: "notice", text: "已克隆为新会话" });
+          this.post({ type: "notice", text: this.L.cloned });
         },
       },
       {
-        label: "$(terminal) 直接执行 shell 命令…",
-        detail: "输出会进入对话上下文，agent 下次回复时可见",
+        label: this.L.cmdBash,
         run: async () => {
-          const cmd = await vscode.window.showInputBox({ prompt: "要执行的命令" });
+          const cmd = await vscode.window.showInputBox({ prompt: this.L.bashPrompt });
           if (!cmd) return;
           this.post({ type: "notice", text: "$ " + cmd });
           const r = await client.bash(cmd);
           if (r?.output) {
-            this.post({ type: "notice", text: "退出码 " + (r.exitCode ?? "?") + ": " + String(r.output).slice(0, 200) });
+            this.post({ type: "notice", text: this.L.exitCode + (r.exitCode ?? "?") + ": " + String(r.output).slice(0, 200) });
           }
         },
       },
       {
-        label: "$(tools) 查看 /命令、技能与提示模板",
-        detail: "在输入框里输入 /命令名 即可执行",
+        label: this.L.cmdList,
         run: async () => {
           const d = await client.getCommands();
           const cmds: any[] = d?.commands ?? [];
           if (!cmds.length) {
-            this.post({ type: "notice", text: "没有可用的 /命令" });
+            this.post({ type: "notice", text: this.L.noSlashCmds });
             return;
           }
           await vscode.window.showQuickPick(
@@ -1065,23 +1070,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               description: c.source,
               detail: (c.description ?? "") + (c.path ? "  ·  " + c.path : ""),
             })),
-            { placeHolder: "可用命令（在聊天输入框输入 /命令名 回车执行）" }
+            { placeHolder: this.L.cmdListPh }
           );
         },
       },
     ];
 
     // 合并设置菜单（分组展示，原 ⚙ 按钮内容全部保留在此）
-    items.push({ label: "配置", kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: this.L.grpConfig, kind: vscode.QuickPickItemKind.Separator });
     items.push(...(await this.buildSettingsItems(client)));
 
-    const pick = await vscode.window.showQuickPick(items, { placeHolder: "pi 菜单：会话操作 / 配置" });
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.menuPh });
     if (!pick?.run) return;
     try {
       await pick.run();
     } catch (err: any) {
-      this.post({ type: "notice", text: "操作失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.opFail + (err?.message ?? err) });
     }
+  }
+
+  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底 */
+  private modeBadgeText(): string {
+    if (this.lastModeText) return this.lastModeText;
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "mode.json"), "utf8")).mode;
+      const labels: Record<string, string> = { manual: "Manual", "edit-auto": "Edit automatically", plan: "Plan", auto: "Auto" };
+      if (m && labels[m]) return "⚡ " + labels[m];
+    } catch {
+      // ignore
+    }
+    return "";
   }
 
   /** ⚙ 设置菜单条目（已合并进 ⚡ 菜单；/ 菜单「pi 设置…」仍单独打开） */
@@ -1094,44 +1112,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const items: (vscode.QuickPickItem & { run?: () => Promise<void> })[] = [];
 
     items.push({
-      label: "$(key) 配置模型 API key…",
-      detail: "写入 ~/.pi/agent/auth.json（Z.ai / OpenRouter / OpenAI / DeepSeek / Kimi…）",
+      label: this.L.sApiKey,
       run: async () => {
         await this.configApiKey();
       },
     });
     items.push({
-      label: "$(globe) 订阅登录 (/login)",
-      detail: "Claude Pro/Max、ChatGPT Plus/Pro、Codex 等订阅授权（在集成终端完成浏览器流程）",
+      label: this.L.sLogin,
       run: async () => {
         await this.openTerminalLogin();
       },
     });
     items.push({
-      label: "$(trash) 查看/删除已保存的凭证",
-      detail: "管理 ~/.pi/agent/auth.json 里的 key / 授权",
+      label: this.L.sManageAuth,
       run: async () => {
         await this.manageAuth();
       },
     });
     items.push({
-      label: "$(cloud-download) 安装 / 更新 pi",
-      detail: "npm install -g @earendil-works/pi-coding-agent",
+      label: this.L.sInstall,
       run: async () => {
         await this.installPi();
       },
     });
     items.push({
-      label: "$(shield) 权限模式…",
-      detail: "Manual / Edit automatically / Plan / Auto（对应 pi 的 /mode 扩展命令）",
+      label: this.L.sMode,
       run: async () => {
         // /mode 是扩展命令，立即执行并弹出选择（走 extension_ui_request → QuickPick）
         await client.prompt("/mode");
       },
     });
     items.push({
-      label: "$(comment-discussion) 插话送达: " + (st?.steeringMode === "all" ? "全部" : "逐条"),
-      detail: "agent 工作中插话的送达方式（对应 set_steering_mode）",
+      label: this.L.sSteering + ": " + (st?.steeringMode === "all" ? this.L.sSteeringAll : this.L.sSteeringOne),
       run: async () => {
         const next = st?.steeringMode === "all" ? "one-at-a-time" : "all";
         await client.setSteeringMode(next);
@@ -1139,75 +1151,70 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         await vscode.workspace
           .getConfiguration("piChat")
           .update("steeringMode", next, vscode.ConfigurationTarget.Global);
-        this.post({ type: "notice", text: "插话送达方式: " + (next === "all" ? "全部" : "逐条") });
+        this.post({ type: "notice", text: this.L.sSteeringSet + (next === "all" ? this.L.sSteeringAll : this.L.sSteeringOne) });
       },
     });
     items.push({
-      label: "$(arrow-down) 追问送达: " + (st?.followUpMode === "all" ? "全部" : "逐条"),
-      detail: "排队追问的送达方式（对应 set_follow_up_mode）",
+      label: this.L.sFollowUp + ": " + (st?.followUpMode === "all" ? this.L.sSteeringAll : this.L.sSteeringOne),
       run: async () => {
         const next = st?.followUpMode === "all" ? "one-at-a-time" : "all";
         await client.setFollowUpMode(next);
-        this.post({ type: "notice", text: "追问送达方式: " + (next === "all" ? "全部" : "逐条") });
+        this.post({ type: "notice", text: this.L.sFollowUpSet + (next === "all" ? this.L.sSteeringAll : this.L.sSteeringOne) });
       },
     });
     items.push({
-      label: "$(fold) 自动压缩: " + ((st?.autoCompactionEnabled ?? true) ? "开" : "关"),
-      detail: "上下文接近满时自动压缩（对应 set_auto_compaction）",
+      label: this.L.sAutoCompact + ": " + ((st?.autoCompactionEnabled ?? true) ? this.L.on : this.L.off),
       run: async () => {
         const next = !(st?.autoCompactionEnabled ?? true);
         await client.setAutoCompaction(next);
-        this.post({ type: "notice", text: "自动压缩已" + (next ? "开启" : "关闭") });
+        this.post({ type: "notice", text: next ? this.L.sAutoCompactSetOn : this.L.sAutoCompactSetOff });
       },
     });
     items.push({
-      label: "$(sync) 自动重试…",
-      detail: "遇到临时错误（限流/过载）自动重试（对应 set_auto_retry）",
+      label: this.L.sAutoRetry,
       run: async () => {
-        const pick2 = await vscode.window.showQuickPick(["开启", "关闭"], {
-          placeHolder: "自动重试",
+        const pick2 = await vscode.window.showQuickPick([this.L.on, this.L.off], {
+          placeHolder: this.L.sAutoRetryPicker,
         });
         if (!pick2) return;
-        await client.setAutoRetry(pick2 === "开启");
-        this.post({ type: "notice", text: "自动重试已" + (pick2 === "开启" ? "开启" : "关闭") });
+        await client.setAutoRetry(pick2 === this.L.on);
+        this.post({ type: "notice", text: pick2 === this.L.on ? this.L.sAutoRetrySetOn : this.L.sAutoRetrySetOff });
       },
     });
     items.push({
-      label: "$(history) 会话模式: " + mode,
-      detail: "ephemeral=不保存 / continue=继续最近 / new=新建持久（piChat.sessionMode）",
+      label: this.L.sSessionMode + ": " + mode,
       run: async () => {
         const pick2 = await vscode.window.showQuickPick(
           [
-            { label: "ephemeral — 不保存会话（关闭即丢失，慎用）", value: "ephemeral" },
-            { label: "continue — 启动时继续最近一次会话（推荐）", value: "continue" },
-            { label: "new — 新建持久会话", value: "new" },
+            { label: this.L.sModeEphemeral, value: "ephemeral" },
+            { label: this.L.sModeContinue, value: "continue" },
+            { label: this.L.sModeNew, value: "new" },
           ],
-          { placeHolder: "piChat.sessionMode（修改后重载窗口生效）" }
+          { placeHolder: this.L.sSessionModePh }
         );
         if (!pick2) return;
         await vscode.workspace
           .getConfiguration("piChat")
           .update("sessionMode", pick2.value, vscode.ConfigurationTarget.Global);
-        this.post({ type: "notice", text: "会话模式已改为 " + pick2.value + "（重载窗口后生效）" });
+        this.post({ type: "notice", text: this.L.sSessionModeSet + pick2.value + this.L.sSessionModeReload });
       },
     });
     items.push({
-      label: "$(folder) 会话存储目录: " + (sessionDir || "默认"),
-      detail: "默认为 ~/.pi/agent/sessions（piChat.sessionDir）",
+      label: this.L.sSessionDir + ": " + (sessionDir || this.L.sSessionDirDefault),
       run: async () => {
         const val = await vscode.window.showInputBox({
-          prompt: "自定义会话存储目录（留空用默认）",
+          prompt: this.L.sSessionDirPrompt,
           value: sessionDir,
         });
         if (val === undefined) return;
         await vscode.workspace
           .getConfiguration("piChat")
           .update("sessionDir", val, vscode.ConfigurationTarget.Global);
-        this.post({ type: "notice", text: "会话目录已更新（重启 pi 后生效）" });
+        this.post({ type: "notice", text: this.L.sSessionDirSet });
       },
     });
     items.push({
-      label: "$(gear) 打开 pi 配置目录 (~/.pi/agent)",
+      label: this.L.sOpenCfgDir,
       run: async () => {
         void vscode.commands.executeCommand(
           "revealFileInOS",
@@ -1216,7 +1223,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     });
     items.push({
-      label: "$(json) 编辑 pi settings.json",
+      label: this.L.sEditSettings,
       run: async () => {
         const f = vscode.Uri.file(path.join(os.homedir(), ".pi", "agent", "settings.json"));
         try {
@@ -1239,12 +1246,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     const client = this.ensureClient(true);
     const items = await this.buildSettingsItems(client);
-    const pick = await vscode.window.showQuickPick(items, { placeHolder: "pi 设置" });
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.settingsPh });
     if (!pick?.run) return;
     try {
       await pick.run();
     } catch (err: any) {
-      this.post({ type: "notice", text: "设置失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.settingsFail + (err?.message ?? err) });
     }
   }
 
@@ -1265,21 +1272,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (this.hasAuthConfig()) return;
     if (force) {
       const pick = await vscode.window.showInformationMessage(
-        "pi 已就绪，还需要一个模型 API key 才能对话",
-        "现在配置",
-        "稍后"
+        this.L.keyReady,
+        this.L.configNow,
+        this.L.later
       );
-      if (pick === "现在配置") await this.configApiKey();
+      if (pick === this.L.configNow) await this.configApiKey();
     } else if (!this.authOfferShown) {
       this.authOfferShown = true; // 每次窗口只提醒一次，不反复打扰
       const pick = await vscode.window.showInformationMessage(
-        "检测到尚未配置任何模型凭证（API key / 订阅登录）",
-        "配置 API key",
-        "订阅登录 /login",
-        "稍后"
+        this.L.noAuthDetected,
+        this.L.configKeyBtn,
+        this.L.loginBtn,
+        this.L.later
       );
-      if (pick === "配置 API key") await this.configApiKey();
-      else if (pick === "订阅登录 /login") {
+      if (pick === this.L.configKeyBtn) await this.configApiKey();
+      else if (pick === this.L.loginBtn) {
         const c = this.ensureClient();
         this.post({ type: "user", text: "/login" });
         await c.prompt("/login");
@@ -1303,7 +1310,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 一键安装/更新 pi（npm 全局装），进度与结果显示在面板 */
   private async installPi(): Promise<void> {
-    this.post({ type: "status", text: "正在安装/更新 pi…（可能需要 1~2 分钟）" });
+    this.post({ type: "status", text: this.L.installing });
     this.post({ type: "notice", text: "📦 npm install -g @earendil-works/pi-coding-agent…" });
     const proc = spawn("npm", ["install", "-g", "@earendil-works/pi-coding-agent"], {
       shell: true,
@@ -1316,20 +1323,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     proc.on("error", () => {
       this.post({ type: "status", text: "" });
       void vscode.window.showErrorMessage(
-        "安装失败：未找到 npm，请先安装 Node.js（nodejs.org）"
+        this.L.npmMissing
       );
     });
     proc.on("close", (code) => {
       this.post({ type: "status", text: "" });
       if (code === 0) {
-        this.post({ type: "notice", text: "✔ pi 安装/更新完成" });
+        this.post({ type: "notice", text: this.L.installDone });
         // 装完后（重新）拉起客户端；还没有凭证则直接弹 key 配置
         if (!this.client?.running) this.client = undefined;
         const c = this.ensureClient();
         void c;
         void this.maybeOfferKeyConfig(true);
       } else {
-        void vscode.window.showErrorMessage("安装失败: " + tail.slice(-200));
+        void vscode.window.showErrorMessage(this.L.installFail + tail.slice(-200));
       }
     });
   }
@@ -1337,24 +1344,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 配置模型 API key：写入 ~/.pi/agent/auth.json（与 pi 的 /login 存储格式一致） */
   private async configApiKey(): Promise<void> {
     const providers = [
-      { id: "zai", label: "Z.ai（GLM，全球）" },
-      { id: "zai-coding-cn", label: "Z.ai（GLM，中国区）" },
+      { id: "zai", label: this.L.providerZai },
+      { id: "zai-coding-cn", label: this.L.providerZaiCn },
       { id: "openrouter", label: "OpenRouter" },
       { id: "anthropic", label: "Anthropic" },
       { id: "openai", label: "OpenAI" },
       { id: "deepseek", label: "DeepSeek" },
       { id: "google", label: "Google Gemini" },
       { id: "kimi-coding", label: "Kimi For Coding" },
-      { id: "qwen-token-plan-cn", label: "Qwen Token 套餐（中国）" },
-      { id: "xiaomi", label: "小米 MiMo" },
+      { id: "qwen-token-plan-cn", label: this.L.providerQwen },
+      { id: "xiaomi", label: this.L.providerXiaomi },
     ];
     const pick = await vscode.window.showQuickPick(
       providers.map((p) => ({ label: p.label, description: p.id, id: p.id })),
-      { placeHolder: "选择 API key 所属服务商" }
+      { placeHolder: this.L.pickProvider }
     );
     if (!pick) return;
     const key = await vscode.window.showInputBox({
-      prompt: "输入 API key（仅保存到本机 ~/.pi/agent/auth.json）",
+      prompt: this.L.enterKey,
       password: true,
     });
     if (!key) return;
@@ -1369,9 +1376,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: "✔ 已保存 " + pick.label + " 的 API key，在工具条「模型」按钮选择即可使用" });
+      this.post({ type: "notice", text: this.L.keySaved + pick.label });
     } catch (err: any) {
-      this.post({ type: "notice", text: "保存失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.saveFail + (err?.message ?? err) });
     }
   }
 
@@ -1382,36 +1389,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       data = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
-      this.post({ type: "notice", text: "没有已保存的凭证" });
+      this.post({ type: "notice", text: this.L.noAuth });
       return;
     }
     const ids = Object.keys(data);
     if (!ids.length) {
-      this.post({ type: "notice", text: "没有已保存的凭证" });
+      this.post({ type: "notice", text: this.L.noAuth });
       return;
     }
     const pick = await vscode.window.showQuickPick(
       ids.map((id) => ({
         label: id,
         description: data[id]?.type ?? "",
-        detail: "选中后将删除该凭证（订阅凭证删除后需重新 /login）",
+        detail: this.L.authDetail,
         id,
       })),
-      { placeHolder: "查看/删除已保存的凭证（auth.json）" }
+      { placeHolder: this.L.authPicker }
     );
     if (!pick) return;
     const yes = await vscode.window.showWarningMessage(
-      "删除 " + pick.id + " 的凭证？",
+      this.L.delAuthAsk,
       { modal: true },
-      "删除"
+      this.L.delete
     );
-    if (yes !== "删除") return;
+    if (yes !== this.L.delete) return;
     delete data[pick.id];
     try {
       fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: "已删除 " + pick.id });
+      this.post({ type: "notice", text: this.L.deleted + pick.id });
     } catch (err: any) {
-      this.post({ type: "notice", text: "删除失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.delFail + (err?.message ?? err) });
     }
   }
 
@@ -1421,21 +1428,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       models = (await client.getAvailableModels())?.models ?? [];
     } catch (err: any) {
-      this.post({ type: "notice", text: "获取模型列表失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.modelListFail + (err?.message ?? err) });
       return;
     }
     if (!models.length) {
-      this.post({ type: "notice", text: "没有可用模型（先用 /login 或 API key 配置）" });
+      this.post({ type: "notice", text: this.L.noModels });
       return;
     }
     const items = models.map((m) => ({
       label: m.name ?? m.id,
       description: m.provider + "/" + m.id,
-      detail: "上下文 " + (m.contextWindow ?? "?"),
+      detail: this.L.ctx + (m.contextWindow ?? "?"),
       model: m,
     }));
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: "选择模型",
+      placeHolder: this.L.modelPicker,
     });
     if (!pick) return;
     try {
@@ -1444,10 +1451,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         provider: pick.model.provider,
         id: pick.model.id,
       });
-      this.post({ type: "notice", text: "模型已切换: " + pick.label });
+      this.post({ type: "notice", text: this.L.modelSet + pick.label });
       await this.refreshState();
     } catch (err: any) {
-      this.post({ type: "notice", text: "切换失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.switchFail + (err?.message ?? err) });
     }
   }
 
@@ -1460,11 +1467,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (!levels.length) {
-      this.post({ type: "notice", text: "当前模型不支持思考等级" });
+      this.post({ type: "notice", text: this.L.noThinking });
       return;
     }
     const pick = await vscode.window.showQuickPick(levels, {
-      placeHolder: "选择思考等级",
+      placeHolder: this.L.thinkingPicker,
     });
     if (!pick) return;
     try {
@@ -1472,7 +1479,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       void this.globalState.update("piChat.lastThinking", pick);
       await this.refreshState();
     } catch (err: any) {
-      this.post({ type: "notice", text: "设置失败: " + (err?.message ?? err) });
+      this.post({ type: "notice", text: this.L.setFail + (err?.message ?? err) });
     }
   }
 
@@ -1486,7 +1493,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       switch (req.method) {
         case "select": {
           const pick = await vscode.window.showQuickPick(req.options ?? [], {
-            placeHolder: req.title ?? "请选择",
+            placeHolder: req.title ?? this.L.pleaseSelect,
           });
           if (pick === undefined) respond({ cancelled: true });
           else respond({ value: pick });
@@ -1494,20 +1501,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case "confirm": {
           const sel = await vscode.window.showWarningMessage(
-            req.title ?? "确认",
+            req.title ?? this.L.confirm,
             { modal: true, detail: req.message ?? "" },
-            "确认",
-            "取消"
+            this.L.confirm,
+            this.L.cancel
           );
           if (sel === undefined) respond({ cancelled: true });
-          else respond({ confirmed: sel === "确认" });
+          else respond({ confirmed: sel === this.L.confirm });
           break;
         }
         case "input":
         case "editor": {
           // editor（多行编辑）降级为单行输入框
           const val = await vscode.window.showInputBox({
-            prompt: req.title ?? "请输入",
+            prompt: req.title ?? this.L.pleaseInput,
             placeHolder: req.placeholder,
             value: req.prefill,
           });
@@ -1526,7 +1533,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "setStatus": {
           // 模式扩展用 statusKey="mode" 推送当前权限模式，显示在底部状态栏
           if (req.statusKey === "mode") {
-            this.post({ type: "mode", text: req.statusText ?? "" });
+            this.lastModeText = req.statusText ?? "";
+            this.post({ type: "mode", text: this.lastModeText });
           }
           break;
         }
@@ -1729,13 +1737,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.post({
           type: "notice",
           text:
-            "⚠ 请求失败，自动重试 (" +
-            (e.attempt ?? "?") + "/" + (e.maxAttempts ?? "?") + ")" +
+            fmt2(this.L.retryAttempt, e.attempt ?? "?", e.maxAttempts ?? "?") +
             (why ? ": " + why.slice(0, 120) : ""),
         });
         this.post({
           type: "status",
-          text: "自动重试中 (" + (e.attempt ?? "?") + "/" + (e.maxAttempts ?? "?") + ")…",
+          text: fmt2(this.L.retrying, e.attempt ?? "?", e.maxAttempts ?? "?"),
         });
         break;
       }
@@ -1745,12 +1752,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({
             type: "notice",
             text:
-              "✘ 重试 " + (e.attempt ?? "?") + " 次仍失败: " +
-              (e.finalError ? String(e.finalError).slice(0, 150) : "网络/服务端错误") +
-              "，可重发消息再试",
+              fmt(this.L.retryFailPre, e.attempt ?? "?") +
+              (e.finalError ? String(e.finalError).slice(0, 150) : this.L.netErr) +
+              this.L.resendHint,
           });
         } else if (e.attempt && e.attempt > 1) {
-          this.post({ type: "notice", text: "✔ 重试成功（第 " + e.attempt + " 次）" });
+          this.post({ type: "notice", text: fmt(this.L.retryOk, e.attempt) });
         }
         break;
       }
@@ -1782,7 +1789,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "extension_error":
         this.post({
           type: "notice",
-          text: "扩展错误 (" + e.event + "): " + e.error,
+          text: this.L.extErr + e.event + "): " + e.error,
         });
         break;
 
@@ -1905,7 +1912,7 @@ function readSessionMeta(file: string): { name?: string; cwd?: string; preview?:
           if (mm) t = mm[1];
           else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
           t = t.replace(/\s+/g, " ").trim();
-          if (t && t !== "请看这段代码" && t !== "请看这张图片") preview = t.slice(0, 60);
+          if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) preview = t.slice(0, 60);
         }
       }
       if (preview && cwd) break;
@@ -1937,11 +1944,12 @@ function extractText(content: any): string {
   return out;
 }
 
-function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgImage = "", bgOpacity = 0.35, solidBg = ""): string {
+function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgImage = "", bgOpacity = 0.35, solidBg = "", lang: Lang = "zh"): string {
+  const L = STRINGS[lang];
   const nonce = Math.random().toString(36).slice(2);
   return [
     "<!DOCTYPE html>",
-    '<html lang="zh">',
+    '<html lang="' + lang + '">',
     "<head>",
     '<meta charset="utf-8">',
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'nonce-' + nonce + '\'; img-src data:;">',
@@ -1952,15 +1960,16 @@ function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgIma
     '<div id="header">',
     '<div id="hdr-row1">',
     '<img id="logo" src="' + duckUri + '" title="Pi For VSC">',
-    '<span id="session" class="hdr-btn" title="点击查看 / 切换历史会话">会话: —</span>',
+    '<span id="session" class="hdr-btn" title="' + L.sessionBtnTitle + '">' + L.sessionLabel + '—</span>',
     '<span class="spacer"></span>',
-    '<span id="history" class="ico-btn" title="历史会话"></span>',
-    '<span id="newchat" class="ico-btn" title="新建会话"></span>',
-    '<span id="more" class="ico-btn" title="菜单：会话操作 / 配置"></span>',
-    '<span id="theme" class="ico-btn" title="主题 / 背景"></span>',
+    '<span id="history" class="ico-btn" title="' + L.historyTitle + '"></span>',
+    '<span id="newchat" class="ico-btn" title="' + L.newChatTitle + '"></span>',
+    '<span id="more" class="ico-btn" title="' + L.moreTitle + '"></span>',
+    '<span id="lang" class="ico-btn" title="' + L.langBtnTitle + '">' + (lang === "zh" ? "EN" : "中") + '</span>',
+    '<span id="theme" class="ico-btn" title="' + L.themeTitle + '"></span>',
     "</div>",
     "</div>",
-    '<div id="messages"><div id="welcome"><img class="w-duck" src="' + duckUri + '" width="96" height="96"><div class="w-title">有什么要让 pi 干的？</div><div class="w-tip"></div><div class="w-sub">直接输入消息即可开始 · 工作中再发送会自动排队插话 · Esc 可中断</div></div></div>',
+    '<div id="messages"><div id="welcome"><img class="w-duck" src="' + duckUri + '" width="96" height="96"><div class="w-title">' + L.welcomeTitle + '</div><div class="w-tip"></div><div class="w-sub">' + L.welcomeSub + '</div></div></div>',
     '<div id="queuebar"></div>',
     '<div id="statusline"><span id="status"></span></div>',
     '<div id="composer">',
@@ -1971,23 +1980,23 @@ function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgIma
     '</div>',
     '<input type="file" id="file" multiple style="display:none">',
     '<div id="attachbar"></div>',
-    '<textarea id="input" placeholder="给 pi 发消息… (Enter 发送，Shift+Enter 换行)"></textarea>',
+    '<textarea id="input" placeholder="' + L.inputPlaceholder + '"></textarea>',
     '<div id="ctoolbar">',
-    '<span id="attach" class="tb-btn" title="添加图片；拖文件进面板需按住 Shift（VS Code 限制）"></span>',
+    '<span id="attach" class="tb-btn" title="' + L.attachTitle + '"></span>',
     '<span id="codechip" style="display:none"></span>',
     '<span class="tb-spacer"></span>',
-    '<button id="stop" title="停止 (Esc)"></button>',
-    '<button id="send" title="Enter 发送"></button>',
+    '<button id="stop" title="' + L.stopTitle + '"></button>',
+    '<button id="send" title="' + L.sendTitle + '"></button>',
     "</div>",
     "</div>",
     '<div id="bottombar">',
-    '<span id="model" class="tb-btn" title="切换模型">—</span>',
-    '<span id="think" class="tb-btn" title="思考等级">思考 —</span>',
-    '<span id="modebadge" class="tb-btn" title="权限模式（点击切换）"></span>',
+    '<span id="model" class="tb-btn" title="' + L.modelTitle + '">—</span>',
+    '<span id="think" class="tb-btn" title="' + L.thinkTitle + '">' + L.thinkLabel + '—</span>',
+    '<span id="modebadge" class="tb-btn" title="' + L.modeBadgeTitle + '"></span>',
     '<span id="usage"></span>',
     '<span id="ver"></span>',
     "</div>",
-    '<script nonce="' + nonce + '">' + webviewJs() + "</script>",
+    '<script nonce="' + nonce + '">' + webviewJs(L) + "</script>",
     "</body>",
     "</html>",
   ].join("\n");
@@ -2139,9 +2148,10 @@ function css(floorColor = "#1f1f1f"): string {
 }
 
 /** 注意：这里面的代码不能出现 ${，否则会被外层拼接破坏 */
-function webviewJs(): string {
+function webviewJs(L: Record<string, any>): string {
   return [
     "(function(){",
+    "  var L = " + JSON.stringify(L) + ";",
     "  var vscode = acquireVsCodeApi();",
     "  var messages = document.getElementById('messages');",
     "  var input = document.getElementById('input');",
@@ -2150,6 +2160,7 @@ function webviewJs(): string {
     "  var statusEl = document.getElementById('status');",
     "  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else { statusEl.textContent = ''; } }",
     "  var modeBadge = document.getElementById('modebadge');",
+    "  var langEl = document.getElementById('lang');",
     "  var codechipEl = document.getElementById('codechip');",
     "  var codeCtx = null; var codeOn = true;",
     "  var modelEl = document.getElementById('model');",
@@ -2241,8 +2252,8 @@ function webviewJs(): string {
     "  moreEl.innerHTML = ico('gear');",
     "  themeEl.innerHTML = ico('theme');",
     "  attachEl.innerHTML = ico('image');",
-    "  pmUpload.innerHTML = ico('image', 13) + '<span>上传文件…</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>拖拽进面板需按 Shift</span>';",
-    "  pmAt.innerHTML = ico('at', 13) + '<span>引用文件</span>';",
+    "  pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';",
+    "  pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';",
     "  modelEl.innerHTML = ico('cpu') + ' —';",
     "  stopBtn.innerHTML = ico('stop', 11);",
     "  sendBtn.innerHTML = ico('up', 14);",
@@ -2267,15 +2278,7 @@ function webviewJs(): string {
     "  // ── 欢迎页：存快照 + 随机小贴士（新建会话时重新出现，每次换一条）──",
     "  var welcomeEl = document.getElementById('welcome');",
     "  var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';",
-    "  var TIPS = [",
-    "    '工作中再发消息会自动排队插话，不用等它干完',",
-    "    '把图片拖进面板就能发给 pi（VS Code 限制需按住 Shift）',",
-    "    '输入 / 唤出命令菜单：回退、分叉、导出 HTML…',",
-    "    'Esc 随时中断；请求失败会自动重试并在面板显示原因',",
-    "    '点头部时钟图标恢复 / 切换历史会话，记录都在本地',",
-    "    '项目约定写进 AGENTS.md，pi 每次会话都会自动带上',",
-    "    '右下角可看上下文用量与花费，心里有数',",
-    "  ];",
+    "  var TIPS = L.tips;",
     "  function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }",
     "  pickTip(welcomeEl);",
     "  var toolEls = {};",
@@ -2291,7 +2294,7 @@ function webviewJs(): string {
     "    codechipEl.style.display = 'inline-flex';",
     "    codechipEl.innerHTML = ico('filecode', 12) + ' ' + esc(codeCtx.name) + (codeCtx.range ? ' <span class=\"cc-range\">' + esc(codeCtx.range) + '</span>' : '');",
     "    codechipEl.className = 'tb-btn' + (codeOn ? '' : ' off');",
-    "    codechipEl.title = (codeOn ? '\\u00d7 点击不附带' : '\\u2713 点击附带') + '\\n' + codeCtx.rel + ' (' + codeCtx.range + ')';",
+    "    codechipEl.title = (codeOn ? L.chipOff : L.chipOn) + '\\n' + codeCtx.rel + ' (' + codeCtx.range + ')';",
     "  }",
     "  var liveLast = null;",
     "  var toolEls = {};",
@@ -2319,7 +2322,7 @@ function webviewJs(): string {
     "      statusEl.textContent = frames[0] + ' Working…';",
     "      busyTimer = setInterval(function () {",
     "        fi = (fi + 1) % frames.length;",
-    "        statusEl.textContent = frames[fi] + ' Working…' + (queueN > 0 ? ' · 排队 ' + queueN + ' 条' : '');",
+    "        statusEl.textContent = frames[fi] + ' Working…' + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : '');",
     "      }, 120);",
     "    } else {",
     "      statusEl.classList.remove('busy');",
@@ -2404,14 +2407,14 @@ function webviewJs(): string {
     "    linkify(parent);",
     "  }",
     "",
-    "  function addUser(text, imageCount, codeInfo, fileCount) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + ' 个附件'; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
+    "  function addUser(text, imageCount, codeInfo, fileCount) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
     "  var queuedItems = [];",
     "  function addQueued(q) {",
     "    queuedItems.push(q);",
     "    var b = el('div', 'q-item');",
     "    b.setAttribute('data-qid', q.qid);",
     "    var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);",,
-    "    b.appendChild(el('span', 'q-text', (q.text || '(图片/代码)') + (q.fileCount ? ' +' + q.fileCount + '附件' : '') + (q.imageCount ? ' +' + q.imageCount + '图' : '')));",
+    "    b.appendChild(el('span', 'q-text', (q.text || L.imgOrCode) + (q.fileCount ? ' +' + q.fileCount + L.qFilesUnit : '') + (q.imageCount ? ' +' + q.imageCount + L.qImgsUnit : '')));",
     "    // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流",
     "    document.getElementById('queuebar').appendChild(b);",
     "  }",
@@ -2437,11 +2440,11 @@ function webviewJs(): string {
     "      var wrap = document.createElement('div'); var body;",
     "      if (kind === 'thinking') {",
     "        var d = document.createElement('details'); d.className = 'think'; d.open = true;",
-    "        var sm = document.createElement('summary'); sm.textContent = '思考过程';",
+    "        var sm = document.createElement('summary'); sm.textContent = L.thinkingProcess;",
     "        body = el('div', 'think-body', ''); d.appendChild(sm); d.appendChild(body); wrap.appendChild(d);",
     "      } else if (kind === 'toolCall') {",
     "        var tl = el('div', 'tool run'); tl.appendChild(el('span', 't-dot')); tl.appendChild(el('span', 't-name', name || 'tool'));",
-    "        body = el('span', 't-detail', ' 正在生成调用参数… 0 字符'); tl.appendChild(body); wrap.appendChild(tl); pdet = body;",
+    "        body = el('span', 't-detail', L.genArgs.replace('{n}', 0)); tl.appendChild(body); wrap.appendChild(tl); pdet = body;",
     "        wrap.className = 'prow'; // 占位行标记：工具真正开跑时按 class 全局清除",
     "        var abox = el('pre', 'code'); abox.style.display = 'none'; wrap.appendChild(abox);",
     "        tl.addEventListener('click', function () { abox.style.display = abox.style.display === 'none' ? 'block' : 'none'; });",
@@ -2603,7 +2606,7 @@ function webviewJs(): string {
     "  function makeThink(text) {",
     "    var d = document.createElement('details');",
     "    d.className = 'think';",
-    "    var s = document.createElement('summary'); s.textContent = '思考过程';",
+    "    var s = document.createElement('summary'); s.textContent = L.thinkingProcess;",
     "    var body = el('div', 'think-body', text);",
     "    d.appendChild(s); d.appendChild(body);",
     "    return d;",
@@ -2651,7 +2654,7 @@ function webviewJs(): string {
     "      t.appendChild(el('span', 't-name', name));",
     "      var det0 = lines[0] && lines[0].d ? '  ' + lines[0].d : '';",
     "      var dsum = el('span', 't-detail', '\\u00d7' + run.length + det0);",
-    "      dsum.title = lines.map(function(l) { return (l.d || '(无参数)') + (l.out ? '  → ' + l.out : ''); }).join('\\n');",
+    "      dsum.title = lines.map(function(l) { return (l.d || L.noArgs) + (l.out ? '  → ' + l.out : ''); }).join('\\n');",
     "      t.appendChild(dsum); linkify(dsum);",
     "      var arrA = el('span', 't-arrow'); arrA.innerHTML = ico('chev', 12); t.appendChild(arrA);",,
     "      var box = el('div', 'tool-box');",
@@ -2660,7 +2663,7 @@ function webviewJs(): string {
     "        var tag = el('span', 'tb-tag'); tag.innerHTML = ico(lines[li].err ? 'x' : 'check', 11);",,
     "        tag.style.color = lines[li].err ? '#f66' : '#4ec96e';",
     "        row.appendChild(tag);",
-    "        row.appendChild(el('span', 'tb-val', (lines[li].d || '(无参数)') + (lines[li].out ? ('  \u2192 ' + lines[li].out) : '')));",
+    "        row.appendChild(el('span', 'tb-val', (lines[li].d || L.noArgs) + (lines[li].out ? ('  \u2192 ' + lines[li].out) : '')));",
     "        box.appendChild(row);",
     "      }",
     "      box.style.display = 'none';",
@@ -2723,7 +2726,7 @@ function webviewJs(): string {
     "        if (m.stopReason === 'error' && m.errorMessage) {", // 模型请求失败（400/鉴权/图片格式等）：pi 落盘为空 content + errorMessage，终端显示为红字，面板必须同样可见
     "          var eb = el('div', 'bubble assistant errmsg');",
     "          eb.textContent = '✘ ' + String(m.errorMessage).slice(0, 300);",
-    "          var rb = el('span', 'errmsg-retry', '↺ 修改后重试');",
+    "          var rb = el('span', 'errmsg-retry', L.retryEdit);",
     "          rb.addEventListener('click', function () { vscode.postMessage({ type: 'retryFromLast' }); });",
     "          eb.appendChild(document.createElement('br'));",
     "          eb.appendChild(rb);",
@@ -2740,19 +2743,19 @@ function webviewJs(): string {
     "    var s = String(file || '');",
     "    var mm = s.match(/(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2})-(\\d{2})/);",
     "    if (mm) return mm[2] + '-' + mm[3] + ' ' + mm[4] + ':' + mm[5];",
-    "    return s.split(/[\\\\/]/).pop() || '临时(未保存)';",
+    "    return s.split(/[\\\\/]/).pop() || L.ephemeralSession;",
     "  }",
     "  function applyState(m) {",
     "    setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态",
     "    modelEl.innerHTML = ico('cpu') + ' ' + esc(m.model ? (m.model.name || m.model.id) : '—');",
-    "    modelEl.title = m.model ? ('切换模型 (当前: ' + (m.model.provider || '') + '/' + (m.model.id || '') + ')') : '切换模型';",
-    "    thinkEl.textContent = '思考 ' + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');",
+    "    modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;",
+    "    thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');",
     "    var sessName = fmtSession(m.sessionFile, m.sessionName);",
-    "    sessionEl.textContent = '会话: ' + sessName;",
-    "    sessionEl.title = m.sessionFile ? ('当前: ' + m.sessionFile + '\\n点击切换历史会话') : '点击选择历史会话';",
+    "    sessionEl.textContent = L.sessionLabel + sessName;",
+    "    sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\\n' + L.clickSwitchSession) : L.clickPickSession;",
     "    if (m.stats) {",
     "      var parts = [];",
-    "      if (m.stats.contextPercent !== null && m.stats.contextPercent !== undefined) parts.push('上下文 ' + (Math.round(m.stats.contextPercent * 10) / 10) + '%');",
+    "      if (m.stats.contextPercent !== null && m.stats.contextPercent !== undefined) parts.push(L.ctx + (Math.round(m.stats.contextPercent * 10) / 10) + '%');",
     "      if (m.stats.cost) parts.push('$' + Number(m.stats.cost).toFixed(2));",
     "      usageEl.textContent = parts.join(' · ');",
     "      usageEl.title = parts.join(' · ');",
@@ -2766,8 +2769,8 @@ function webviewJs(): string {
     "      var f = files[i];",
     "      if (f.type.indexOf('image/') !== 0) {",
     "        // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）",
-    "        if (pendingFiles.length >= 5) { notice('附件最多 5 个'); break; }",
-    "        if (f.size > 200 * 1024) { notice('文件超过 200KB，跳过: ' + (f.name || '')); continue; }",
+    "        if (pendingFiles.length >= 5) { notice(L.maxFiles); break; }",
+    "        if (f.size > 200 * 1024) { notice(L.fileTooBig + (f.name || '')); continue; }",
     "        (function(file) {",
     "          var r = new FileReader();",
     "          r.onload = function() { pendingFiles.push({ name: file.name || 'file', text: String(r.result || '') }); renderAttach(); };",
@@ -2775,7 +2778,7 @@ function webviewJs(): string {
     "        })(f);",
     "        continue;",
     "      }",
-    "      if (pendingImages.length >= 4) { notice('最多附 4 张图片'); break; }",
+    "      if (pendingImages.length >= 4) { notice(L.maxImages); break; }",
     "      (function(file) {",
     "        var r = new FileReader();",
     "        r.onload = function() {",
@@ -2783,11 +2786,11 @@ function webviewJs(): string {
     "          var data = url.split(',')[1] || '';",
     "          if (!data) return;",
     "          var probe = new Image();",
-        "          probe.onerror = function() { notice('\u24d0 图片读取失败，已跳过: ' + (file.name || '图片') + '（类型: ' + (file.type || '未知') + '）'); };",
+        "          probe.onerror = function() { notice('\u24d0 ' + L.imgReadFail + (file.name || '') + L.imgReadFailSuf.replace('{v}', file.type || L.unknown)); };",
         "          if (!file.type) { url = 'data:image/png;base64,' + data; }",
     "          probe.onload = function() {",
     "            // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下",
-    "            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 图片尺寸过小 (' + probe.naturalWidth + '\\u00d7' + probe.naturalHeight + ')，模型无法解析，已跳过'); return; }",
+    "            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 ' + L.imgTooSmall.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight)); return; }",
     "            pendingImages.push({ data: data, mimeType: file.type, name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });",
     "            renderAttach();",
     "          };",
@@ -2905,7 +2908,7 @@ function webviewJs(): string {
     "    input.value = '';",
     "    autoSize();",
     "    pendingImages = []; pendingFiles = []; renderAttach();",
-    "    vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? '请看这张图片' : (fs2.length ? '请看附件文件' : (attachCode ? '请看这段代码' : ''))), images: imgs, files: fs2, attachCode: !!attachCode });",
+    "    vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });",
     "  }",
     "  sendBtn.addEventListener('click', send);",
     "  stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });",
@@ -2913,6 +2916,7 @@ function webviewJs(): string {
     "  sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
     "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",
     "  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });",
+    "  langEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickLang' }); });",
     "  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });",
     "  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });",
     "  thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });",
@@ -2966,7 +2970,7 @@ function webviewJs(): string {
     "      tp._len = 0; tp.raw = '';",
     "      liveMsg.content[m.ci] = tp; scroll();",
     "    }",
-    "    else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = ' 正在生成调用参数… ' + tb._len + ' 字符'; if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }",
+    "    else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }",
     "    else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);",
     "    else if (m.type === 'busy') setBusy(m.value);",
     "    else if (m.type === 'render') setTimeout(function () { renderAll(m.messages); }, 0); // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页",
@@ -2986,10 +2990,10 @@ function webviewJs(): string {
     "        var p = list[k++]; if (!p.mimeType) p.mimeType = 'image/png';",
     "        var probe = new Image();",
     "        probe.onload = function() {",
-    "          if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 图片尺寸过小 (' + probe.naturalWidth + '\u00d7' + probe.naturalHeight + ')，已跳过: ' + (p.name || '')); nextAdi(); return; }",
+    "          if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 ' + L.imgTooSmall2.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight).replace('{v}', p.name || '')); nextAdi(); return; }",
     "          p.w = probe.naturalWidth; p.h = probe.naturalHeight; pendingImages.push(p); nextAdi();",
     "        };",
-    "        probe.onerror = function() { notice('\u24d0 图片读取失败，已跳过: ' + (p.name || '')); nextAdi(); };",
+    "        probe.onerror = function() { notice('\u24d0 ' + L.imgReadFail + (p.name || '')); nextAdi(); };",
     "        probe.src = 'data:' + p.mimeType + ';base64,' + p.data;",
     "      }",
     "      nextAdi();",

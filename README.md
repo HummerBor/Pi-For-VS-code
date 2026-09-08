@@ -1,5 +1,7 @@
 # <img src="media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
+[简体中文](./README.md) | [English](./README_EN.md)
+
 一个 VS Code 侧边栏插件，给 [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 提供一个图形界面。交互上参考了 Claude Code——本质上是给 pi 套了一个壳，聊天、发文件、看它干活，都在编辑器里完成。
 
 ## 主题

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { ChatPanelProvider } from "./panel";
+import { bb, Lang } from "./i18n";
 
 export function activate(ctx: vscode.ExtensionContext): void {
   const provider = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, ctx.extension.packageJSON.version);
@@ -19,7 +20,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
     100
   );
   statusItem.text = "$(comment) pi";
-  statusItem.tooltip = "打开 pi 聊天面板";
+  statusItem.tooltip = bb("statusBarTooltip");
   statusItem.command = "piChat.view.focus";
   statusItem.show();
   ctx.subscriptions.push(statusItem);
