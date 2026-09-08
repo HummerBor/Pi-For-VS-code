@@ -366,7 +366,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           "/hotkeys": this.L.tuiHotkeys,
           "/theme": this.L.tuiTheme,
           "/help": this.L.tuiHelp,
-          "/llama": this.L.tuiLlama,
           "/resume": this.L.tuiResume,
           "/model": this.L.tuiModel,
           "/thinking": this.L.tuiThinking,
