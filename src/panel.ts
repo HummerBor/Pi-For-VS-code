@@ -307,9 +307,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
           const qid = "q" + Date.now();
           this.queued.push({ qid, sentText: text, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-          this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
+          this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
         } else {
-          this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
+          this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
         }
         try {
           // agent 真的工作中 → steer 排队插话；空闲 → 直接发（不能用乐观置位的 busy，否则会被当成插话变慢）
@@ -2326,7 +2326,7 @@ function webviewJs(): string {
     "    var b = el('div', 'q-item');",
     "    b.setAttribute('data-qid', q.qid);",
     "    var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);",,
-    "    b.appendChild(el('span', 'q-text', q.text || '(图片/代码)'));",
+    "    b.appendChild(el('span', 'q-text', (q.text || '(图片/代码)') + (q.fileCount ? ' +' + q.fileCount + '附件' : '') + (q.imageCount ? ' +' + q.imageCount + '图' : '')));",
     "    // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流",
     "    document.getElementById('queuebar').appendChild(b);",
     "  }",
@@ -2718,7 +2718,7 @@ function webviewJs(): string {
     "        var img = document.createElement('img');",
     "        img.src = 'data:' + p.mimeType + ';base64,' + p.data;",
     "        chip.appendChild(img);",
-    "        chip.appendChild(document.createTextNode(p.name + ' ' + p.w + '\\u00d7' + p.h));",
+    "        chip.appendChild(document.createTextNode(p.name + (p.w ? ' ' + p.w + '\\u00d7' + p.h : '')));",
     "        var x = el('span', 'chip-x', '\\u00d7');",
     "        x.addEventListener('click', function() { pendingImages.splice(idx, 1); renderAttach(); });",
     "        chip.appendChild(x);",
@@ -2864,7 +2864,7 @@ function webviewJs(): string {
     "  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files); });",
     "  window.addEventListener('message', function (ev) {",
     "    var m = ev.data;",
-    "    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo);",
+    "    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);",
     "    else if (m.type === 'newLive') { finalizeLive(); liveReset(); }",
     "    else if (m.type === 'delta') appendDelta(m.text, m.ci);",
     "    else if (m.type === 'thinking') appendThink(m.text, m.ci);",
@@ -2891,7 +2891,21 @@ function webviewJs(): string {
     "    else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }",
     "    else if (m.type === 'queuedClear') { queuedItems = []; document.getElementById('queuebar').innerHTML = ''; }",
     "    else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChip(); }",
-    "    else if (m.type === 'addImages') { for (var ai = 0; ai < (m.images || []).length; ai++) { if (pendingImages.length < 4) pendingImages.push(m.images[ai]); } renderAttach(); }",
+    "    else if (m.type === 'addImages') { (function() {",
+    "      var list = m.images || []; var k = 0;",
+    "      function nextAdi() {",
+    "        if (k >= list.length || pendingImages.length >= 4) { renderAttach(); return; }",
+    "        var p = list[k++]; if (!p.mimeType) p.mimeType = 'image/png';",
+    "        var probe = new Image();",
+    "        probe.onload = function() {",
+    "          if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('\u24d0 图片尺寸过小 (' + probe.naturalWidth + '\u00d7' + probe.naturalHeight + ')，已跳过: ' + (p.name || '')); nextAdi(); return; }",
+    "          p.w = probe.naturalWidth; p.h = probe.naturalHeight; pendingImages.push(p); nextAdi();",
+    "        };",
+    "        probe.onerror = function() { notice('\u24d0 图片读取失败，已跳过: ' + (p.name || '')); nextAdi(); };",
+    "        probe.src = 'data:' + p.mimeType + ';base64,' + p.data;",
+    "      }",
+    "      nextAdi();",
+    "    })(); }",
     "    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat(m.files || []); renderAttach(); }",
     "    else if (m.type === 'sessionList') { sessionCache = m.sessions || []; renderHistory(); }",
     "    else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }",
