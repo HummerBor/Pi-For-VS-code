@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
-Put [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) inside your VS Code sidebar: chat, send files, and watch it work — all without leaving the editor. Zero terminal for setup (install pi, configure API keys, switch models, manage sessions — all clicks, no typing); Claude Code-style interaction with the whole work process visible, from tool calls to thinking to queued steering. And it's absurdly lightweight — a webview plus one pi process, no Electron nesting, happy to stay open all day.
+A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's capabilities built in — chat, send files, switch models, manage sessions, all from the sidebar. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
 > The panel UI defaults to Simplified Chinese. Click the **中 / EN** button in the panel header to switch to English.
 
