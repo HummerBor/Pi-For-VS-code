@@ -7,7 +7,7 @@
 
 - 位置：`D:\work\docs\pi test\pi-vscode`（git 仓库根就在这里，**不是上级目录**）
 - GitHub：https://github.com/HummerBor/Pi-For-VS-code （公开，MIT LICENSE，README 已重写为正式项目说明）
-- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.6
+- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.26（面板标题 Pi For VSC）
 - Marketplace 上架材料已备齐（publisher/license/repository/PNG 图标），**用户还没上传**——
   流程：marketplace.visualstudio.com/manage → 建发布者 → Upload VSIX（或 vsce publish）
 - 用户环境：Windows，pi 已全局安装；**已切智谱中国区**（`zai-coding-cn` / `glm-5.3-flash`，
@@ -153,7 +153,27 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 ⑥ 输入框敲 /login 有提示并自动开终端 ⑦ 重载后默认模型 glm-5.3-flash（中国区）。
 全部通过后：git 提交推送（本轮改动一笔）+ 用户上传 Marketplace VSIX
 
-## ⚠️ 已破案（本会话末尾）：「装了没变化」的根因
+## 2026-09-07/08 会话：附件模型重构 + 十连修（全部已验收，v0.0.26）
+
+- **附件列表模型（addFiles）**：上传/拖拽/粘贴的非图片文件 → 顶部附件行胶囊（可多个≤5、可删），
+  发送时拼 `--- 附件: 名 ---` 块；**编辑器当前文件仍走底部 codechip**（CC 分区：顶部=附件、底部=编辑器文件）
+- **⚠ 附件线上格式铁律**：内容绝不用 ``` 包裹（文件内容含 ``` 会提前闭合围栏，气泡被撕碎），
+  用唯一结束行分界：`--- 附件: 名 ---\n内容\n--- 附件结束: 名 ---\n\n`；
+  代码上下文同理（`--- 代码上下文结束 ---`）；剥离逻辑（回填/renderAll）新格式为主+老围栏兑底
+- **⚠ 批量编辑整体回滚教训**：一次 edit 多处修改时一处锚点失败=全部不生效（且当时没发现，
+  发送端格式漏改拖了 5 个版本才被会话记录对账抓出）。**改完必须 grep 编译产物验证关键改动真的在**
+- **图片双路守卫统一**：拖拽/粘贴（FileReader+probe）与上传对话框（宿主读盘 addImages）都有
+  尺寸探测+<16px 拦截（GLM 对极端小图报 400「图片输入格式/解析错误」）+onerror 提示；空 MIME 兑底 png
+- **诊断日志**：`~/.pi/agent/pi-chat-debug.log` 记 prompt 的 images/files/busy（查丢图等诡异问题先看这个，
+  与会话 jsonl 对账）；pi 进程崩溃时 stderr 尾巴透出到面板通知（不再只显示 code 1）；
+  pi 崩溃后下一条消息前自动重启
+- 其他十连修：/undefined（Enter 传行对象应传 item）、@回填保留@、上传对话框只留「所有文件」过滤器、
+  用量右对齐、/菜单选完只剥触发片段不清空输入框、拖拽挂 window 层（Shift 拖拽是 VS Code 限制，＋菜单有提示）、
+  粘贴收所有 kind=file、assistant 气泡占满宽（user 88% 右对齐）、乐观气泡/排队项带附件数、
+  代码上下文胶囊 CC 式（底部工具条内药丸）、面板标题 Pi For VSC
+- 挂账：**Marketplace 上传 0.0.26**（vsix 在仓库根目录）、git push、多标签并行会话（单独排会话）
+
+## ⚠️ 已破案：0.0.8「装了没变化」的根因（2026-09-07 已修）
 
 **扩展目录里残留着更名前的老扩展 `local.pi-vscode-0.0.6`（publisher=local，ID 不同所以新版覆盖不掉它），
 它和新包注册了同一个视图 `piChat.view`，互相抢面板——用户怎么装 0.0.8/0.0.9 都可能被老包接管。**
