@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi for VS Code",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -31,7 +31,7 @@
       "activitybar": [
         {
           "id": "piChat",
-          "title": "pi",
+          "title": "Pi For VSC",
           "icon": "media/pi-icon.png"
         }
       ]
@@ -41,7 +41,7 @@
         {
           "type": "webview",
           "id": "piChat.view",
-          "name": "pi Chat"
+          "name": "Pi For VSC"
         }
       ]
     },
