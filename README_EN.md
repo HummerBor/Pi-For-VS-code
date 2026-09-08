@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
-A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's capabilities built in. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
+A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's core capabilities built in. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
 ## Themes
 
