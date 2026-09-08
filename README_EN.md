@@ -27,7 +27,7 @@ Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/it
 
 ## Why build it
 
-Every existing option has its own kind of heaviness: **Codex** makes my machine lag; **Claude Code** burns tokens, and switching models requires proxies like cc-switch; I tried **Hermes, DSH, OpenClaw** too — all huge, all clunky to drive. pi is different — light, transparent, no black boxes. So I built a panel on top of it: save tokens, save memory, themes however you like.
+Every existing option has its own kind of heaviness: **Codex** makes my machine lag; **Claude Code** burns tokens, and switching models requires proxies like cc-switch; I tried **Hermes, DSH, OpenClaw** too — all huge, all clunky to drive. pi is different — light, transparent, no black boxes, perfect for exploring token-saving and memory-saving workflows. This extension is the product of that exploration: themes are yours to play with, the source is right here, and everyone is welcome to join in.
 
 ## Built with itself
 
