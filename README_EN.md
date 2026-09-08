@@ -4,74 +4,60 @@
 
 A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's capabilities built in. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
-> The panel UI defaults to Simplified Chinese. Click the **中 / EN** button in the panel header to switch to English.
-
 ## Themes
 
-The panel ships with a few hand-tuned color schemes, switchable via the ☀ / ☾ icon in the header — no settings files required:
+Switch with the ☀ / ☾ icon in the header — no settings files:
 
 ![Themes](media/themes.png)
 
-- **Midnight Blue** (default) / **Dark** / **Light**: three fixed, hand-tuned palettes, with layering and contrast adjusted for long working sessions
-- **Follow VS Code**: no locked palette — colors adapt to the current window's light/dark theme. Paired with wallpaper extensions like BackgroundCover, the panel blends into your wallpaper instead of standing out as a foreign block
+- **Midnight Blue** (default) / **Dark** / **Light**: three hand-tuned fixed palettes
+- **Follow VS Code**: adapts to the window's color scheme; blends into wallpaper extensions too
 
-![Follow VS Code theme (wallpaper extension scenario)](media/跟随vsc.png)
+![Follow VS Code theme](media/跟随vsc.png)
 
 ## Highlights
 
-- **No terminal needed**: pi is installed with one click from the panel and launched in the background — you just describe the task; keys, models and sessions are all managed with clicks too
-- **Lightweight**: a lightweight webview plus one pi process. No Electron nesting; it stays snappy even when left running all day
-- **Customizable**: the UI is just strings to edit — activity bar icon, welcome-page duck and tips, color themes. Edit, reload, done (see [FEATURES.md](./FEATURES.md))
-- **Local-first data**: session history and API credentials stay on your machine. No cloud, no telemetry
+- **No terminal needed**: pi is installed with one click from the panel and launched in the background — you just describe the task; keys, models and sessions are clicks too
+- **Lightweight**: a webview plus one pi process, no Electron nesting — happy to stay open all day
+- **Customizable**: icon, tips, themes — all just strings to edit; reload and done (see [FEATURES.md](./FEATURES.md))
+- **Local-first data**: session history and credentials stay on your machine, no cloud, no telemetry
 
-As for models, pi supports multiple providers (GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…), switchable from the bottom bar.
+For models, pi supports multiple providers (GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…), switchable from the bottom bar.
 
 ## How it works
 
-Simple: the extension and pi each mind their own half.
-
 > **VS Code sidebar** (this extension): draws the UI, collects input
 >
-> **⇅ The two talk over JSONL request/response** — every step you see on screen is pi genuinely doing the work
+> **⇅ JSONL request/response** — every step you see is pi genuinely doing the work
 >
 > **pi background process** (`--mode rpc`): does everything — model calls, tool execution, sessions, retries, compaction
 
-- **pi is the star**: model calls, tool execution and session management are all done by pi; the extension does nothing agent-related. That's why this extension needs pi installed first (if it's missing, the extension offers a one-click install).
-- **The extension only does two things**: render pi's events into a UI, and send your input to pi.
-- **So it's light**: the whole UI is a local HTML/CSS/JS page — no frameworks, no bundling magic. The daily overhead is tiny and won't slow down your editor.
+pi must be installed first (the panel offers a one-click install); the whole UI is a local HTML/CSS/JS page — no frameworks, no bundling magic.
 
 ## Getting started
 
-Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) — search for `Pi For VSC`, or open the link and click Install to launch VS Code → click the pi icon in the activity bar.
-
-First-timers, don't worry: if pi isn't installed you'll be guided through a one-click install; if no API key is configured you'll be walked through it in the panel. Then just chat.
-
-Once set up, here's what working looks like — chatting and running tools in the left panel while you keep writing code on the right:
+Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) → click the pi icon in the activity bar. Missing pi triggers a one-click install; missing keys walk you through setup. Then just chat:
 
 ![Working](media/测试.png)
 
-You can also manually install a `.vsix` from [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) (Extensions view → "Install from VSIX"), or clone the repo and build it yourself with `npm install && npx vsce package`.
+You can also grab a `.vsix` from [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) ("Install from VSIX"), or clone the repo and build with `npm install && npx vsce package`.
 
 ## Built with itself
 
-Every version of this extension was built inside its own panel: <img src="media/pi-icon.png" width="18" align="top"> open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, and packages a new `.vsix` → install and reload — **it updates itself**.
-
-All iterations from 0.0.x to today, including the README you're reading, were written this way. So "the UI is yours to change" isn't a slogan: even the author works this way, and for you it's only easier.
+Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
 
 ## Docs
 
-- [FEATURES.md](./FEATURES.md) — full feature list, customization reference, architecture notes (Chinese)
-- [HANDOVER.md](./HANDOVER.md) — developer handover: module details, pitfalls, porting guide (Chinese)
+- [FEATURES.md](./FEATURES.md) — feature list, customization reference, architecture (Chinese)
+- [HANDOVER.md](./HANDOVER.md) — developer handover: modules, pitfalls, porting guide (Chinese)
 
 ## Roadmap
 
-- Multi-tab parallel sessions inside the panel
+- Multi-tab parallel sessions in the panel
 - Official Marketplace listing
 - Attachments & cross-project session enhancements
 
-Requests or bug reports are welcome at [Issues](../../issues).
-
-Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
+Requests or bugs welcome at [Issues](../../issues). Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
 
 ## License
 

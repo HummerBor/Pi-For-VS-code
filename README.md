@@ -6,60 +6,50 @@
 
 ## 主题
 
-面板自带几套配色，头部 ☀ / ☾ 图标一键切换，不用碰任何设置文件：
+头部 ☀ / ☾ 一键切换，不用碰设置文件：
 
 ![主题一览](media/themes.png)
 
-- **午夜蓝**（默认）/ **暗黑** / **浅色**：三套手工调过的固定配色，层次和对比度都按"长时间盯着干活"的场景调过
-- **跟随 VS Code**：不锁配色，按当前窗口深浅自动取色。配合 BackgroundCover 这类壁纸插件，面板会跟着融进壁纸的色调里，不会突兀地杵着一块异色面板
+- **午夜蓝**（默认）/ **暗黑** / **浅色**：三套手工调过的固定配色
+- **跟随 VS Code**：按窗口深浅自动取色，配合壁纸插件也能融进背景
 
-![跟随 VS Code 主题（壁纸插件场景）](media/跟随vsc.png)
+![跟随 VS Code 主题](media/跟随vsc.png)
 
 ## 特点
 
 - **不用碰终端**：pi 由面板引导一键安装、后台自动拉起，你只用说需求；配 key、切模型、管会话也都是点几下鼠标的事
-- **轻量**：一个轻量 webview 加一个 pi 进程，没有 Electron 套娃，长期挂着也不卡
-- **可自定义**：界面就是改字符串——活动栏图标、欢迎页的鸭子和贴士、配色主题，改完重载即生效（对照表见 [FEATURES.md](./FEATURES.md)）
-- **数据在本地**：会话记录、API 凭证全部存在本机，无云依赖、无遥测
+- **轻量**：一个 webview 加一个 pi 进程，没有 Electron 套娃，长期挂着也不卡
+- **可自定义**：图标、贴士、配色全是改字符串的事，改完重载即生效（对照表见 [FEATURES.md](./FEATURES.md)）
+- **数据在本地**：会话记录、API 凭证全在本机，无云依赖、无遥测
 
-模型方面，pi 支持配多个 provider（GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…），面板底部一键切换。
+模型方面，pi 支持多 provider（GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…），面板底部一键切换。
 
 ## 原理
 
-很简单，插件和 pi 各管一段：
-
-> **VS Code 侧边栏**（本插件）：只负责画界面、收输入
+> **VS Code 侧边栏**（本插件）：画界面、收输入
 >
-> **⇅ 两者通过 JSONL 一问一答**——界面上看到的每一步，都是 pi 真实干出来的
+> **⇅ JSONL 一问一答**——界面上看到的每一步，都是 pi 真实干出来的
 >
 > **pi 后台进程**（`--mode rpc`）：负责一切——模型调用、工具执行、会话、重试、压缩
 
-- **pi 才是主角**：模型调用、工具执行、会话管理全部由 pi 完成，插件本身不做任何 agent 的事。所以使用本插件需要先安装 pi（没装的话，插件会引导一键安装）。
-- **插件只做两件事**：把 pi 的事件画成界面，把你的输入发给 pi。
-- **所以它很轻**：整个界面就是一份本地 HTML/CSS/JS，没有框架、没有打包魔法。日常挂着的开销很小，也不会拖慢你的编辑器。
+插件需要先装 pi（没装会引导一键安装）；整个界面就是一份本地 HTML/CSS/JS，没有框架、没有打包魔法。
 
 ## 快速开始
 
-在 [VS Code 扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜索 `Pi For VSC` 安装，或打开链接点 Install 自动唤起 VS Code 完成安装 → 点活动栏的 pi 图标。
-
-第一次用不用担心：pi 没装会弹窗引导一键安装，没配 key 会引导你在面板里配好，然后就能聊了。
-
-装好之后，干活的时候长这样——左边面板里聊着天、跑着工具，右边代码照常写：
+在 [扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜 `Pi For VSC` 安装 → 点活动栏 pi 图标。没装 pi 会引导一键安装，没配 key 会引导配置，然后就能聊了：
 
 ![干活实景](media/测试.png)
 
-也可以下载 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 里的 `.vsix` 手动安装（扩展面板「从 VSIX 安装」），或 clone 仓库 `npm install && npx vsce package` 自行构建。
+也可以从 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 下载 `.vsix` 手动安装（扩展面板「从 VSIX 安装」），或 clone 仓库 `npm install && npx vsce package` 自行构建。
 
 ## 用它开发它自己
 
-这个插件的每一个版本，都是在它自己的面板里做出来的：<img src="media/pi-icon.png" width="18" align="top"> 打开项目 → 跟 pi 说「把欢迎页的鸭子换个姿势」→ 它改源码、编译、打包出新的 `.vsix` → 装上重载——**它就更新了它自己**。
-
-本仓库从 0.0.x 到现在的全部迭代、包括你现在看到的这段 README，都是这么写的。所以「界面想改就改」不是口号：连作者都是这么用的，你要改只会更容易。
+它的每个版本都是在自己的面板里做出来的：打开项目 → 跟 pi 说「把欢迎页的鸭子换个姿势」→ 它改源码、编译、打包出新 `.vsix` → 装上重载——**它就更新了它自己**，包括你现在看的这段 README。
 
 ## 文档
 
-- [FEATURES.md](./FEATURES.md) —— 完整功能清单、自定义对照表、架构说明
-- [HANDOVER.md](./HANDOVER.md) —— 开发交接文档：模块细节、踩坑记录、移植指南
+- [FEATURES.md](./FEATURES.md) —— 功能清单、自定义对照表、架构说明
+- [HANDOVER.md](./HANDOVER.md) —— 开发交接：模块细节、踩坑记录、移植指南
 
 ## 计划中
 
@@ -67,9 +57,7 @@
 - Marketplace 正式上架
 - 附件与跨项目会话增强
 
-有需求或发现问题，欢迎提 [Issue](../../issues)。
-
-祝你干活愉快，记得喝水 <img src="media/pi-icon.png" width="20" align="top">
+有需求或问题，欢迎提 [Issue](../../issues)。祝你干活愉快，记得喝水 <img src="media/pi-icon.png" width="20" align="top">
 
 ## 许可
 
