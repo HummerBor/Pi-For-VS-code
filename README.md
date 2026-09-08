@@ -6,11 +6,8 @@
 
 ## 主题
 
-头部 ☀ / ☾ 一键切换，不用碰设置文件：
-
 ![主题一览](media/themes.png)
 
-- **午夜蓝**（默认）/ **暗黑** / **浅色**：三套手工调过的固定配色
 - **跟随 VS Code**：按窗口深浅自动取色，配合壁纸插件也能融进背景
 
 ![跟随 VS Code 主题](media/跟随vsc.png)
@@ -21,8 +18,6 @@
 - **轻量**：一个 webview 加一个 pi 进程，没有 Electron 套娃，长期挂着也不卡
 - **可自定义**：图标、贴士、配色全是改字符串的事，改完重载即生效（对照表见 [FEATURES.md](./FEATURES.md)）
 - **数据在本地**：会话记录、API 凭证全在本机，无云依赖、无遥测
-
-模型方面，pi 支持多 provider（GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…），面板底部一键切换。
 
 ## 原理
 
@@ -40,8 +35,6 @@
 
 ![干活实景](media/测试.png)
 
-也可以从 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 下载 `.vsix` 手动安装（扩展面板「从 VSIX 安装」），或 clone 仓库 `npm install && npx vsce package` 自行构建。
-
 ## 用它开发它自己
 
 它的每个版本都是在自己的面板里做出来的：打开项目 → 跟 pi 说「把欢迎页的鸭子换个姿势」→ 它改源码、编译、打包出新 `.vsix` → 装上重载——**它就更新了它自己**，包括你现在看的这段 README。
@@ -54,7 +47,6 @@
 ## 计划中
 
 - 面板内多标签并行会话
-- Marketplace 正式上架
 - 附件与跨项目会话增强
 
 有需求或问题，欢迎提 [Issue](../../issues)。祝你干活愉快，记得喝水 <img src="media/pi-icon.png" width="20" align="top">

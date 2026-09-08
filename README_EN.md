@@ -6,11 +6,8 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 ## Themes
 
-Switch with the ☀ / ☾ icon in the header — no settings files:
-
 ![Themes](media/themes.png)
 
-- **Midnight Blue** (default) / **Dark** / **Light**: three hand-tuned fixed palettes
 - **Follow VS Code**: adapts to the window's color scheme; blends into wallpaper extensions too
 
 ![Follow VS Code theme](media/跟随vsc.png)
@@ -21,8 +18,6 @@ Switch with the ☀ / ☾ icon in the header — no settings files:
 - **Lightweight**: a webview plus one pi process, no Electron nesting — happy to stay open all day
 - **Customizable**: icon, tips, themes — all just strings to edit; reload and done (see [FEATURES.md](./FEATURES.md))
 - **Local-first data**: session history and credentials stay on your machine, no cloud, no telemetry
-
-For models, pi supports multiple providers (GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…), switchable from the bottom bar.
 
 ## How it works
 
@@ -40,8 +35,6 @@ Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/it
 
 ![Working](media/测试.png)
 
-You can also grab a `.vsix` from [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) ("Install from VSIX"), or clone the repo and build with `npm install && npx vsce package`.
-
 ## Built with itself
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
@@ -54,7 +47,6 @@ Every version of this extension was built inside its own panel: open the project
 ## Roadmap
 
 - Multi-tab parallel sessions in the panel
-- Official Marketplace listing
 - Attachments & cross-project session enhancements
 
 Requests or bugs welcome at [Issues](../../issues). Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
