@@ -36,7 +36,7 @@ pi 后台进程（--mode rpc，负责一切：模型调用、工具执行、会�
 
 ## 快速开始
 
-下载 [Releases](../../releases) 里的 `.vsix` → VS Code 扩展面板「从 VSIX 安装」→ 重载窗口 → 点活动栏的 pi 图标。
+下载 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 里的 `.vsix` → VS Code 扩展面板「从 VSIX 安装」→ 重载窗口 → 点活动栏的 pi 图标。
 
 第一次用不用担心：pi 没装会弹窗引导一键安装，没配 key 会引导你在面板里配好，然后就能聊了。
 
