@@ -36,11 +36,11 @@ pi 后台进程（--mode rpc，负责一切：模型调用、工具执行、会�
 
 ## 快速开始
 
-下载 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 里的 `.vsix` → VS Code 扩展面板「从 VSIX 安装」→ 重载窗口 → 点活动栏的 pi 图标。
+在 [VS Code 扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜索 `Pi For VSC` 安装，或打开链接点 Install 自动唤起 VS Code 完成安装 → 点活动栏的 pi 图标。
 
 第一次用不用担心：pi 没装会弹窗引导一键安装，没配 key 会引导你在面板里配好，然后就能聊了。
 
-也可以从 Marketplace 搜索 `Pi For VSC` 安装（即将上架），或 clone 仓库 `npm install && npx vsce package` 自行构建。
+也可以下载 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 里的 `.vsix` 手动安装（扩展面板「从 VSIX 安装」），或 clone 仓库 `npm install && npx vsce package` 自行构建。
 
 ## 用它开发它自己
 
