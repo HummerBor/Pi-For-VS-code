@@ -45,10 +45,61 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const duckUri =
       "data:image/png;base64," +
       fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
-    view.webview.html = getHtml(
-      this.globalState.get<string>("piChat.theme") ?? "midnight",
-      duckUri
-    );
+    // 背景“地板色”：防背景类插件（如 BackgroundCover）把 --vscode-* 颜色变量毒成透明时，
+    // html 层垫一层不透明色挡住穿透。auto 主题按当前 VS Code 深浅取色，固定主题取各自底色
+    const kind = vscode.window.activeColorTheme.kind;
+    const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
+    const floorColor =
+      theme === "midnight" ? "#0b1220" : theme === "cc-dark" ? "#0a0a0c" : kind === vscode.ColorThemeKind.Light ? "#f3f3f3" : kind === vscode.ColorThemeKind.HighContrast ? "#000000" : "#1f1f1f";
+    const solidBg = ""; // 实验结束：BackgroundCover 已卸除，主题色本身就干净
+    view.webview.html = getHtml(theme, duckUri, solidBg || floorColor, ...(() => {
+      // 面板自带壁纸：本地路径转 data URI（避开 CSP 资源限制），http(s) 直接用
+      const c = vscode.workspace.getConfiguration("piChat");
+      const img = c.get<string>("backgroundImage", "").trim();
+      const op = c.get<number>("backgroundOpacity", 0.35);
+      let url = "";
+      if (img) {
+        if (/^https?:/i.test(img)) {
+          url = img;
+        } else {
+          try {
+            const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
+            const ext = path.extname(p).toLowerCase();
+            const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+            url = `data:${mime};base64,${fs.readFileSync(p).toString("base64")}`;
+          } catch {
+            url = ""; // 文件读不到则不启用
+          }
+        }
+      }
+      return [url.replace(/'/g, "%27"), op] as [string, number];
+    })());
+    // 背景图/透明度配置变更 → 重置 webview（webviewReady 握手会自动重绘历史）
+    const bgWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("piChat.backgroundImage") || e.affectsConfiguration("piChat.backgroundOpacity")) {
+        const c = vscode.workspace.getConfiguration("piChat");
+        const img = c.get<string>("backgroundImage", "").trim();
+        const op = c.get<number>("backgroundOpacity", 0.35);
+        let url = "";
+        if (img) {
+          if (/^https?:/i.test(img)) {
+            url = img;
+          } else {
+            try {
+              const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
+              const ext = path.extname(p).toLowerCase();
+              const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+              url = `data:${mime};base64,${fs.readFileSync(p).toString("base64")}`;
+            } catch {
+              url = "";
+            }
+          }
+        }
+        const solidBg = "";
+        view.webview.html = getHtml(theme, duckUri, solidBg || floorColor, url.replace(/'/g, "%27"), op, solidBg);
+      }
+    });
+    view.onDidDispose(() => bgWatcher.dispose());
     // webview 若仍被销毁重建（极端情况）：从活着的 pi 进程重绘当前会话，不用重选
     if (this.client?.running) {
       void (async () => {
@@ -1874,7 +1925,7 @@ function extractText(content: any): string {
   return out;
 }
 
-function getHtml(theme = "auto", duckUri = ""): string {
+function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgImage = "", bgOpacity = 0.35, solidBg = ""): string {
   const nonce = Math.random().toString(36).slice(2);
   return [
     "<!DOCTYPE html>",
@@ -1882,9 +1933,10 @@ function getHtml(theme = "auto", duckUri = ""): string {
     "<head>",
     '<meta charset="utf-8">',
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'nonce-' + nonce + '\'; img-src data:;">',
-    "<style>" + css() + "</style>",
+    "<style>" + css(floorColor) + "</style>" + (solidBg ? "<style>body { background: " + solidBg + " !important; }</style>" : ""),
     "</head>",
     '<body data-theme="' + theme + '">',
+    bgImage ? '<div id="bg-layer" style="background-image:url(\'' + bgImage + '\');opacity:' + bgOpacity + '"></div>' : "",
     '<div id="header">',
     '<div id="hdr-row1">',
     '<img id="logo" src="' + duckUri + '" title="Pi For VSC">',
@@ -1933,14 +1985,18 @@ function getHtml(theme = "auto", duckUri = ""): string {
   ].join("\n");
 }
 
-function css(): string {
+function css(floorColor = "#1f1f1f"): string {
   return [
     "html, body { height: 100%; margin: 0; }",
+    // 背景地板：不透明，防外部插件把变量毒成透明后背景穿透
+    "html { background: " + floorColor + " !important; }",
     "body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); color: var(--vscode-editor-foreground); background: var(--vscode-sideBar-background); }",
     "",
     "/* ── 头部 ── */",
     "#header { padding: 6px 10px 5px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }",
     "#hdr-row1 { display: flex; align-items: center; gap: 6px; }",
+    "#bg-layer { position: fixed; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; z-index: 0; }",
+    "body > :not(#bg-layer) { position: relative; z-index: 1; }",
     "#logo { width: 18px !important; height: 18px !important; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; border: none; padding: 0; background: none; border-radius: 0; }",
     "#welcome { display: flex; flex-direction: column; align-items: center; padding-top: 18vh; }",
     "#welcome .w-duck { width: 96px !important; height: 96px !important; object-fit: contain; image-rendering: pixelated; border: none; padding: 0; background: none; border-radius: 0; }",

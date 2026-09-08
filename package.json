@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
-  "version": "0.0.61",
+  "version": "0.0.63",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -55,6 +55,18 @@
     "configuration": {
       "title": "pi Chat",
       "properties": {
+        "piChat.backgroundImage": {
+          "type": "string",
+          "default": "",
+          "description": "面板背景图：本地图片路径或 https 链接，留空不启用（重启面板或改配置即时生效）"
+        },
+        "piChat.backgroundOpacity": {
+          "type": "number",
+          "default": 0.35,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "面板背景图不透明度 0-1"
+        },
         "piChat.sessionMode": {
           "type": "string",
           "enum": [
