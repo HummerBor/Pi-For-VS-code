@@ -185,8 +185,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "busy", value: false });
       this.post({ type: "status", text: "pi 进程已退出 (code " + code + ")" + (detail ? "，详情见通知" : "") });
       // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
-      if (detail) this.post({ type: "notice", text: "⚠ pi 进程已退出 (code " + code + ")
-" + detail });
+      if (detail) this.post({ type: "notice", text: "⚠ pi 进程已退出 (code " + code + ")" + String.fromCharCode(10) + detail });
     };
     client.onError = (err) => {
       this.post({ type: "notice", text: "启动失败: " + err.message });
