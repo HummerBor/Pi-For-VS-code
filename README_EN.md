@@ -32,7 +32,6 @@ Every version of this extension was built inside its own panel: open the project
 ## Docs
 
 - [FEATURES.md](./FEATURES.md) — feature list, customization reference, architecture (Chinese)
-- [HANDOVER.md](./HANDOVER.md) — developer handover: modules, pitfalls, porting guide (Chinese)
 
 ## Roadmap
 

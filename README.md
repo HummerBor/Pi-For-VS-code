@@ -32,7 +32,6 @@
 ## 文档
 
 - [FEATURES.md](./FEATURES.md) —— 功能清单、自定义对照表、架构说明
-- [HANDOVER.md](./HANDOVER.md) —— 开发交接：模块细节、踩坑记录、移植指南
 
 ## 计划中
 
