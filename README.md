@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
-一个 VS Code 侧边栏插件，给 [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 提供一个图形界面。交互上参考了 Claude Code——本质上是给 pi 套了一个壳，聊天、发文件、看它干活，都在编辑器里完成。
+把 [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 装进 VS Code 侧边栏：聊天、发文件、看它干活，都在编辑器里完成。装 pi、配 key、切模型、管会话全程零终端，点几下鼠标就好；Claude Code 式的交互，工具调用、思考过程、排队插话全程可见。而且它轻量得不像话——一个 webview 加一个 pi 进程，没有 Electron 套娃，长期挂着也不卡。
 
 ## 主题
 
