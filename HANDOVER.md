@@ -1,13 +1,13 @@
 # pi-for-vscode 插件交接文档
 
 > 给新会话的 pi：本项目是一个 VS Code 扩展，为 pi coding agent 提供 Claude Code 风格的聊天面板。
-> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-04
+> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-08（v0.0.28）
 
 ## 项目概览
 
 - 位置：`D:\work\docs\pi test\pi-vscode`（git 仓库根就在这里，**不是上级目录**）
 - GitHub：https://github.com/HummerBor/Pi-For-VS-code （公开，MIT LICENSE，README 已重写为正式项目说明）
-- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.26（面板标题 Pi For VSC）
+- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.28（面板标题 Pi For VSC）
 - Marketplace 上架材料已备齐（publisher/license/repository/PNG 图标），**用户还没上传**——
   流程：marketplace.visualstudio.com/manage → 建发布者 → Upload VSIX（或 vsce publish）
 - 用户环境：Windows，pi 已全局安装；**已切智谱中国区**（`zai-coding-cn` / `glm-5.3-flash`，
@@ -109,7 +109,25 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
   未知 pi 事件若携带 error/reason 字段会透传为面板 notice（避免报错无反馈）
 - **启动**：面板首次可见即预热 pi 进程（PI_SKIP_VERSION_CHECK=1），消除首条消息延迟
 
+## 活动栏图标定稿（2026-09-08，v0.0.54 终版）
+
+- **最终选型**：`media/pi-logo.svg` = pi coding agent 官方 logo（用户拍板），像素几何「π」标记，实心粗壮、缩放免疫
+- **放弃方向（全部试过并翻车）**：像素鸭侧身实心（认不出鸭）/ 1px 描边（1.5x 缩放必糊）/ Copilot 风格实心脸（认不出鸭）/ 平滑线稿（用户否）
+- 彩鸭元素保留在：面板头部 18px logo + 空状态欢迎页 96px（均为 base64 内嵌 pi-icon.png，v0.0.47+）+ Marketplace 商店图（media/pi-icon.png 即彩鸭）；历史图标稿已在 v0.0.57 清理，git 历史可考
+- 备选文件保留：`icon-bubble.svg` / `icon-pi.svg` / `duck-activity.svg`（0.0.39 实心鸭）
+- **铁律**：活动栏 16 格图标被 1.5× 非整数缩放，1px 线必糊；实心大块或官方矢量 logo 才稳
+
+- **最终选型**：`media/duck-activity.svg` = 0.0.39 实心像素鸭侧身（用户从多版中亲自选定），单色遮罩随主题
+- 彩色像素鸭 `media/duck.svg` + `media/pi-icon.png` 保留，用于 Marketplace 商店图/README（不受遮罩限制）
+- 备选已备好未启用：`icon-bubble.svg`（聊天气泡）/`icon-pi.svg`（像素π）
+- **两条铁律（反复踩坑后确认）**：
+  1. 活动栏渲染≈24px，16格图标被 1.5× 非整数缩放——**1px 描边线必然糊成剪影，只能用实心块**（描边版实验已验证失败并回滚）
+  2. 剪影里内部细节最多留 1 个（眼），嘴/翅膀缝等第二特征在单色下只会添乱
+
 ## 已知问题/限制
+
+- **历史事故（2026-09-08，已修，见下「临时会话丢失事故」）**：曾默认 sessionMode=ephemeral，
+  聊天全程不落盘。现已默认 continue + webviewReady 握手 + 首开主动拉起持久客户端
 
 - 旧会话文件里存的空文字消息（bug 时期产生的）重绘时显示「📄 (代码上下文)」占位，无法追溯修复，
   开新会话即可
@@ -145,6 +163,42 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 - lastSessionByWs 逻辑需同步扩展为按标签；会话自动命名后标签标题可直接用会话名；
   注意多进程写同一会话文件的隔离
 - **架构级改动，改动后需充分测试**（多进程并行/事件路由/资源回收），建议单独排一个会话
+
+## ⚠️ 事故复盘：临时会话丢失（2026-09-08 上午，已修 v0.0.28）
+
+**经过**：用户打开插件直接聊天（把扩展图标换成像素小鸭子 + 文件点击预览等）。
+当时默认 `piChat.sessionMode=ephemeral` → pi 以 `--no-session` 启动，聊天只存在内存。
+面板重载/重开后进程被替换，**对话文字永久丢失，磁盘无任何副本**。
+
+**已修（三层保险）**：
+1. 默认 sessionMode 改为 `continue`（启动继续最近会话，历史自动落盘）；ephemeral 变为显式选项并标「慎用」
+2. webview 启动时发 `webviewReady` 握手，宿主无条件拉 getMessages 重绘（同时修掉设置 HTML 后立即 postMessage 可能被丢的竞态）
+3. 首次打开面板（客户端未启动且非 ephemeral）→ 主动 ensureClient() 拉起 pi，重开插件立刻看到上次聊天
+
+**教训（写给所有后续会话）**：任何「默认不保存用户数据」的选项都必须显式提示，不能只靠标题小字；
+代码里的 `cfg.get("sessionMode", "…")` 回退值必须与 package.json 的 default 保持一致（共两处：ensureClient / buildSettingsItems）。
+
+## 2026-09-08 上午会话（原会话记录已丢失，以下为 git/文件系统考古复原的完整成果，全部已提交）
+
+> 这就是用户要「fork/复原」的那次会话。对话原文找不回，但工作成果 100% 在磁盘上，
+> 已提交 `65e09d6`，后续开发可从这里无缝继续。
+
+**已完成的工作**：
+1. **扩展图标换像素小鸭子**：新增 `media/duck.svg`（16×16 crispEdges 像素画，黄色小鸭），
+   `package.json` 的 views.activitybar icon 从 `media/pi-icon.png` 改为 `media/duck.svg`；
+   `media/pi-icon.png` 同步更新（2954 字节）；旧 `media/pi.svg` 已删除
+2. **文件点击支持图片/PDF 预览**：`panel.ts` openFilePath 对
+   png/jpeg/gif/webp/bmp/ico/avif/svg/pdf 走 `vscode.open`（preview 模式），与 VS Code 直接点开图片一致；
+   抽出 `bestViewColumn()`（优先活动编辑器组，否则第一组）
+3. **可点击路径正则扩展**：FILE_RE 白名单加 png/jpeg/gif/webp/bmp/ico/avif/pdf
+4. displayName 当时定为「Pi For VSC」（提交 511d5d0）
+
+**验收状态**：用户已重装 0.0.27 vsix 实测；图标效果未见用户反馈确认——**下次会话可问一句鸭子图标满意否**。
+
+**环境事实（考古时确认，后续排障可用）**：
+- pi 会话文件唯一存放地：`~/.pi/agent/sessions/<cwd 编码目录>/*.jsonl`，项目目录里**绝不会**有会话文件
+- 插件面板每次 prompt 会追加一行元数据到 `~/.pi/agent/pi-chat-debug.log`（只有图片/文件数量，无正文）
+- 排查「记录丢失」先查：进程命令行有没有 `--no-session`（任务管理器/Get-Process）→ 有即是 ephemeral 模式
 
 ## 2026-09-04 会话待验收清单（用户正在测）
 

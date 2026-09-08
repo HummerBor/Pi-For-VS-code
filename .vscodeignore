@@ -1,0 +1,10 @@
+.vscode/**
+src/**
+node_modules/**
+out/**/*.map
+HANDOVER.md
+.gitignore
+tsconfig.json
+*.vsix
+*.zip
+**/*.map

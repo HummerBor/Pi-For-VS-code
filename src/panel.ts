@@ -41,8 +41,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.view = view;
     // retainContextWhenHidden：切到其他侧边栏时保活 webview，回来不重建、不丢会话
     view.webview.options = { enableScripts: true };
+    // 彩色鸭 logo：直接内嵌 base64 data URI（asWebviewUri 的 CSP origin 在部分版本解析为 null 导致裂图，弃用）
+    const duckUri =
+      "data:image/png;base64," +
+      fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
     view.webview.html = getHtml(
-      this.globalState.get<string>("piChat.theme") ?? "auto"
+      this.globalState.get<string>("piChat.theme") ?? "midnight",
+      duckUri
     );
     // webview 若仍被销毁重建（极端情况）：从活着的 pi 进程重绘当前会话，不用重选
     if (this.client?.running) {
@@ -56,6 +61,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         await this.refreshState();
       })();
+    } else if (
+      vscode.workspace.getConfiguration("piChat").get<string>("sessionMode", "continue") !== "ephemeral"
+    ) {
+      // 首次打开面板 → 主动启动 pi（持久模式，continue/-c 恢复最近会话）：
+      // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
+      this.ensureClient();
     }
     view.webview.onDidReceiveMessage((m) => void this.onWebviewMessage(m));
 
@@ -177,7 +188,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const cwd =
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const cfg = vscode.workspace.getConfiguration("piChat");
-    const mode = cfg.get<string>("sessionMode", "ephemeral");
+    // ⚠ 会话模式读取：默认必须与 package.json 里的 default 保持一致（continue）。
+    // 教训：曾默认 ephemeral(--no-session)，用户聊天全程不落盘，进程被替换后记录永久丢失。
+    const mode = cfg.get<string>("sessionMode", "continue");
     const ephemeral = mode === "ephemeral" && !forceSession;
     const args = ephemeral ? ["--no-session"] : mode === "continue" ? ["-c"] : [];
     const sessionDir = cfg.get<string>("sessionDir", "");
@@ -264,6 +277,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async onWebviewMessage(m: any): Promise<void> {
     switch (m.type) {
+      case "webviewReady": {
+        // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
+        // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险
+        void (async () => {
+          try {
+            const d = await this.client?.getMessages();
+            this.post({ type: "render", messages: d?.messages ?? [] });
+            this.post({ type: "busy", value: this.busy });
+          } catch {
+            // ignore
+          }
+          await this.refreshState();
+        })();
+        break;
+      }
       case "prompt": {
         // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
         const tuiCmds: Record<string, string> = {
@@ -451,11 +479,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 🎨 主题/背景选择，持久化 globalState，重载后自动应用 */
   private async pickTheme(): Promise<void> {
     const themes = [
+      { id: "midnight", label: "午夜蓝（默认）" },
       { id: "auto", label: "跟随 VS Code" },
       { id: "cc-dark", label: "CC 暗黑（Claude Code 风格）" },
-      { id: "midnight", label: "午夜蓝" },
     ];
-    const cur = this.globalState.get<string>("piChat.theme") ?? "auto";
+    const cur = this.globalState.get<string>("piChat.theme") ?? "midnight";
     const pick = await vscode.window.showQuickPick(
       themes.map((t) => ({
         label: t.label,
@@ -496,7 +524,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "render", messages: [] });
       this.queued = [];
       this.post({ type: "queuedClear" });
-      this.post({ type: "notice", text: "已开始新会话" });
+      // 不再发「已开始新会话」通知：欢迎页本身就是反馈，多余通知会挂在欢迎页下面
       // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去
       const lastModel = this.globalState.get<{ provider: string; id: string } | undefined>(
         "piChat.lastModel"
@@ -570,7 +598,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       if (pick.action === "new") {
         this.post({ type: "render", messages: [] });
-        this.post({ type: "notice", text: "已开始新会话" });
       } else if (pick.action === "all") {
         void this.pickSession("all");
         return;
@@ -812,6 +839,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "notice", text: "ⓘ 二进制文件，不在编辑器打开: " + path.basename(resolved) });
       return;
     }
+    // 图片/PDF 等二进制但 VS Code 自带预览器的文件 → vscode.open（和 VSC 直接点开图片一致）
+    if (/\.(png|jpe?g|gif|webp|bmp|ico|avif|svg|pdf)$/i.test(resolved)) {
+      await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(resolved), {
+        viewColumn: this.bestViewColumn(),
+        preview: true,
+      });
+      return;
+    }
     try {
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
       let sel: vscode.Range | undefined;
@@ -821,10 +856,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     // 打开在「用户正在用的那一列」：优先活动编辑器组，否则第一组——不另起新栏
     // （不用 ViewColumn.Active：焦点在侧边栏 webview 时它有歧义，实测仍可能新分一栏）
-    let openCol = vscode.ViewColumn.One;
-    const tgs = vscode.window.tabGroups.all;
-    const act = tgs.find((g) => g.isActive) ?? tgs[0];
-    if (act) openCol = act.viewColumn;
+    const openCol = this.bestViewColumn();
     await vscode.window.showTextDocument(doc.uri, {
       viewColumn: openCol,
       preview: true,
@@ -833,6 +865,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch (err: any) {
       this.post({ type: "notice", text: "打开失败: " + (err?.message ?? err) });
     }
+  }
+
+  // 目标编辑器列：优先活动编辑器组，否则第一组
+  private bestViewColumn(): vscode.ViewColumn {
+    const tgs = vscode.window.tabGroups.all;
+    const act = tgs.find((g) => g.isActive) ?? tgs[0];
+    return act ? act.viewColumn : vscode.ViewColumn.One;
   }
 
   /** ⚡ 命令菜单：对应 pi 命令行里的各种操作指令 */
@@ -986,7 +1025,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private async buildSettingsItems(client: PiClient): Promise<(vscode.QuickPickItem & { run?: () => Promise<void> })[]> {
     const st = await client.getState().catch(() => null);
     const cfg = vscode.workspace.getConfiguration("piChat");
-    const mode = cfg.get<string>("sessionMode", "ephemeral");
+    const mode = cfg.get<string>("sessionMode", "continue");
     const sessionDir = cfg.get<string>("sessionDir", "");
 
     const items: (vscode.QuickPickItem & { run?: () => Promise<void> })[] = [];
@@ -1076,8 +1115,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       run: async () => {
         const pick2 = await vscode.window.showQuickPick(
           [
-            { label: "ephemeral — 不保存会话（关闭即丢失）", value: "ephemeral" },
-            { label: "continue — 启动时继续最近一次会话", value: "continue" },
+            { label: "ephemeral — 不保存会话（关闭即丢失，慎用）", value: "ephemeral" },
+            { label: "continue — 启动时继续最近一次会话（推荐）", value: "continue" },
             { label: "new — 新建持久会话", value: "new" },
           ],
           { placeHolder: "piChat.sessionMode（修改后重载窗口生效）" }
@@ -1835,7 +1874,7 @@ function extractText(content: any): string {
   return out;
 }
 
-function getHtml(theme = "auto"): string {
+function getHtml(theme = "auto", duckUri = ""): string {
   const nonce = Math.random().toString(36).slice(2);
   return [
     "<!DOCTYPE html>",
@@ -1848,6 +1887,7 @@ function getHtml(theme = "auto"): string {
     '<body data-theme="' + theme + '">',
     '<div id="header">',
     '<div id="hdr-row1">',
+    '<img id="logo" src="' + duckUri + '" title="Pi For VSC">',
     '<span id="session" class="hdr-btn" title="点击查看 / 切换历史会话">会话: —</span>',
     '<span class="spacer"></span>',
     '<span id="history" class="ico-btn" title="历史会话"></span>',
@@ -1860,7 +1900,7 @@ function getHtml(theme = "auto"): string {
     '<div id="his-list"></div>',
     "</div>",
     "</div>",
-    '<div id="messages"><div class="notice">直接输入消息即可开始。工作中再发送会自动排队插话，Esc 或停止按钮可中断。</div></div>',
+    '<div id="messages"><div id="welcome"><img class="w-duck" src="' + duckUri + '" width="96" height="96"><div class="w-title">有什么要让 pi 干的？</div><div class="w-tip"></div><div class="w-sub">直接输入消息即可开始 · 工作中再发送会自动排队插话 · Esc 可中断</div></div></div>',
     '<div id="queuebar"></div>',
     '<div id="statusline"><span id="status"></span></div>',
     '<div id="composer">',
@@ -1901,6 +1941,12 @@ function css(): string {
     "/* ── 头部 ── */",
     "#header { padding: 6px 10px 5px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }",
     "#hdr-row1 { display: flex; align-items: center; gap: 6px; }",
+    "#logo { width: 18px !important; height: 18px !important; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; border: none; padding: 0; background: none; border-radius: 0; }",
+    "#welcome { display: flex; flex-direction: column; align-items: center; padding-top: 18vh; }",
+    "#welcome .w-duck { width: 96px !important; height: 96px !important; object-fit: contain; image-rendering: pixelated; border: none; padding: 0; background: none; border-radius: 0; }",
+    "#welcome .w-title { margin-top: 14px; font-size: 15px; font-weight: 600; }",
+    "#welcome .w-tip { margin-top: 10px; font-size: 11px; opacity: .6; max-width: 280px; text-align: center; line-height: 1.7; }",
+    "#welcome .w-sub { margin-top: 6px; font-size: 11px; opacity: .55; }",
     "#title { font-weight: bold; font-size: 12px; }",
     "#session { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
     "#ctoolbar #usage { font-size: 11px; opacity: .6; margin-right: 8px; white-space: nowrap; }",
@@ -2097,7 +2143,7 @@ function webviewJs(): string {
     "  }",
     "  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }",
     "  // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──",
-    "  var FILE_RE = /([A-Za-z]:[\\/][\\w.\\- \\u4e00-\\u9fff\\/]*[\\w.\\-\\u4e00-\\u9fff]\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w.\\-]+(?:[\\/][\\w.\\- \\u4e00-\\u9fff]+)+\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w\\u4e00-\\u9fff][\\w\\-]*\\.(?:ts|tsx|js|jsx|mjs|json|md|txt|html?|css|scss|less|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log)(?::\\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验",
+    "  var FILE_RE = /([A-Za-z]:[\\/][\\w.\\- \\u4e00-\\u9fff\\/]*[\\w.\\-\\u4e00-\\u9fff]\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w.\\-]+(?:[\\/][\\w.\\- \\u4e00-\\u9fff]+)+\\.[A-Za-z0-9]{1,8}(?:\\:\\d{1,5})?|[\\w\\u4e00-\\u9fff][\\w\\-]*\\.(?:ts|tsx|js|jsx|mjs|json|md|txt|html?|css|scss|less|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?::\\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验",
     "  function cleanPath(p) {",
     "    p = p.replace(/[.,;:!?)}\\]⟩】»]+$/, '');",
     "    var parts = p.split(' ');",
@@ -2164,7 +2210,7 @@ function webviewJs(): string {
     "    input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）",
     "    input.focus(); updateSuggest();",
     "  });",
-    "  document.addEventListener('click', function (e) { if (!plusmenuEl.contains(e.target) && e.target !== attachEl) plusmenuEl.style.display = 'none'; });",
+    "  document.addEventListener('click', function (e) { if (!plusmenuEl.contains(e.target) && e.target !== attachEl) plusmenuEl.style.display = 'none'; if (!histPanel.contains(e.target) && e.target !== historyEl && !historyEl.contains(e.target)) histPanel.style.display = 'none'; });",
     "",
     "  // ── 历史会话面板 ──",
     "  historyEl.addEventListener('click', function () {",
@@ -2208,6 +2254,20 @@ function webviewJs(): string {
     "    if (!n) hisList.innerHTML = '<div class=\"notice\" style=\"padding:8px\">没有匹配的会话</div>';",
     "  }",
     "  var liveMsg = null; var liveDiv = null;",
+    "  // ── 欢迎页：存快照 + 随机小贴士（新建会话时重新出现，每次换一条）──",
+    "  var welcomeEl = document.getElementById('welcome');",
+    "  var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';",
+    "  var TIPS = [",
+    "    '工作中再发消息会自动排队插话，不用等它干完',",
+    "    '把图片拖进面板就能发给 pi（VS Code 限制需按住 Shift）',",
+    "    '输入 / 唤出命令菜单：回退、分叉、导出 HTML…',",
+    "    'Esc 随时中断；请求失败会自动重试并在面板显示原因',",
+    "    '点头部时钟图标恢复 / 切换历史会话，记录都在本地',",
+    "    '项目约定写进 AGENTS.md，pi 每次会话都会自动带上',",
+    "    '右下角可看上下文用量与花费，心里有数',",
+    "  ];",
+    "  function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }",
+    "  pickTip(welcomeEl);",
     "  var toolEls = {};",
     "  var sgList = []; var sgSel = 0; var sgKind = null;",
     "  var slashCmds = null;",
@@ -2334,7 +2394,7 @@ function webviewJs(): string {
     "    linkify(parent);",
     "  }",
     "",
-    "  function addUser(text, imageCount, codeInfo, fileCount) { var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + ' 个附件'; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
+    "  function addUser(text, imageCount, codeInfo, fileCount) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' (代码上下文)'; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' 附带代码: ' + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + ' 个附件'; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + ' 张图片'; b.appendChild(n2); } messages.appendChild(b); scroll(); }",
     "  var queuedItems = [];",
     "  function addQueued(q) {",
     "    queuedItems.push(q);",
@@ -2542,7 +2602,10 @@ function webviewJs(): string {
     "    messages.innerHTML = '';",
     "    liveReset();",
     "    toolEls = {};",
-    "    if (!list || !list.length) return;",
+    "    if (!list || !list.length) {",
+    "      if (welcomeHTML) { messages.innerHTML = welcomeHTML; pickTip(messages.querySelector('#welcome')); }",
+    "      return;",
+    "    }",
     "    linkifyEnabled = false; // 老消息不 linkify，循环到最近 15 条时再打开",
     "    var results = {};",
     "    var resultList = [];",
@@ -2840,7 +2903,7 @@ function webviewJs(): string {
     "  sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
     "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",
     "  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });",
-    "  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });",
+    "  newChatEl.addEventListener('click', function () { histPanel.style.display = 'none'; vscode.postMessage({ type: 'newSession' }); });",
     "  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });",
     "  thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });",
     "  modeBadge.addEventListener('click', function () { vscode.postMessage({ type: 'pickMode' }); });",
@@ -2928,6 +2991,8 @@ function webviewJs(): string {
     "    else if (m.type === 'state') applyState(m);",
     "    else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }",
     "  });",
+    "  // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）",
+    "  vscode.postMessage({ type: 'webviewReady' });",
     "})();",
   ].join("\n");
 }

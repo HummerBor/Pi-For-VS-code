@@ -1,8 +1,8 @@
 {
   "name": "pi-for-vscode",
-  "displayName": "Pi for VS Code",
+  "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
-  "version": "0.0.27",
+  "version": "0.0.61",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -32,7 +32,7 @@
         {
           "id": "piChat",
           "title": "Pi For VSC",
-          "icon": "media/pi-icon.png"
+          "icon": "media/pi-logo.svg"
         }
       ]
     },
@@ -63,11 +63,11 @@
             "new"
           ],
           "enumDescriptions": [
-            "不保存会话（关闭即丢失）",
-            "启动时继续最近一次会话",
+            "不保存会话（关闭即丢失，慎用）",
+            "启动时继续最近一次会话（默认，历史自动保存）",
             "新建持久会话（保存到 ~/.pi/agent/sessions）"
           ],
-          "default": "ephemeral",
+          "default": "continue",
           "description": "pi RPC 进程的会话模式（修改后重启调试生效）"
         },
         "piChat.sessionDir": {
