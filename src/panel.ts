@@ -20,6 +20,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
   /** 最近一次已知会话名/文件（用于自动命名判断） */
   private lastSessionName: string | null = null;
+  /** 命令式应答标记：发出 prompt 后未等到 agent_start 前为 true（用于清除乐观 busy/免误导性中断提示） */
+  private pendingPrompt = false;
   private lastSessionFile: string | null = null;
   /** 已自动命名过的会话文件（避免重复 RPC） */
   private autoTitledFor: string | null = null;
@@ -364,6 +366,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           "/hotkeys": this.L.tuiHotkeys,
           "/theme": this.L.tuiTheme,
           "/help": this.L.tuiHelp,
+          "/llama": this.L.tuiLlama,
+          "/resume": this.L.tuiResume,
+          "/model": this.L.tuiModel,
+          "/thinking": this.L.tuiThinking,
+          "/tree": this.L.tuiTree,
+          "/share": this.L.tuiShare,
+          "/import": this.L.tuiImport,
+          "/copy": this.L.tuiCopy,
+          "/quit": this.L.tuiQuit,
         };
         const trimmed = String(m.text ?? "").trim().toLowerCase();
         if (tuiCmds[trimmed]) {
@@ -408,6 +419,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           await client.prompt(text, wasBusy, m.images);
           // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
           if (!wasBusy && m.text) void this.autoTitleSession(m.text);
+          // 命令式应答（如 /llama）不触发 agent_start/agent_settled，乐观置位的 busy 会永远卡住：
+          // 若 4s 后仍未等到 agent_start 则兑底清除（真跑起来的话 agent_start 会先置 pendingPrompt=false）
+          if (!wasBusy) {
+            this.pendingPrompt = true;
+            setTimeout(() => {
+              if (this.busy && this.pendingPrompt) {
+                this.pendingPrompt = false;
+                this.busy = false;
+                this.post({ type: "busy", value: false });
+              }
+            }, 4000);
+          }
         } catch (err: any) {
           this.busy = false;
           this.post({ type: "busy", value: false });
@@ -419,6 +442,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         try {
           if (this.client?.running) {
             await this.client.abort();
+            if (this.busy && this.pendingPrompt) {
+              // 命令式应答（如 /llama，无 agent 运行）：没有可中断的东西，直接清掉乐观 busy，不弹中断提示
+              this.pendingPrompt = false;
+              this.busy = false;
+              this.post({ type: "busy", value: false });
+              break;
+            }
             // pi 不把中断时的部分内容写进会话文件（content 为空），
             // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场
             this.abortSkipRender = true;
@@ -1673,6 +1703,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     switch (e.type) {
       case "agent_start":
         this.busy = true;
+        this.pendingPrompt = false;
+        // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
+        this.abortSkipRender = false;
         this.post({ type: "busy", value: true });
         if (this.queued.length) void this.deliverQueuedInHistory();
         break;
