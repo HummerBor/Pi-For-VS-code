@@ -27,12 +27,26 @@ pi 后台进程（--mode rpc，负责一切：模型调用、工具执行、会�
 - **数据在本地**：会话记录、API 凭证全部存在本机，无云依赖、无遥测
 
 模型方面，pi 支持配多个 provider（GLM / DeepSeek / Kimi / Qwen / OpenRouter / Gemini…），面板底部一键切换。
+## 主题
+
+面板自带几套配色，头部 ☀ / ☾ 图标一键切换，不用碰任何设置文件：
+
+![主题一览](media/themes.png)
+
+- **午夜蓝**（默认）/ **暗黑** / **浅色**：三套手工调过的固定配色，层次和对比度都按"长时间盯着干活"的场景调过
+- **跟随 VS Code**：不锁配色，按当前窗口深浅自动取色。配合 BackgroundCover 这类壁纸插件，面板会跟着融进壁纸的色调里，不会突兀地杵着一块异色面板
+
+![跟随 VS Code 主题（壁纸插件场景）](media/跟随vsc.png)
 
 ## 快速开始
 
 在 [VS Code 扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜索 `Pi For VSC` 安装，或打开链接点 Install 自动唤起 VS Code 完成安装 → 点活动栏的 pi 图标。
 
 第一次用不用担心：pi 没装会弹窗引导一键安装，没配 key 会引导你在面板里配好，然后就能聊了。
+
+装好之后，干活的时候长这样——左边面板里聊着天、跑着工具，右边代码照常写：
+
+![干活实景](media/测试.png)
 
 也可以下载 [Releases](https://github.com/HummerBor/Pi-For-VS-code/releases) 里的 `.vsix` 手动安装（扩展面板「从 VSIX 安装」），或 clone 仓库 `npm install && npx vsce package` 自行构建。
 

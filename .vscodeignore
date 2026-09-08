@@ -8,3 +8,13 @@ tsconfig.json
 *.vsix
 *.zip
 **/*.map
+
+# 根目录散落的截图等杂件不打包；media 只带白名单文件
+/*.png
+media/*
+!media/pi-icon.png
+!media/pi-logo.svg
+!media/image.png
+!media/themes.png
+!media/跟随vsc.png
+!media/测试.png
