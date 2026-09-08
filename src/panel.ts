@@ -118,6 +118,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (this.selTimer) clearTimeout(this.selTimer);
   }
 
+  /** 关键链路诊断日志（排查图片丢失等诡异问题用） */
+  private dbg(msg: string): void {
+    try {
+      fs.appendFileSync(path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log"),
+        new Date().toISOString() + " " + msg + String.fromCharCode(10));
+    } catch { /* ignore */ }
+  }
+
   private post(msg: any): void {
     void this.view?.webview.postMessage(msg);
   }
@@ -272,6 +280,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         const client = this.ensureClient();
+        this.dbg("prompt: images=" + (m.images ? m.images.length : 0) + " files=" + (m.files ? m.files.length : 0) + " busy=" + this.busy);
         let text = m.text;
         const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
         // 附件文件（顶部胶囊行，可多个）→ 拼进消息文本
@@ -1897,8 +1906,8 @@ function css(): string {
     "#queuebar { padding: 0 12px 3px; }",
     ".q-item { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .65; padding: 2px 0; }",
     ".q-item .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
-    ".bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; max-width: 92%; }",
-    ".bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; }",
+    ".bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; }",
+    ".bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; max-width: 88%; }",
     ".bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }",
     ".bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }",
     ".bubble.errmsg { background: transparent; border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c); color: var(--vscode-errorForeground, #f66); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }",
@@ -1932,7 +1941,7 @@ function css(): string {
     ".tool .t-detail { opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }",
     ".tool .t-arrow { opacity: .4; display: inline-flex; align-items: center; transition: transform .15s; }",
     ".tool.open .t-arrow { transform: rotate(90deg); }",
-    ".tool-box { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; max-width: 92%; }",
+    ".tool-box { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; }",
     ".tool-box .tb-row { display: flex; gap: 8px; padding: 6px 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; }",
     ".tool-box .tb-row + .tb-row { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }",
     ".tool-box .tb-tag { flex: none; opacity: .65; width: 26px; }",
