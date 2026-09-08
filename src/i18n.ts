@@ -669,3 +669,35 @@ export function bilingual(): Record<string, any> {
     get: (_t, k) => bb(String(k)),
   });
 }
+
+/**
+ * 原生对话框专用键（QuickPick/系统弹窗/终端名）——这些直接中英同条展示；
+ * 其余键（面板通知、状态行）跟随面板的中/EN 切换，单语展示
+ */
+export const NATIVE_KEYS: Set<string> = new Set([
+  // 主题 / 权限模式选择
+  "themeMidnight", "themeAuto", "themeCcDark", "themeCurrent", "themePicker",
+  "modeManual", "modeManualDetail", "modeEditAuto", "modeEditAutoDetail", "modePlan", "modePlanDetail", "modeAuto", "modeAutoDetail", "modePicker",
+  // 会话选择
+  "startNewSession", "browseAllSessions", "pickSessionAll", "pickSessionProj",
+  // 新建会话确认
+  "nsConfirm", "nsAbortAndNew", "cancel",
+  // 文件对话框
+  "allFiles",
+  // ⚡ 菜单
+  "menuPh", "cmdRename", "renamePrompt", "cmdCompact", "compactPrompt", "cmdClearQueue",
+  "cmdExport", "cmdFork", "forkPick", "cmdClone", "cmdBash", "bashPrompt", "cmdList", "cmdListPh", "grpConfig",
+  // ⚙ 设置菜单
+  "sApiKey", "sApiKeyDetail", "sLogin", "sLoginDetail", "sManageAuth", "sManageAuthDetail",
+  "sInstall", "sInstallDetail", "sMode", "sModeDetail", "sSteering", "sFollowUp", "sAutoCompact",
+  "sSteeringAll", "sSteeringOne", "sSteeringDetail", "sFollowUpDetail", "sAutoCompactDetail",
+  "sAutoRetry", "sAutoRetryDetail", "sAutoRetryPicker", "sSessionMode", "sSessionModeDetail",
+  "sModeEphemeral", "sModeContinue", "sModeNew", "sSessionModePh", "sSessionDir", "sSessionDirDetail",
+  "sSessionDirPrompt", "sOpenCfgDir", "sEditSettings", "on", "off", "settingsPh",
+  // 凭证 / 安装 / API key
+  "keyReady", "configNow", "later", "noAuthDetected", "configKeyBtn", "loginBtn", "loginTermName",
+  "npmMissing", "installFail", "pickProvider", "providerZai", "providerZaiCn", "providerQwen", "providerXiaomi",
+  "enterKey", "authPicker", "authDetail", "delAuthAsk", "delete",
+  // 模型 / 思考 / pi 扩展 UI 请求
+  "ctx", "modelPicker", "thinkingPicker", "pleaseSelect", "confirm", "pleaseInput",
+]);

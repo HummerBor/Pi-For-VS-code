@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient } from "./piClient";
-import { STRINGS, Lang, bilingual, fmt, fmt2 } from "./i18n";
+import { STRINGS, NATIVE_KEYS, Lang, bb, fmt, fmt2 } from "./i18n";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
@@ -48,9 +48,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
   }
 
-  /** 当前语言字典 */
+  /** 当前语言字典：面板通知/状态跟随中/EN 按钮；原生对话框专用键双语展示 */
   private get L(): Record<string, any> {
-    return bilingual();
+    const lang = this.lang;
+    return new Proxy({} as Record<string, any>, {
+      get: (_t, k) => {
+        const key = String(k);
+        return NATIVE_KEYS.has(key) ? bb(key) : (STRINGS[lang][key] ?? bb(key));
+      },
+    });
   }
 
   /** 按当前语言/主题/背景重生成 webview HTML（语言切换、背景变更共用） */
