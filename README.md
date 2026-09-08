@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
-一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件，基于 pi 的 RPC 模式：插件只负责画界面、收输入，模型调用、工具执行、会话、重试全由 pi 后台进程干；交互参考 Claude Code，轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
+一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件，基于 pi 的 RPC 模式；交互参考 Claude Code，轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
 
 ## 主题
 

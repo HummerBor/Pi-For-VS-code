@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
-A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built on pi's RPC mode: the extension only draws the UI and collects input, while the pi background process handles model calls, tool execution, sessions and retries. Claude Code-style interaction; lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
+A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built on pi's RPC mode. Claude Code-style interaction; lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
 ## Themes
 
