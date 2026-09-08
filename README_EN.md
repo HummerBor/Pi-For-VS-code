@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
-A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's core capabilities built in. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
+A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built on pi's RPC mode: the extension only draws the UI and collects input, while the pi background process handles model calls, tool execution, sessions and retries. Claude Code-style interaction; lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
 ## Themes
 
@@ -18,16 +18,6 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 - **Lightweight**: a webview plus one pi process, no Electron nesting — happy to stay open all day
 - **Customizable**: icon, tips, themes — all just strings to edit; reload and done (see [FEATURES.md](./FEATURES.md))
 - **Local-first data**: session history and credentials stay on your machine, no cloud, no telemetry
-
-## How it works
-
-> **VS Code sidebar** (this extension): draws the UI, collects input
->
-> **⇅ JSONL request/response** — every step you see is pi genuinely doing the work
->
-> **pi background process** (`--mode rpc`): does everything — model calls, tool execution, sessions, retries, compaction
-
-pi must be installed first (the panel offers a one-click install); the whole UI is a local HTML/CSS/JS page — no frameworks, no bundling magic.
 
 ## Getting started
 
