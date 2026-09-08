@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
-A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's capabilities built in — chat, send files, switch models, manage sessions, all from the sidebar. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
+A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent): Claude Code-style interaction, with all of pi's capabilities built in. Lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
 > The panel UI defaults to Simplified Chinese. Click the **中 / EN** button in the panel header to switch to English.
 
@@ -19,8 +19,7 @@ The panel ships with a few hand-tuned color schemes, switchable via the ☀ / �
 
 ## Highlights
 
-- **Zero terminal**: install pi, configure API keys, switch models, manage sessions — all with clicks in the panel
-- **Full visibility**: tool calls, thinking process, queued steering messages, interrupt & resume — all in the panel
+- **No terminal needed**: pi is installed with one click from the panel and launched in the background — you just describe the task; keys, models and sessions are all managed with clicks too
 - **Lightweight**: a lightweight webview plus one pi process. No Electron nesting; it stays snappy even when left running all day
 - **Customizable**: the UI is just strings to edit — activity bar icon, welcome-page duck and tips, color themes. Edit, reload, done (see [FEATURES.md](./FEATURES.md))
 - **Local-first data**: session history and API credentials stay on your machine. No cloud, no telemetry

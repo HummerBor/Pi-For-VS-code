@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
-一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件：交互参考 Claude Code，集成 pi 的全部能力——聊天、发文件、切模型、管会话，全在侧边栏完成；轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
+一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件：交互参考 Claude Code，集成 pi 的全部能力；轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
 
 ## 主题
 
@@ -17,8 +17,7 @@
 
 ## 特点
 
-- **零终端**：安装 pi、配置 API key、切换模型、管理会话，全部在面板里点点鼠标
-- **干活全程可见**：工具调用、思考过程、排队插话、中断续聊，都在面板里
+- **不用碰终端**：pi 由面板引导一键安装、后台自动拉起，你只用说需求；配 key、切模型、管会话也都是点几下鼠标的事
 - **轻量**：一个轻量 webview 加一个 pi 进程，没有 Electron 套娃，长期挂着也不卡
 - **可自定义**：界面就是改字符串——活动栏图标、欢迎页的鸭子和贴士、配色主题，改完重载即生效（对照表见 [FEATURES.md](./FEATURES.md)）
 - **数据在本地**：会话记录、API 凭证全部存在本机，无云依赖、无遥测
