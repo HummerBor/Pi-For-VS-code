@@ -232,6 +232,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /** 启动恢复闸门：按项目恢复上次会话期间，webviewReady 的重绘等它完成，
+   * 避免先画出 -c 恢复的会话再跳到记住的会话（「闪一下 + 标题/内容对不上」的根源） */
+  private restoringSession: Promise<void> | null = null;
+
   /** 首次发消息时才启动 pi 后台进程；forceSession=true 时不用 --no-session（如切换历史会话） */
   private ensureClient(forceSession = false): PiClient {
     if (this.client) return this.client;
@@ -305,22 +309,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       })();
     }
 
-    // 初始化状态和已有会话内容：按项目恢复上次使用的会话文件（免重选，且不串项目）
-    void this.refreshState();
-    void (async () => {
+    // 初始化状态和已有会话内容：按项目恢复上次使用的会话文件（免重选，且不串项目）。
+    // 注意顺序：先等恢复（可能 switchSession）完成再刷新状态/重绘，
+    // 否则标题是 -c 恢复的会话、内容却是记住的会话，两边对不上
+    this.restoringSession = (async () => {
       try {
         const last = this.getSessionForWs(cwd);
         if (last && fs.existsSync(last)) {
           try {
             await client.switchSession(last);
           } catch {
-            // 文件失效则退回默认行为
+            // 文件失效则退回 -c 恢复的最近会话
           }
+          await this.refreshState(); // 切换后立刻同步标题，杜绝「内容 A 标题 B」
+        } else {
+          await this.refreshState();
         }
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
       } catch {
         // 忽略
+      } finally {
+        this.restoringSession = null;
       }
     })();
     return client;
@@ -333,6 +343,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险
         void (async () => {
           try {
+            // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
+            if (this.restoringSession) await this.restoringSession.catch(() => {});
             const d = await this.client?.getMessages();
             this.post({ type: "render", messages: d?.messages ?? [] });
             this.post({ type: "busy", value: this.busy });
@@ -1947,10 +1959,6 @@ function getHtml(theme = "midnight", duckUri = "", floorColor = "#1f1f1f", bgIma
     '<span id="more" class="ico-btn" title="菜单：会话操作 / 配置"></span>',
     '<span id="theme" class="ico-btn" title="主题 / 背景"></span>',
     "</div>",
-    '<div id="history-panel">',
-    '<input id="his-search" placeholder="搜索会话…">',
-    '<div id="his-list"></div>',
-    "</div>",
     "</div>",
     '<div id="messages"><div id="welcome"><img class="w-duck" src="' + duckUri + '" width="96" height="96"><div class="w-title">有什么要让 pi 干的？</div><div class="w-tip"></div><div class="w-sub">直接输入消息即可开始 · 工作中再发送会自动排队插话 · Esc 可中断</div></div></div>',
     '<div id="queuebar"></div>',
@@ -2085,18 +2093,6 @@ function css(floorColor = "#1f1f1f"): string {
     "#plusmenu { display: none; position: absolute; bottom: 42px; left: 8px; min-width: 170px; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; overflow: hidden; }",
     ".pm-item { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }",
     ".pm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }",
-    "#history-panel { display: none; position: absolute; top: 30px; right: 8px; width: min(340px, 90%); max-height: 60%; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; display: none; flex-direction: column; }",
-    "#his-search { margin: 8px; padding: 5px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 6px; outline: none; font-family: inherit; font-size: 12px; }",
-    "#his-list { overflow-y: auto; padding: 0 4px 6px; }",
-    ".his-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; }",
-    ".his-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }",
-    ".his-main { flex: 1; overflow: hidden; }",
-    ".his-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
-    ".his-sub { font-size: 10px; opacity: .5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
-    ".his-del { opacity: .4; cursor: pointer; padding: 2px 4px; display: inline-flex; align-items: center; line-height: 0; }",
-    ".his-del:hover { opacity: 1; color: var(--vscode-inputValidation-errorForeground, #f66); }",
-    ".his-open { opacity: .4; cursor: pointer; padding: 2px 4px; display: inline-flex; align-items: center; line-height: 0; }",
-    ".his-open:hover { opacity: 1; }",
     ".fp { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }",
     ".fp:hover { color: var(--vscode-textLink-foreground, #4daafc); }",
     "#input { display: block; width: 100%; box-sizing: border-box; resize: none; height: 54px; min-height: 54px; max-height: 220px; overflow-y: hidden; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 8px 10px; font-family: inherit; font-size: var(--vscode-font-size, 13px); line-height: 1.5; }",
@@ -2128,7 +2124,7 @@ function css(floorColor = "#1f1f1f"): string {
     "body[data-theme='cc-dark'] pre.code { background: #121216; }",
     "body[data-theme='cc-dark'] #composer { background: #131318; border-color: #2a2a33; }",
     "body[data-theme='cc-dark'] #input { color: #e6e6e9; }",
-    "body[data-theme='cc-dark'] #suggest, body[data-theme='cc-dark'] #plusmenu, body[data-theme='cc-dark'] #history-panel { background: #17171c; border-color: #2a2a33; }",
+    "body[data-theme='cc-dark'] #suggest, body[data-theme='cc-dark'] #plusmenu { background: #17171c; border-color: #2a2a33; }",
     "",
     "body[data-theme='midnight'] { background: #0b1220; color: #dbe4f0; }",
     "body[data-theme='midnight'] .bubble.user { background: #2b4a7a; color: #fff; }",
@@ -2137,7 +2133,7 @@ function css(floorColor = "#1f1f1f"): string {
     "body[data-theme='midnight'] pre.code { background: #101a30; }",
     "body[data-theme='midnight'] #composer { background: #0e1830; border-color: #22345c; }",
     "body[data-theme='midnight'] #input { color: #dbe4f0; }",
-    "body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu, body[data-theme='midnight'] #history-panel { background: #14203a; border-color: #22345c; }",
+    "body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { background: #14203a; border-color: #22345c; }",
   ].join("\n");
 }
 
@@ -2170,10 +2166,6 @@ function webviewJs(): string {
     "  var pmUpload = document.getElementById('pm-upload');",
     "  var pmAt = document.getElementById('pm-at');",
     "  var historyEl = document.getElementById('history');",
-    "  var histPanel = document.getElementById('history-panel');",
-    "  var hisSearch = document.getElementById('his-search');",
-    "  var hisList = document.getElementById('his-list');",
-    "  var sessionCache = null;",
     "",
     "  // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──",
     "  var ICON_PATHS = {",
@@ -2266,49 +2258,10 @@ function webviewJs(): string {
     "    input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）",
     "    input.focus(); updateSuggest();",
     "  });",
-    "  document.addEventListener('click', function (e) { if (!plusmenuEl.contains(e.target) && e.target !== attachEl) plusmenuEl.style.display = 'none'; if (!histPanel.contains(e.target) && e.target !== historyEl && !historyEl.contains(e.target)) histPanel.style.display = 'none'; });",
+    "  document.addEventListener('click', function (e) { if (!plusmenuEl.contains(e.target) && e.target !== attachEl) plusmenuEl.style.display = 'none'; });",
     "",
-    "  // ── 历史会话面板 ──",
-    "  historyEl.addEventListener('click', function () {",
-    "    var open = histPanel.style.display === 'flex';",
-    "    histPanel.style.display = open ? 'none' : 'flex';",
-    "    if (!open) {",
-    "      if (sessionCache === null) vscode.postMessage({ type: 'listSessions' });",
-    "      hisSearch.value = ''; renderHistory();",
-    "      hisSearch.focus();",
-    "    }",
-    "  });",
-    "  hisSearch.addEventListener('input', renderHistory);",
-    "  function renderHistory() {",
-    "    if (!sessionCache) { hisList.innerHTML = '<div class=\"notice\" style=\"padding:8px\">加载中…</div>'; return; }",
-    "    var q = hisSearch.value.toLowerCase();",
-    "    hisList.innerHTML = '';",
-    "    var n = 0;",
-    "    for (var i = 0; i < sessionCache.length && n < 50; i++) {",
-    "      var s = sessionCache[i];",
-    "      var label = s.name || s.preview || '未命名会话';",
-    "      if (q && (label + ' ' + s.time).toLowerCase().indexOf(q) === -1) continue;",
-    "      n++;",
-    "      (function(sess) {",
-    "        var row = el('div', 'his-item');",
-    "        var main = el('div', 'his-main');",
-    "        main.appendChild(el('div', 'his-name', label));",
-    "        main.appendChild(el('div', 'his-sub', sess.time));",
-    "        row.appendChild(main);",
-    "        var open = el('span', 'his-open'); open.innerHTML = ico('file', 12); open.title = '在编辑器打开会话文件 (.jsonl)';",
-    "        open.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'revealSessionFile', file: sess.file }); });",
-    "        row.appendChild(open);",
-    "        var del = el('span', 'his-del'); del.innerHTML = ico('x', 12);",
-    "        del.title = '删除会话';",
-    "        del.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'deleteSession', file: sess.file }); });",
-    "        row.appendChild(del);",
-    "        row.title = sess.file;",
-    "        row.addEventListener('click', function () { histPanel.style.display = 'none'; vscode.postMessage({ type: 'openSession', file: sess.file }); });",
-    "        hisList.appendChild(row);",
-    "      })(s);",
-    "    }",
-    "    if (!n) hisList.innerHTML = '<div class=\"notice\" style=\"padding:8px\">没有匹配的会话</div>';",
-    "  }",
+    "  // ── 历史会话：点 ⏱ 直接打开原生会话菜单（QuickPick）──",
+    "  historyEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
     "  var liveMsg = null; var liveDiv = null;",
     "  // ── 欢迎页：存快照 + 随机小贴士（新建会话时重新出现，每次换一条）──",
     "  var welcomeEl = document.getElementById('welcome');",
@@ -2959,7 +2912,7 @@ function webviewJs(): string {
     "  sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });",
     "  moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });",
     "  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });",
-    "  newChatEl.addEventListener('click', function () { histPanel.style.display = 'none'; vscode.postMessage({ type: 'newSession' }); });",
+    "  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });",
     "  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });",
     "  thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });",
     "  modeBadge.addEventListener('click', function () { vscode.postMessage({ type: 'pickMode' }); });",
@@ -3041,7 +2994,6 @@ function webviewJs(): string {
     "      nextAdi();",
     "    })(); }",
     "    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat(m.files || []); renderAttach(); }",
-    "    else if (m.type === 'sessionList') { sessionCache = m.sessions || []; renderHistory(); }",
     "    else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }",
     "    else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }",
     "    else if (m.type === 'state') applyState(m);",
