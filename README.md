@@ -2,9 +2,7 @@
 
 一个 VS Code 侧边栏插件，给 [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 提供一个图形界面。交互上参考了 Claude Code——本质上是给 pi 套了一个壳，聊天、发文件、看它干活，都在编辑器里完成。
 
-![新会话欢迎页](media/1.png)
-
-新会话：<img src="media/pi-icon.png" width="20" align="top"> 像素鸭问你要干什么，附带随机小贴士。
+![新会话欢迎页](media/image.png)
 
 ## 原理
 
