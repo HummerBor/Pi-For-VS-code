@@ -360,25 +360,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       case "prompt": {
         // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
-        const tuiCmds: Record<string, string> = {
-          "/login": this.L.tuiLogin,
-          "/settings": this.L.tuiSettings,
-          "/hotkeys": this.L.tuiHotkeys,
-          "/theme": this.L.tuiTheme,
-          "/help": this.L.tuiHelp,
-          "/resume": this.L.tuiResume,
-          "/model": this.L.tuiModel,
-          "/thinking": this.L.tuiThinking,
-          "/tree": this.L.tuiTree,
-          "/share": this.L.tuiShare,
-          "/import": this.L.tuiImport,
-          "/copy": this.L.tuiCopy,
-          "/quit": this.L.tuiQuit,
+        const tuiCmds: Record<string, { text?: string; run?: () => Promise<void> }> = {
+          "/login": { run: async () => this.openTerminalLogin() },
+          "/settings": { text: this.L.tuiSettings },
+          "/hotkeys": { text: this.L.tuiHotkeys },
+          "/theme": { text: this.L.tuiTheme },
+          "/help": { text: this.L.tuiHelp },
+          "/resume": { text: this.L.tuiResume },
+          "/model": { text: this.L.tuiModel },
+          "/thinking": { text: this.L.tuiThinking },
+          "/tree": { run: () => this.forkToMessage() },
+          "/import": { run: () => this.importSession() },
+          "/share": { run: () => this.shareSession() },
+          "/copy": { text: this.L.tuiCopy },
+          "/quit": { text: this.L.tuiQuit },
         };
         const trimmed = String(m.text ?? "").trim().toLowerCase();
         if (tuiCmds[trimmed]) {
-          this.post({ type: "notice", text: "ⓘ " + tuiCmds[trimmed] });
-          if (trimmed === "/login") this.openTerminalLogin();
+          const entry = tuiCmds[trimmed];
+          if (entry.text) this.post({ type: "notice", text: entry.text });
+          if (entry.run) void entry.run();
           break;
         }
         const client = this.ensureClient();
@@ -504,6 +505,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       case "pickSession":
         await this.pickSession("project");
+        break;
+      case "treeFork":
+        await this.forkToMessage();
+        break;
+      case "importSession":
+        await this.importSession();
+        break;
+      case "shareSession":
+        await this.shareSession();
         break;
       case "newSession":
         await this.newSession();
@@ -817,6 +827,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 会话
       { group: this.L.grpSession, label: this.L.slashNew, description: this.L.slashNewDesc, builtin: "newSession" },
       { group: this.L.grpSession, label: this.L.slashResume, description: this.L.slashResumeDesc, builtin: "pickSession" },
+      { group: this.L.grpSession, label: this.L.slashTree, description: this.L.slashTreeDesc, builtin: "treeFork" },
+      { group: this.L.grpSession, label: this.L.slashImport, description: this.L.slashImportDesc, builtin: "importSession" },
+      { group: this.L.grpSession, label: this.L.slashShare, description: this.L.slashShareDesc, builtin: "shareSession" },
       { group: this.L.grpSession, label: this.L.slashMore, description: this.L.slashMoreDesc, builtin: "more" },
       // 模型
       { group: this.L.grpModel, label: this.L.slashModel, description: this.L.slashModelDesc, builtin: "pickModel" },
@@ -1046,22 +1059,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       {
         label: this.L.cmdFork,
         run: async () => {
-          const d = await client.getForkMessages();
-          const msgs: any[] = d?.messages ?? [];
-          if (!msgs.length) {
-            this.post({ type: "notice", text: this.L.noForkMsgs });
-            return;
-          }
-          const pick = await vscode.window.showQuickPick(
-            msgs.map((m) => ({ label: m.text?.slice(0, 80) ?? "", entryId: m.entryId })),
-            { placeHolder: this.L.forkPick }
-          );
-          if (!pick) return;
-          const r = await client.fork(pick.entryId);
-          if (r?.cancelled) return;
-          const md = await client.getMessages();
-          this.post({ type: "render", messages: md?.messages ?? [] });
-          this.post({ type: "notice", text: this.L.forkedTo + (r?.text ?? "").slice(0, 50) });
+          await this.forkToMessage();
         },
       },
       {
@@ -1129,6 +1127,79 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // ignore
     }
     return "";
+  }
+
+  /** 会话树导航：列出活跃分支上的用户消息，选一条从那里继续（对应 pi TUI 的 /tree，RPC 走 fork） */
+  private async forkToMessage(): Promise<void> {
+    const client = this.ensureClient(true);
+    try {
+      const d = await client.getForkMessages();
+      const msgs: any[] = d?.messages ?? [];
+      if (!msgs.length) {
+        this.post({ type: "notice", text: this.L.noForkMsgs });
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        msgs.map((m) => ({ label: m.text?.slice(0, 80) ?? "", entryId: m.entryId })),
+        { placeHolder: this.L.forkPick }
+      );
+      if (!pick) return;
+      const r = await client.fork(pick.entryId);
+      if (r?.cancelled) return;
+      const md = await client.getMessages();
+      this.post({ type: "render", messages: md?.messages ?? [] });
+      this.post({ type: "notice", text: this.L.forkedTo + (r?.text ?? "").slice(0, 50) });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.opFail + (err?.message ?? err) });
+    }
+  }
+
+  /** 导入 .jsonl 会话文件并恢复继续（对应 pi TUI 的 /import） */
+  private async importSession(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      filters: { JSONL: ["jsonl"] },
+    });
+    if (!uris?.length) return;
+    const src = uris[0].fsPath;
+    if (!/\.jsonl$/i.test(src)) {
+      this.post({ type: "notice", text: this.L.importInvalid });
+      return;
+    }
+    if (this.client?.running && this.clientNoSession) {
+      this.client.dispose();
+      this.client = undefined;
+    }
+    const client = this.ensureClient(true);
+    try {
+      const destDir = path.join(os.homedir(), ".pi", "agent", "sessions");
+      fs.mkdirSync(destDir, { recursive: true });
+      const dest = path.join(destDir, "imported-" + Date.now() + "-" + path.basename(src));
+      fs.copyFileSync(src, dest);
+      const r = await client.switchSession(dest);
+      if (r?.cancelled) return;
+      const d = await client.getMessages();
+      this.post({ type: "render", messages: d?.messages ?? [] });
+      this.post({ type: "notice", text: this.L.imported + path.basename(dest) });
+      await this.refreshState();
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
+    }
+  }
+
+  /** 分享会话：导出 HTML 并在浏览器打开，把文件发给对方即可（GitHub gist 自动分享需终端版 /share） */
+  private async shareSession(): Promise<void> {
+    const client = this.ensureClient(true);
+    try {
+      const out = path.join(os.tmpdir(), "pi-session-" + new Date().toISOString().replace(/[:.]/g, "-") + ".html");
+      const r = await client.exportHtml(out);
+      if (r?.path) {
+        void vscode.env.openExternal(vscode.Uri.file(r.path));
+        this.post({ type: "notice", text: this.L.shareDone });
+      }
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.opFail + (err?.message ?? err) });
+    }
   }
 
   /** ⚙ 设置菜单条目（已合并进 ⚡ 菜单；/ 菜单「pi 设置…」仍单独打开） */
