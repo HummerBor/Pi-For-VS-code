@@ -15,7 +15,7 @@ export class PiClient {
   /** pi 推送的事件流（agent_start / message_update / tool_execution_* 等） */
   readonly events = new EventEmitter();
   /** pi 进程退出回调 */
-  onExit?: (code: number | null) => void;
+  onExit?: (code: number | null, detail: string) => void;
   /** pi 进程启动失败回调（如找不到 pi 命令） */
   onError?: (err: Error) => void;
   /** 扩展请求用户交互（select/confirm/input/editor/notify），由上层实现真正的 UI */
@@ -23,6 +23,7 @@ export class PiClient {
 
   private proc: ChildProcess | null = null;
   private buffer = "";
+  private stderrTail = "";
   private nextId = 1;
   private pending = new Map<string, Pending>();
 
@@ -51,6 +52,7 @@ export class PiClient {
     });
     this.proc = proc;
     this.buffer = "";
+    this.stderrTail = "";
 
     proc.stdout!.on("data", (chunk: Buffer | string) => {
       this.buffer += chunk.toString("utf8");
@@ -65,7 +67,10 @@ export class PiClient {
     });
 
     proc.stderr!.on("data", (chunk: Buffer | string) => {
-      console.error("[pi stderr]", chunk.toString());
+      const t = chunk.toString();
+      console.error("[pi stderr]", t);
+      // 留尾巴：进程崩溃时把真实报错带回给面板（只打 console 用户看不到）
+      this.stderrTail = (this.stderrTail + t).slice(-4000);
     });
 
     proc.on("error", (err) => {
@@ -74,10 +79,12 @@ export class PiClient {
 
     proc.on("close", (code) => {
       this.proc = null;
-      const err = new Error("pi 进程已退出 (code " + code + ")");
+      const tail = this.stderrTail.trim();
+      const NL = String.fromCharCode(10);
+      const err = new Error("pi 进程已退出 (code " + code + ")" + (tail ? NL + tail.split(NL).slice(-8).join(NL) : ""));
       for (const p of this.pending.values()) p.reject(err);
       this.pending.clear();
-      this.onExit?.(code);
+      this.onExit?.(code, tail);
     });
   }
 
