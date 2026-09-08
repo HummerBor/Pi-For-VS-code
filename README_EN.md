@@ -25,6 +25,10 @@ Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/it
 
 ![Working](media/测试.png)
 
+## Why build it
+
+Every existing option has its own kind of heaviness: **Codex** makes my machine lag; **Claude Code** burns tokens, and switching models requires proxies like cc-switch; I tried **Hermes, DSH, OpenClaw** too — all huge, all clunky to drive. pi is different — light, transparent, no black boxes. So I built a panel on top of it: save tokens, save memory, themes however you like.
+
 ## Built with itself
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
