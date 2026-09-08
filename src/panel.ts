@@ -287,14 +287,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (Array.isArray(m.files) && m.files.length) {
           for (const f of m.files) {
             if (f && typeof f.text === "string" && f.text.length) {
-              text = "--- 附件: " + (f.name || "file") + " ---\n```\n" + f.text + "\n```\n\n" + text;
+              // 不用 ``` 包裹：文件内容本身可能含 ``` 会提前闭合围栏；用唯一结束行分界
+              text = "--- 附件: " + (f.name || "file") + " ---\n" + f.text + "\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
             }
           }
         }
         if (m.attachCode && this.codeCtx) {
           const c = this.codeCtx;
-          text =
-            "--- 代码上下文: " + c.rel + " (" + c.range + ") ---\n```\n" + c.text + "\n```\n\n" + text;
+          text = "--- 代码上下文: " + c.rel + " (" + c.range + ") ---\n" + c.text + "\n--- 代码上下文结束 ---\n\n" + text;
         }
         // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
         const wasBusy = this.busy;
@@ -352,11 +352,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             break;
           }
           let text = String(last.text ?? "");
-          // 与 renderAll 同款剥离：去掉「代码上下文」前缀，避免回填后又当普通文本重发
-          const ccm = text.match(/^--- 代码上下文: .+? \((.+?)\) ---\n```\n/);
-          if (ccm) {
-            const ci = text.lastIndexOf("\n```\n\n");
-            text = ci > ccm[0].length ? text.slice(ci + 6) : text.slice(ccm[0].length);
+          // 剥离头部块：新格式（结束行分界）为主，老格式（围栏）兜底
+          const hdr = text.match(/^--- 代码上下文: .+? \((.+?)\) ---\n/);
+          if (hdr) {
+            const term = "\n--- 代码上下文结束 ---\n";
+            const ei = text.indexOf(term);
+            if (ei > 0) {
+              text = text.slice(ei + term.length);
+              if (text.startsWith("\n")) text = text.slice(1);
+            } else {
+              const ci = text.lastIndexOf("\n```\n\n");
+              text = ci > hdr[0].length ? text.slice(ci + 6) : text.slice(hdr[0].length);
+            }
+          }
+          let am: RegExpMatchArray | null;
+          while ((am = text.match(/^--- 附件: ([^\n]*) ---\n/))) {
+            const term2 = "\n--- 附件结束: " + am[1] + " ---\n";
+            const ei2 = text.indexOf(term2);
+            if (ei2 < 0) break;
+            text = text.slice(ei2 + term2.length);
+            if (text.startsWith("\n")) text = text.slice(1);
           }
           this.post({ type: "fillInput", text });
           this.syncRenderKeepQueued();
@@ -2599,7 +2614,7 @@ function webviewJs(): string {
     "        while ((am2 = ut.match(/^--- 附件: ([^\\n]*) ---\\n/))) {",
     "          var term2 = '\\n--- 附件结束: ' + am2[1] + ' ---\\n';",
     "          var ei2 = ut.indexOf(term2);",
-    "          if (ei2 < 0) break;",
+    "          if (ei2 < 0) { var fb = ut.match(/^--- 附件: [^\\n]* ---\\n```\\n[\\s\\S]*?\\n```\\n\\n/); if (!fb) break; ut = ut.slice(fb[0].length); if (ut.charAt(0) === '\\n') ut = ut.slice(1); continue; }",
     "          ufiles++;",
     "          ut = ut.slice(ei2 + term2.length);",
     "          if (ut.charAt(0) === '\\n') ut = ut.slice(1);",
