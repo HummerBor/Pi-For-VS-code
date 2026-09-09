@@ -33,14 +33,9 @@ Every existing option has its own kind of heaviness: **Codex** makes my machine 
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
 
-## Docs
-
-- [FEATURES.md](./FEATURES.md) — feature list, customization reference, architecture (Chinese)
-
 ## Roadmap
 
 - Multi-tab parallel sessions in the panel
-- Attachments & cross-project session enhancements
 
 Requests or bugs welcome at [Issues](../../issues). Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
 
