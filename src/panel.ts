@@ -381,6 +381,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           "/resume": { text: this.L.tuiResume },
           "/model": { text: this.L.tuiModel },
           "/thinking": { text: this.L.tuiThinking },
+          // /mode 是扩展命令：prompt("/mode") 会被 pi 立即执行且不产生任何 agent 事件，
+          // 但面板已乐观置 busy → 纯 UI 命令假忙 4s（Working 计时跑满才被兜底清掉）。
+          // 拦下来走本地 pickModeMenu()（与状态栏徽标同路）：不置 busy、中文标签、徽标即时刷新
+          "/mode": { run: () => this.pickModeMenu() },
           "/tree": { run: () => this.forkToMessage() },
           "/import": { run: () => this.importSession() },
           "/share": { run: () => this.shareSession() },
@@ -1264,8 +1268,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     items.push({
       label: this.L.sMode,
       run: async () => {
-        // /mode 是扩展命令，立即执行并弹出选择（走 extension_ui_request → QuickPick）
-        await client.prompt("/mode");
+        // 直接本地弹选择并写 mode.json（与状态栏徽标同路）。
+        // 不走 client.prompt("/mode")：那会让面板乐观置 busy，为一个纯 UI 命令假忙 4s
+        await this.pickModeMenu();
       },
     });
     items.push({
