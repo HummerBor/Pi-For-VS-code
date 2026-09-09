@@ -1751,6 +1751,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
         this.dbg("busy=true (reconcile: get_state.isStreaming)");
       }
+      // 工单五-1 观察期断言（直连后镜像应与真相零漂移）：反向不一致只记日志不纠——
+      // busy=true 且已过 pendingPrompt 窗口时 pi 却空闲，意味着某个 busy setter 误清/漏清。
+      // 零触发观察期满后，本处与 onPiEvent 顶部的对账纠偏逻辑一并删除（DIRECTOR.md 工单五-1）
+      if (this.busy && !this.pendingPrompt && st.isStreaming === false) {
+        this.dbg("MISMATCH(reverse, observe-only): mirror busy but pi idle, pendingPrompt=false");
+      }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
       this.lastSessionName = st?.sessionName ?? null;
