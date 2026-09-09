@@ -371,31 +371,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "prompt": {
-        // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
-        const tuiCmds: Record<string, { text?: string; run?: () => Promise<void> }> = {
-          "/login": { run: async () => this.openTerminalLogin() },
-          "/settings": { text: this.L.tuiSettings },
-          "/hotkeys": { text: this.L.tuiHotkeys },
-          "/theme": { text: this.L.tuiTheme },
-          "/help": { text: this.L.tuiHelp },
-          "/resume": { text: this.L.tuiResume },
-          "/model": { text: this.L.tuiModel },
-          "/thinking": { text: this.L.tuiThinking },
-          // /mode 是扩展命令：prompt("/mode") 会被 pi 立即执行且不产生任何 agent 事件，
-          // 但面板已乐观置 busy → 纯 UI 命令假忙 4s（Working 计时跑满才被兜底清掉）。
-          // 拦下来走本地 pickModeMenu()（与状态栏徽标同路）：不置 busy、中文标签、徽标即时刷新
-          "/mode": { run: () => this.pickModeMenu() },
-          "/tree": { run: () => this.forkToMessage() },
-          "/import": { run: () => this.importSession() },
-          "/share": { run: () => this.shareSession() },
-          "/copy": { text: this.L.tuiCopy },
-          "/quit": { text: this.L.tuiQuit },
-        };
+        // 斜杠命令拦截（必须在乐观置 busy 之前）：
+        // - 面板原生命令 → 本地执行，不碰 prompt（原因见 nativeSlashCommands 注释）
+        // - 终端专用命令 → 提示去终端，同样不能漏给模型
+        // - 技能/模板（/skill:xx、/模板名）不在表里 → 正常走 prompt，pi 展开后是真任务，busy 合理
+        // 按首 token 匹配：/compact xxx、/model gpt 这类带参数写法也能命中（参数忽略，
+        // 需要参数的原生命令自己弹输入框）
         const trimmed = String(m.text ?? "").trim().toLowerCase();
-        if (tuiCmds[trimmed]) {
-          const entry = tuiCmds[trimmed];
-          if (entry.text) this.post({ type: "notice", text: entry.text });
-          if (entry.run) void entry.run();
+        const firstTok = trimmed.split(/\s+/)[0];
+        const native = this.nativeSlashCommands().find((c) => "/" + c.name === firstTok);
+        if (native) {
+          void native.run();
+          break;
+        }
+        const tuiOnly: Record<string, string> = {
+          "/hotkeys": this.L.tuiHotkeys,
+          "/help": this.L.tuiHelp,
+          "/copy": this.L.tuiCopy,
+          "/quit": this.L.tuiQuit,
+          "/logout": this.L.tuiOnly,
+          "/name": this.L.tuiOnly,
+          "/session": this.L.tuiOnly,
+          "/scoped-models": this.L.tuiOnly,
+          "/reload": this.L.tuiOnly,
+          "/trust": this.L.tuiOnly,
+          "/changelog": this.L.tuiOnly,
+          "/debug": this.L.tuiOnly,
+        };
+        if (tuiOnly[firstTok]) {
+          this.post({ type: "notice", text: tuiOnly[firstTok] });
           break;
         }
         const client = this.ensureClient();
@@ -443,6 +447,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
         //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
         // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
+        // 工单五-2 重审结论（直连）：兜底保留。正常 prompt 的 agent_start 毫秒级到达，
+        // 兜底唯一日常触发场景是「不产生 agent 运行的命令式 prompt」（扩展 registerCommand
+        // 集合开放无法枚举拦截，b040fb2 只拦了 /mode）——撤掉兜底这类 prompt 的 busy
+        // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
         if (!wasBusy) {
           this.pendingPrompt = true;
           setTimeout(() => {
@@ -851,6 +859,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** 面板原生斜杠命令表：输入框拦截、/ 补全两处共用一份。
+   *  这些命令绝不能走 client.prompt——pi SDK 对未注册的 /xxx 会把字面文本发给模型
+   *  （用户消息变成 "/compact"），对已注册扩展命令则立即返回且零 agent 事件
+   *  （面板乐观 busy → 假忙 4s），两条路都不对 */
+  private nativeSlashCommands(): { name: string; desc: string; run: () => Promise<void> }[] {
+    return [
+      { name: "model", desc: this.L.natModel, run: () => this.pickModel() },
+      { name: "thinking", desc: this.L.natThinking, run: () => this.pickThinking() },
+      { name: "theme", desc: this.L.natTheme, run: () => this.pickTheme() },
+      { name: "mode", desc: this.L.natMode, run: () => this.pickModeMenu() },
+      { name: "new", desc: this.L.natNew, run: () => this.newSession() },
+      { name: "resume", desc: this.L.natResume, run: () => this.pickSession("project") },
+      { name: "fork", desc: this.L.natFork, run: () => this.forkToMessage() },
+      { name: "tree", desc: this.L.natFork, run: () => this.forkToMessage() },
+      { name: "import", desc: this.L.natImport, run: () => this.importSession() },
+      { name: "share", desc: this.L.natShare, run: () => this.shareSession() },
+      { name: "export", desc: this.L.natExport, run: () => this.exportSession() },
+      { name: "compact", desc: this.L.natCompact, run: () => this.compactSession() },
+      { name: "clone", desc: this.L.natClone, run: () => this.cloneSession() },
+      { name: "login", desc: this.L.natLogin, run: async () => this.openTerminalLogin() },
+      { name: "settings", desc: this.L.natSettings, run: () => this.settingsMenu() },
+    ];
+  }
+
   /** 给 webview 提供 /命令列表（懒加载一次） */
   private async sendSlashCommands(): Promise<void> {
     let cmds: any[] = [];
@@ -879,13 +911,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 配置（已合并进操作命令菜单，条目在菜单里分组展示）
       { group: this.L.grpConfig, label: this.L.slashSettings, description: this.L.slashSettingsDesc, builtin: "settings" },
     ];
-    const ext = cmds.map((c: any) => ({
+    // 面板原生命令与 pi 扩展命令并列展示；同名（如 /mode 两边都有）以原生为准去重，
+    // 否则补全面板出现两条 /mode，一条走本地一条走扩展
+    const nat = this.nativeSlashCommands();
+    const nativeNames = new Set(nat.map((c) => c.name));
+    const native = nat.map((c) => ({
       group: this.L.grpCmds,
       label: "/" + c.name,
-      description: c.description || c.source || "",
+      description: c.desc,
       name: c.name,
     }));
-    this.post({ type: "slashList", commands: [...builtin, ...ext] });
+    const ext = cmds
+      .filter((c: any) => !nativeNames.has(String(c.name)))
+      .map((c: any) => ({
+        group: this.L.grpCmds,
+        label: "/" + c.name,
+        description: c.description || c.source || "",
+        name: c.name,
+      }));
+    this.post({ type: "slashList", commands: [...builtin, ...native, ...ext] });
   }
 
   /** 给 webview 提供工作区文件列表（相对路径 + 所在目录），供 @ 补全 */
@@ -1047,19 +1091,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       {
         label: this.L.cmdCompact,
         run: async () => {
-          const inst = await vscode.window.showInputBox({
-            prompt: this.L.compactPrompt,
-          });
-          if (inst === undefined) return;
-          this.post({ type: "status", text: this.L.compacting });
-          const r = await client.compact(inst || undefined);
-          this.post({ type: "status", text: "" });
-          this.post({
-            type: "notice",
-            text: r?.result
-              ? this.L.compactDone + (r.result.tokensBefore ?? "?") + " → ≈ " + (r.result.estimatedTokensAfter ?? "?") + " tokens"
-              : this.L.compactEnded,
-          });
+          await this.compactSession();
         },
       },
       {
@@ -1073,16 +1105,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       {
         label: this.L.cmdExport,
         run: async () => {
-          const target = await vscode.window.showSaveDialog({
-            defaultUri: vscode.Uri.file(path.join(os.homedir(), "Desktop", "pi-session.html")),
-            filters: { HTML: ["html"] },
-          });
-          if (!target) return;
-          const r = await client.exportHtml(target.fsPath);
-          if (r?.path) {
-            void vscode.env.openExternal(vscode.Uri.file(r.path));
-            this.post({ type: "notice", text: this.L.exported + r.path });
-          }
+          await this.exportSession();
         },
       },
       {
@@ -1094,9 +1117,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       {
         label: this.L.cmdClone,
         run: async () => {
-          const r = await client.clone();
-          if (r?.cancelled) return;
-          this.post({ type: "notice", text: this.L.cloned });
+          await this.cloneSession();
         },
       },
       {
@@ -1157,6 +1178,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // ignore
     }
     return "⚡ Auto";
+  }
+
+  /** 压缩上下文（⚡ 菜单与 /compact 共用；对应 pi TUI 的 /compact） */
+  private async compactSession(): Promise<void> {
+    const client = this.ensureClient(true);
+    const inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });
+    if (inst === undefined) return;
+    this.post({ type: "status", text: this.L.compacting });
+    const r = await client.compact(inst || undefined);
+    this.post({ type: "status", text: "" });
+    this.post({
+      type: "notice",
+      text: r?.result
+        ? this.L.compactDone + (r.result.tokensBefore ?? "?") + " → ≈ " + (r.result.estimatedTokensAfter ?? "?") + " tokens"
+        : this.L.compactEnded,
+    });
+  }
+
+  /** 导出会话为 HTML（⚡ 菜单与 /export 共用） */
+  private async exportSession(): Promise<void> {
+    const client = this.ensureClient(true);
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), "Desktop", "pi-session.html")),
+      filters: { HTML: ["html"] },
+    });
+    if (!target) return;
+    const r = await client.exportHtml(target.fsPath);
+    if (r?.path) {
+      void vscode.env.openExternal(vscode.Uri.file(r.path));
+      this.post({ type: "notice", text: this.L.exported + r.path });
+    }
+  }
+
+  /** 克隆当前会话（⚡ 菜单与 /clone 共用） */
+  private async cloneSession(): Promise<void> {
+    const client = this.ensureClient(true);
+    const r = await client.clone();
+    if (r?.cancelled) return;
+    this.post({ type: "notice", text: this.L.cloned });
   }
 
   /** 会话树导航：列出活跃分支上的用户消息，选一条从那里继续（对应 pi TUI 的 /tree，RPC 走 fork） */
