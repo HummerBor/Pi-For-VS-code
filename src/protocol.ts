@@ -184,6 +184,9 @@ export interface ToolEndMsg {
 export interface BusyMsg {
   type: "busy";
   value: boolean;
+  /** agent 本轮实测耗时 ms（agent_start→agent_settled，宿主测量）；
+   *  命令式应答/pi 退出等无 agent 运行的 busy:false 不带此字段，webview 不显示耗时 */
+  elapsedMs?: number;
 }
 export interface RenderMsg {
   type: "render";

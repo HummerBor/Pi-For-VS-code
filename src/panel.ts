@@ -25,6 +25,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private lastSessionName: string | null = null;
   /** 命令式应答标记：发出 prompt 后未等到 agent_start 前为 true（用于清除乐观 busy/免误导性中断提示） */
   private pendingPrompt = false;
+  /** 本轮 agent 运行起点（agent_start 时记录，settled 时算实测耗时）；0=无运行 */
+  private runStartTs = 0;
   private lastSessionFile: string | null = null;
   /** 已自动命名过的会话文件（避免重复 RPC） */
   private autoTitledFor: string | null = null;
@@ -1791,6 +1793,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "agent_start":
         this.busy = true;
         this.pendingPrompt = false;
+        this.runStartTs = Date.now();
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
         this.post({ type: "busy", value: true });
@@ -1917,7 +1920,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       case "agent_settled": {
         this.busy = false;
-        this.post({ type: "busy", value: false });
+        // 本轮实测耗时随 busy:false 下发（中断也算一轮，时长到中断为止）；
+        // 无 agent 运行（命令式应答）不带字段，webview 不显示耗时
+        this.post({
+          type: "busy",
+          value: false,
+          ...(this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
+        });
+        this.runStartTs = 0;
         this.lastQueueTotal = 0;
         if (this.abortSkipRender) {
           // 中断后的重绘会抹掉现场（会话文件里被中断的消息是空的），跳过

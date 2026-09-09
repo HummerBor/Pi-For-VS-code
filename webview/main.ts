@@ -172,22 +172,38 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var modeText = 'Auto';
   var busyTimer = null; var busyStart = 0;
   function renderStatus() { modeBadge.textContent = modeText; }
-  function setBusy(v) {
+  // 毫秒 → 紧凑时长（42s / 1m23s / 1h2m）；供 Working 实时计数与本轮耗时显示共用
+  function fmtDur(ms) {
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60); s = s % 60;
+    if (m < 60) return m + 'm' + (s ? s + 's' : '');
+    var h = Math.floor(m / 60); m = m % 60;
+    return h + 'h' + (m ? m + 'm' : '');
+  }
+  function setBusy(v, elapsedMs) {
     streaming = v;
     stopBtn.style.display = v ? 'inline-flex' : 'none';
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
     if (v) {
+      busyStart = Date.now();
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
-      statusEl.textContent = frames[0] + ' Working…';
+      statusEl.textContent = frames[0] + ' Working… 0s';
       busyTimer = setInterval(function () {
         fi = (fi + 1) % frames.length;
-        statusEl.textContent = frames[fi] + ' Working…' + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : '');
+        // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
+        statusEl.textContent = frames[fi] + ' Working… ' + fmtDur(Date.now() - busyStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : '');
       }, 120);
     } else {
       statusEl.classList.remove('busy');
       statusEl.textContent = '';
+      // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化
+      if (elapsedMs != null) {
+        statusEl.textContent = '⏱ ' + fmtDur(elapsedMs);
+        statusEl.title = L.turnDuration;
+      }
     }
     if (!v) { finalizeLive(); liveReset(); }
   }
@@ -834,7 +850,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
-    else if (m.type === 'busy') setBusy(m.value);
+    else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { var rm = m; setTimeout(function () { renderAll(rm.messages); }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
