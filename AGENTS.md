@@ -1,6 +1,6 @@
 # AGENTS.md — pi 的职责手册
 
-pi coding agent 的 VS Code 图形界面（RPC 模式）。本文件只写 pi 在本仓库的职责与不可破坏的约定；
+pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件只写 pi 在本仓库的职责与不可破坏的约定；
 工作进度、工单状态、技术债一律记 BUILDER.md（交接时读那份）。
 
 ## 我的职责
@@ -16,7 +16,15 @@ pi coding agent 的 VS Code 图形界面（RPC 模式）。本文件只写 pi �
 
 ## 不可破坏的约定
 
-- **零运行时依赖**：`dependencies` 必须保持为空，工具链只进 devDependencies。
+- **零运行时依赖**：`dependencies` 必须保持为空，工具链只进 devDependencies（含
+  @earendil-works/pi-coding-agent——仅为类型参考，**不进 vsix**，运行时加载用户已装的 pi 包）。
+- **进程内直连架构（2026-09-09 用户拍板）**：piClient 不再 spawn `pi --mode rpc`，改为经
+  src/piSdk.ts 定位并 import 用户已装的 pi 包（前置条件不变：机器上必须有 pi）。RPC 版整树
+  保留在分支 `rpc-subprocess`。改 piClient 前先读其头注释的「RPC 语义保留对照」——
+  preflight 验收即回、拒收报错文案与 steer 自愈正则的匹配是跨模块契约，别动。
+- **piCore.ts / hostCapabilities.ts**：工单四的半成品（核心/宿主分层），未接线未完成；
+  接完前保持未跟踪不提交，门禁若被其类型错误拦住就地修类型不修行为（已发生一例：
+  piCore.ts getConfig 泛型字面量收窄，注解 string 解决）。
 - **vsix 瘦身**：media 只带 `pi-icon.png`/`pi-logo.svg`；README 截图引用 `raw.githubusercontent.com`
   仓库 URL——改截图必须 push 后才在市场生效。
 - **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（@ts-nocheck 已摘）。改它保持 ES5 var
@@ -44,7 +52,8 @@ pi coding agent 的 VS Code 图形界面（RPC 模式）。本文件只写 pi �
 ## 结构
 
 ```
-src/            宿主侧（panel.ts 面板逻辑 / piClient.ts pi RPC / protocol.ts 消息协议 /
+src/            宿主侧（panel.ts 面板逻辑 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
+                protocol.ts 消息协议 /
                 toolDetail.ts 共享摘要 / i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）

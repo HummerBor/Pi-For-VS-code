@@ -18,3 +18,5 @@ tsconfig.json
 media/*
 !media/pi-icon.png
 !media/pi-logo.svg
+out/piCore.js
+out/hostCapabilities.js
