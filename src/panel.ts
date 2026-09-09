@@ -468,6 +468,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           } catch (e: any) {
             // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
             // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
+            // 工单五-3 可达性结论（直连）：自愈保留。panel 读 wasBusy 与调 client.prompt 之间
+            // 无异步间隙（同一线程同步块），正常永不触发拒收；唯一可达场景是镜像已漂移
+            // （4s 兙底误清 busy 后用户再发消息 → steer=false 撞上运行中的 session.prompt）。
+            // 它是对账/兙底两层全失效时的最后一层，撤掉后漂移会以「发送失败」报错形式砸给用户
             const msg = String(e?.message ?? e);
             if (!/already processing|streamingBehavior/i.test(msg)) throw e;
             this.post({ type: "notice", text: this.L.autoQueued });
