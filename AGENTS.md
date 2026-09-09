@@ -11,6 +11,9 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 - 改完必须 `npm run compile` 全绿才算完；涉及 webview 行为的改动要构建 vsix 实测
 - 工单完成后更新 BUILDER.md（回报 + 验收对账 + 请示），等用户发 `1` 给总监 review
 - git 只做本地 commit；push / 发布（`npm run ship`）必须等用户明确发话
+- **同一工作区 git 单写方（总监裁决 9）**：并行会话共用工作区时，同一时刻只允许一个
+  施工方动 git，另一侧只读或先 status/diff 确认归属；提交前 `git diff` 逐 hunk
+  确认归属，只把属于自己的 hunk 进暂存区（工单五实测两次互扫事故沉淀）
 - 维护本手册：发现新的不可破坏约定时增补，失效条目删除，保持一屏内读完
 - 总监 review 后若更新 DIRECTOR.md，按新工单继续；长期不变量从工单沉淀回本手册
 
