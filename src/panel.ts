@@ -427,8 +427,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } else {
           this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
         }
+        let steered = false;
+        // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到
+        //（实录 07:30:16.357 事件 vs ~16.358 响应，1ms 反转）。若在响应回来后才置
+        // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
+        //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
+        // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
+        if (!wasBusy) {
+          this.pendingPrompt = true;
+          setTimeout(() => {
+            if (!steered && this.busy && this.pendingPrompt) {
+              this.pendingPrompt = false;
+              this.busy = false;
+              this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
+              this.post({ type: "busy", value: false });
+            }
+          }, 4000);
+        }
         try {
-          let steered = false;
           try {
             await client.prompt(text, wasBusy, m.images);
           } catch (e: any) {
@@ -442,27 +458,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             // 若不纠回：steer 不触发 agent_start，下方 4s 兜底会把 busy 清掉 → 整个 run 期间
             // 宿主自认空闲，后续消息全部误判（Working 消失/排队气泡丢失的根源）
             this.busy = true;
-            this.post({ type: "busy", value: true });
+            this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
             this.dbg("busy=true (steer_resend: pi rejected prompt as already processing)");
             await client.prompt(text, true, m.images);
           }
           // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
           if (!wasBusy && m.text) void this.autoTitleSession(m.text);
-          // 命令式应答（如 /llama）不触发 agent_start/agent_settled，乐观置位的 busy 会永远卡住：
-          // 若 4s 后仍未等到 agent_start 则兜底清除（真跑起来的话 agent_start 会先置 pendingPrompt=false）。
-          // steered 的 prompt 不适用：run 属于正在跑的原 prompt（agent_start 早已发过），
-          // busy 已在上方纠回 true，由那个 run 的 agent_settled 收尾
-          if (!wasBusy && !steered) {
-            this.pendingPrompt = true;
-            setTimeout(() => {
-              if (this.busy && this.pendingPrompt) {
-                this.pendingPrompt = false;
-                this.busy = false;
-                this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
-                this.post({ type: "busy", value: false });
-              }
-            }, 4000);
-          }
         } catch (err: any) {
           this.busy = false;
           this.post({ type: "busy", value: false });
@@ -1735,7 +1736,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.busy = true;
         this.pendingPrompt = false;
         if (!this.runStartTs) this.runStartTs = Date.now();
-        this.post({ type: "busy", value: true });
+        this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
         this.dbg("busy=true (reconcile: get_state.isStreaming)");
       }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
@@ -1823,7 +1824,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.busy = true;
       this.pendingPrompt = false;
       if (!this.runStartTs) this.runStartTs = Date.now();
-      this.post({ type: "busy", value: true });
+      this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
       this.dbg("busy=true (reconcile: " + e.type + " while mirror idle)");
     }
     switch (e.type) {
@@ -1833,7 +1834,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.runStartTs = Date.now();
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
-        this.post({ type: "busy", value: true });
+        this.post({ type: "busy", value: true, elapsedMs: 0 });
         this.dbg("busy=true (agent_start)");
         if (this.queued.length) void this.deliverQueuedInHistory();
         break;

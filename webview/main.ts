@@ -186,7 +186,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     stopBtn.style.display = v ? 'inline-flex' : 'none';
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
     if (v) {
-      busyStart = Date.now();
+      // 计时起点对齐宿主真相：对账/纠回时 elapsedMs 是真实已过时长，回拨起点。
+      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
+      busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
