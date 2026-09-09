@@ -36,6 +36,9 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 - **模板纪律**：index.html 只放结构 + 占位符（`{{key}}` 运行时变量 / `{{t:key}}` i18n）。CSS/JS 主体
   绝不写进模板，样式注入在 src/webview-html.ts 的 `headAssets`。
 - **CSP**：nonce 由 getHtml 随机生成，script 标签与 CSP 头必须配对；JS 注入须过 `</script` 转义。
+- **还原边界（工单七，裁决 11）**：还原只对「pi 工具命中」的文件提供；git-only 只展示；
+  write 碰过的未跟踪文件一律不可还原；patch 逆向任一行不符即拒打不落盘
+  （patchRevert.ts）——破坏性操作红线，别「优化」掉任何一道守卫。
 - **steering 自愈别删**：prompt 被 pi 以 "already processing" 拒收时自动转 steer 重发
   （panel.ts case "prompt"），这是 busy 标志竞态的兜底，不是临时代码。
 - **4 秒 pendingPrompt 兜底别删**：/llama 等命令式应答不触发 agent_start，没有它面板 busy 永久卡死。
@@ -58,7 +61,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 ```
 src/            宿主侧（panel.ts VS Code adapter / piCore.ts 核心控制器 / hostCapabilities.ts 宿主能力接口 /
                 piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
-                protocol.ts 消息协议 /
+                protocol.ts 消息协议 / patchRevert.ts edit patch 逆向还原（工单七）/
                 toolDetail.ts 共享摘要 / i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）
