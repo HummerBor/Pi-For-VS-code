@@ -57,9 +57,6 @@ export interface WvPickModeMsg {
 export interface WvGetSlashMsg {
   type: "getSlash";
 }
-export interface WvListSessionsMsg {
-  type: "listSessions";
-}
 export interface WvOpenSessionMsg {
   type: "openSession";
   file: string;
@@ -112,7 +109,6 @@ export type WebviewToHost =
   | WvAttachFileMsg
   | WvPickModeMsg
   | WvGetSlashMsg
-  | WvListSessionsMsg
   | WvOpenSessionMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
@@ -283,19 +279,16 @@ export interface StateMsg {
   ver?: string;
   model?: { id: string; name?: string; provider?: string } | null;
   thinkingLevel?: number | null;
-  sessionFile?: string;
-  sessionName?: string;
+  sessionFile?: string | null;
+  sessionName?: string | null;
   stats?: { contextPercent?: number | null; cost?: number } | null;
 }
 export interface ThemeMsg {
   type: "theme";
   name: string;
 }
-/** ⚠ 历史遗留：宿主仍在发送，但 webview 无处理器（会话切换走宿主 QuickPick） */
-export interface SessionListMsg {
-  type: "sessionList";
-  sessions: unknown[];
-}
+// sessionList / listSessions 死链已删除（工单二b）：webview 从无该消息处理器（会话切换走宿主 QuickPick），
+// 面板内历史列表若重做再按需重建
 
 export type HostToWebview =
   | UserMsg
@@ -322,8 +315,32 @@ export type HostToWebview =
   | SlashListMsg
   | FileListMsg
   | StateMsg
-  | ThemeMsg
-  | SessionListMsg;
+  | ThemeMsg;
+
+/* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
+
+/** get_messages 响应：当前会话消息列表（复用渲染用 SessionMessage） */
+export interface GetMessagesResult {
+  messages: SessionMessage[];
+  [k: string]: unknown;
+}
+/** get_state 响应：会话/模型/思考等级等当前状态（pi 未保证的字段一律保守可选） */
+export interface GetStateResult {
+  sessionFile?: string;
+  sessionName?: string;
+  model?: { id: string; name?: string; provider?: string } | null;
+  thinkingLevel?: number | null;
+  steeringMode?: string;
+  followUpMode?: string;
+  autoCompactionEnabled?: boolean;
+  [k: string]: unknown;
+}
+/** get_session_stats 响应：token 用量与花费 */
+export interface GetSessionStatsResult {
+  contextUsage?: { percent?: number | null } | null;
+  cost?: number;
+  [k: string]: unknown;
+}
 
 /* ══════════════ pi RPC 事件 → 宿主 ══════════════ */
 

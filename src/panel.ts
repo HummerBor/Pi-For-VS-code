@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb, fmt, fmt2 } from "./i18n";
 import { getHtml } from "./webview-html";
-import type { HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
+import type { GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
 import { toolDetail } from "./toolDetail";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -550,9 +550,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "getSlash":
         await this.sendSlashCommands();
         break;
-      case "listSessions":
-        await this.sendSessionList();
-        break;
       case "openSession":
         await this.openSessionFile(m.file);
         break;
@@ -573,7 +570,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } catch {
           // ignore
         }
-        await this.sendSessionList();
         break;
       case "getFiles":
         await this.sendWorkspaceFiles();
@@ -892,18 +888,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       walk(root, 0);
     }
     this.post({ type: "fileList", files });
-  }
-
-  /** 给 webview 提供当前项目的会话列表（历史面板用） */
-  private async sendSessionList(): Promise<void> {
-    const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const sessions = listSessions(wsPath, 100).map((s) => ({
-      file: s.file,
-      name: s.name ?? null,
-      preview: s.preview,
-      time: s.time,
-    }));
-    this.post({ type: "sessionList", sessions });
   }
 
   /** 从历史面板点击某条会话 → 切换过去 */
@@ -1722,7 +1706,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!client?.running) return;
     try {
       const st = await client.getState();
-      let stats: any = null;
+      let stats: GetSessionStatsResult | null = null;
       try {
         stats = await client.getSessionStats();
       } catch {
@@ -1758,8 +1742,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       const d = await this.client?.getMessages();
       const histTexts = (d?.messages ?? [])
-        .filter((m: any) => m.role === "user")
-        .map((m: any) => extractText(m.content));
+        .filter((m) => m.role === "user")
+        .map((m) => extractText(m.content));
       const remaining: typeof this.queued = [];
       for (const q of this.queued) {
         if (histTexts.some((t: string) => t.includes(q.sentText))) {
@@ -1789,8 +1773,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const d = await this.client?.getMessages();
         const msgs = d?.messages ?? [];
         const histTexts = msgs
-          .filter((m: any) => m.role === "user")
-          .map((m: any) => extractText(m.content));
+          .filter((m) => m.role === "user")
+          .map((m) => extractText(m.content));
         this.queued = this.queued.filter(
           (q) => !histTexts.some((t: string) => t.includes(q.sentText))
         );

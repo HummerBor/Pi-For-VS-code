@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { EventEmitter } from "events";
+import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "./protocol";
 
 interface Pending {
   resolve: (value: any) => void;
@@ -190,15 +191,15 @@ export class PiClient {
     return this.send({ type: "abort" });
   }
 
-  getMessages(): Promise<any> {
+  getMessages(): Promise<GetMessagesResult> {
     return this.send({ type: "get_messages" });
   }
 
-  getState(): Promise<any> {
+  getState(): Promise<GetStateResult> {
     return this.send({ type: "get_state" });
   }
 
-  getSessionStats(): Promise<any> {
+  getSessionStats(): Promise<GetSessionStatsResult> {
     return this.send({ type: "get_session_stats" });
   }
 
