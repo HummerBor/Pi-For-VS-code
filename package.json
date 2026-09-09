@@ -120,6 +120,7 @@
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.4.0",
