@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
-import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
+import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
 import { toolDetail } from "./toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
@@ -42,6 +42,10 @@ export interface UiActions {
   openTerminalLogin(): void;
   /** pi 启动失败（找不到命令等）：宿主弹错误框并提供一键安装 */
   startError(err: Error): void;
+  /** 工单七：展示「本次改动」QuickPick（git/diff/还原语义全在 adapter） */
+  showChanges(): Promise<void>;
+  /** 工单七：收起「本次改动」条（宿主状态收口，webview 重建不重发） */
+  dismissChanges(): Promise<void>;
 }
 
 export class PiCore {
@@ -75,6 +79,14 @@ export class PiCore {
   private banner: BannerPayload | null = null;
   /** 阈值预警闸门：涨破阈值只提醒一次（同一会话）；占比回落（压缩后）/换会话 re-arm */
   private contextWarnArmed = true;
+  /** 工单七：本轮 pi 经 edit/write 工具触碰的文件（工具调用提取，同 pi 官方压缩口径
+   *  extractFileOpsFromMessage；bash/powershell 改动 pi 自身不追踪，由 adapter git 比对兜底）。
+   *  会话域持有：agent_start 清空、换 sessionFile 清空，多标签落地时直接复用为归属层 */
+  private runChangedFiles = new Map<string, ToolChangedFile>();
+  /** 工单七 run 边界回调：核心只产中性事件，adapter 拿它做 git 快照/比对。
+   *  可为 null（宿主未接时收集照常、事件丢弃） */
+  onRunStart: (() => void) | null = null;
+  onRunSettled: ((files: ToolChangedFile[]) => void) | null = null;
 
   /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换；持久化由 adapter 完成 */
   lang: Lang = "zh";
@@ -562,6 +574,13 @@ export class PiCore {
         // 横幅「一键压缩」：直压语义（810f39c 口径）；带指令入口在 ⚡ 菜单，归 adapter
         await this.ui.compactSession();
         break;
+      case "showChanges":
+        // 工单七：「查看本次改动」→ adapter 的 QuickPick/diff/还原全链路
+        await this.ui.showChanges();
+        break;
+      case "changesDismiss":
+        await this.ui.dismissChanges();
+        break;
     }
   }
 
@@ -848,6 +867,8 @@ export class PiCore {
       if ((st?.sessionFile ?? null) !== this.lastSessionFile) {
         this.contextWarnArmed = true;
         if (this.banner) this.setBanner(null);
+        // 工单七：变更清单同样是会话域信息，不残留到别的会话
+        this.runChangedFiles.clear();
       }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
@@ -960,6 +981,9 @@ export class PiCore {
         this.busy = true;
         this.pendingPrompt = false;
         this.runStartTs = Date.now();
+        // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
+        this.runChangedFiles.clear();
+        try { this.onRunStart?.(); } catch { /* 快照失败不阻断 agent 运行 */ }
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
         this.post({ type: "busy", value: true, elapsedMs: 0 });
@@ -991,6 +1015,13 @@ export class PiCore {
       }
 
       case "tool_execution_start":
+        // 工单七：edit/write 自带 args.path（schema 强制 string），流式期间即可归因。
+        // 裁决 4：pi 未保证非空，一律保守检查；工具名以 pi 工具定义实查为准（edit/write）
+        if ((e.toolName === "edit" || e.toolName === "write") && e.args && typeof e.args === "object"
+            && typeof (e.args as Record<string, unknown>).path === "string") {
+          const p = (e.args as Record<string, string>).path;
+          if (!this.runChangedFiles.has(p)) this.runChangedFiles.set(p, { path: p, tool: e.toolName, patches: [] });
+        }
         this.post({
           type: "toolStart",
           id: e.toolCallId,
@@ -1000,6 +1031,14 @@ export class PiCore {
         break;
 
       case "tool_execution_end": {
+        // 工单七：edit 的 result.details.patch（jsdiff unified）按时间序累积——
+        // 未跟踪文件逆序逆向还原的唯一依据（裁决 11③）；write 无 details，不可还原
+        const patch = e.result?.details?.patch;
+        const known = typeof e.args === "object" && e.args !== null
+          && typeof (e.args as Record<string, unknown>).path === "string"
+          ? this.runChangedFiles.get((e.args as Record<string, string>).path)
+          : undefined;
+        if (e.toolName === "edit" && known && typeof patch === "string" && patch) known.patches.push(patch);
         const text = extractText(e.result?.content);
         this.post({
           type: "toolEnd",
@@ -1116,6 +1155,11 @@ export class PiCore {
         this.dbg("busy=false (agent_settled, elapsedMs=" + (this.runStartTs > 0 ? Date.now() - this.runStartTs : "n/a") + ")");
         this.runStartTs = 0;
         this.lastQueueTotal = 0;
+        // 工单七：run 结束——把工具命中清单交给 adapter（git 比对合并 + UI 出口都在那边）；
+        // 清单本体保留到下次 agent_start/换会话，会话域持有（多标签预留）
+        if (this.runChangedFiles.size) {
+          try { this.onRunSettled?.([...this.runChangedFiles.values()]); } catch (err) { this.dbg("runChanges callback failed: " + err); }
+        }
         if (this.abortSkipRender) {
           // 中断后的重绘会抹掉现场（会话文件里被中断的消息是空的），跳过
           this.abortSkipRender = false;

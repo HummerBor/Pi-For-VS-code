@@ -101,6 +101,14 @@ export interface WvBannerCloseMsg {
 export interface WvCompactSessionMsg {
   type: "compactSession";
 }
+/** 工单七：点击「查看本次改动」入口，宿主出 QuickPick 文件清单 */
+export interface WvShowChangesMsg {
+  type: "showChanges";
+}
+/** 工单七：关闭「本次改动」条；宿主状态收口（webview 重建不重发） */
+export interface WvChangesDismissMsg {
+  type: "changesDismiss";
+}
 export type WebviewToHost =
   | WvReadyMsg
   | WvPromptMsg
@@ -126,7 +134,9 @@ export type WebviewToHost =
   | WvPickThemeMsg
   | WvPickLangMsg
   | WvBannerCloseMsg
-  | WvCompactSessionMsg;
+  | WvCompactSessionMsg
+  | WvShowChangesMsg
+  | WvChangesDismissMsg;
 
 /* ══════════════ 宿主 → webview ══════════════ */
 
@@ -309,6 +319,26 @@ export interface BannerMsg {
   /** null = 收起横幅 */
   banner: BannerPayload | null;
 }
+/** 工单七：单个变更文件的 webview 展示信息（还原/diff 所需细节留在宿主，不进 webview） */
+export interface ChangesFileInfo {
+  /** 绝对路径（webview 只取 basename 显示，tooltip 用全路径） */
+  path: string;
+  /** tool = pi 工具命中（edit/write 归因）；git = 仅 git 比对命中（可能是用户 WIP，只展示不可还原，裁决 11②） */
+  source: "tool" | "git";
+}
+/** 工单七：本轮变更文件条。文案宿主组装，webview 只渲染；files 为空 = 收条 */
+export interface ChangesListMsg {
+  type: "changesList";
+  files: ChangesFileInfo[];
+}
+/** 工单七：piCore→adapter 的 run 边界回调负载（不经 webview；git/还原语义全在 adapter）。
+ *  tool 取 pi 工具名（edit/write）；patches 是同一文件本次 run 内按时间序累积的
+ *  edit result.details.patch（未跟踪文件逆序逆向还原用，裁决 11③） */
+export interface ToolChangedFile {
+  path: string;
+  tool: string;
+  patches: string[];
+}
 // sessionList / listSessions 死链已删除（工单二b）：webview 从无该消息处理器（会话切换走宿主 QuickPick），
 // 面板内历史列表若重做再按需重建
 
@@ -338,7 +368,8 @@ export type HostToWebview =
   | FileListMsg
   | StateMsg
   | ThemeMsg
-  | BannerMsg;
+  | BannerMsg
+  | ChangesListMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 
@@ -401,7 +432,11 @@ export interface PiToolExecutionEndEvent {
   toolName: string;
   isError?: boolean;
   args?: unknown;
-  result?: { content?: unknown };
+  result?: {
+    content?: unknown;
+    /** edit 工具的 EditToolDetails（pi 未保证非空，裁决 4 保守可选；write 恒 undefined） */
+    details?: { patch?: string; diff?: string; firstChangedLine?: number } | null;
+  };
 }
 export interface PiModelSelectEvent {
   type: "model_select";

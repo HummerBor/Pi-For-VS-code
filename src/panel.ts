@@ -6,7 +6,8 @@ import * as vscode from "vscode";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
-import type { HostToWebview, WebviewToHost } from "./protocol";
+import type { ChangesFileInfo, HostToWebview, ToolChangedFile, WebviewToHost } from "./protocol";
+import { reverseApplyPatch } from "./patchRevert";
 import { extractText, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
 
@@ -28,15 +29,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 鸭子 logo 的 data URI（重生成 HTML 时复用，不必每次读盘） */
   private duckUri = "";
 
+  // ── 工单七：本次改动（git diff 可视化）宿主侧状态。git/还原语义全在本 adapter，核心只产中性事件 ──
+  /** webview 展示清单（changesList 下发镜像）；空数组 = 无条 */
+  private changesFiles: ChangesFileInfo[] = [];
+  /** 还原/diff 动作所需细节（不进 webview）：归一化绝对路径 → 信息 */
+  private changesDetail = new Map<
+    string,
+    { source: "tool" | "git"; tool: string; patches: string[]; canGit: boolean; inHead: boolean; preexisting: boolean }
+  >();
+  private changesDismissed = false;
+  /** run 开始时的 git status 快照 Promise（区分「运行期间才出现的改动」与运行前既有 WIP） */
+  private runStartStatusP: Promise<Map<string, string> | null> | null = null;
+  /** 上一条 state 消息里的 sessionFile（会话切换 → 清变更条，会话域不残留） */
+  private lastStateFile: string | null = null;
+  /** HEAD 版本内容只读文档提供器（vscode.diff 左侧用，懒注册一次） */
+  private headProvider = vscode.workspace.registerTextDocumentContentProvider("pi-head", {
+    provideTextDocumentContent: (uri) => this.headContent(uri),
+  });
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly globalState: vscode.Memento,
     private readonly version: string
   ) {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
-    // 组装核心：宿主能力与 UI 动作由本 adapter 注入，webview 消息经 post 桥回传
-    this.core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.post(msg), version);
+    // 组装核心：宿主能力与 UI 动作由本 adapter 注入，webview 消息经 post 桥回传；
+    // 桥内先做 adapter 侧拦截（state 会话切换 → 清变更条），再转发 webview
+    this.core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg), version);
     this.core.lang = this.lang;
+    // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
+    this.core.onRunStart = () => this.snapshotGitStatus();
+    this.core.onRunSettled = (files) => void this.handleRunSettled(files);
   }
 
   /** HostCapabilities 的 VS Code 落地：核心（piCore）所需宿主能力，签名不含 vscode 类型 */
@@ -91,6 +114,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       cloneSession: () => this.cloneSession(),
       openTerminalLogin: () => this.openTerminalLogin(),
       startError: (err) => this.onStartError(err),
+      showChanges: () => this.showChangesFlow(),
+      dismissChanges: async () => {
+        this.changesDismissed = true;
+        this.postChangesList();
+      },
     };
   }
 
@@ -171,7 +199,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
       this.core.ensureClient();
     }
-    view.webview.onDidReceiveMessage((m: WebviewToHost) => void this.core.onWebviewMessage(m));
+    view.webview.onDidReceiveMessage((m: WebviewToHost) => {
+      // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
+      if (m.type === "webviewReady" && this.changesFiles.length) this.postChangesList();
+      void this.core.onWebviewMessage(m);
+    });
 
     // 监听编辑器选区，自动把选中代码 / 整个文件作为上下文（CC 同款）
     if (!this.editorDisposables.length) {
@@ -1232,6 +1264,233 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       .then((pick) => {
         if (pick === this.L.installPiBtn) void this.installPi();
       });
+  }
+
+  // ════════ 工单七：pi 变更 Git diff 可视化（混合方案，裁决 11） ════════
+
+  /** 核心消息桥：state 会话切换时清变更条（会话域信息不残留），其余原样转发 webview */
+  private pipeFromCore(msg: HostToWebview): void {
+    if (msg.type === "state") {
+      const f = msg.sessionFile ?? null;
+      if (f !== this.lastStateFile) {
+        this.lastStateFile = f;
+        if (this.changesFiles.length) {
+          this.changesFiles = [];
+          this.changesDetail.clear();
+          this.postChangesList();
+        }
+      }
+    }
+    this.post(msg);
+  }
+
+  private postChangesList(): void {
+    this.post({ type: "changesList", files: this.changesDismissed ? [] : this.changesFiles });
+  }
+
+  /** agent_start 时对 workspace 做 git status 快照（run 的 baseline；非 git 目录得 null 兑底） */
+  private snapshotGitStatus(): void {
+    this.runStartStatusP = null;
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) return;
+    this.runStartStatusP = this.gitStatus(root);
+  }
+
+  /** 跑一条 git 命令，成功回 stdout、失败回 null（非 git 目录/git 不在 PATH 都走 null，不抛） */
+  private git(args: string[], cwd: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      // 不用 shell:true：路径参数含空格/中文时不被 shell 拆坏（Windows 上 libuv 会搜 PATH）
+      const p = spawn("git", args, { cwd });
+      let out = "";
+      const timer = setTimeout(() => p.kill(), 15000);
+      p.stdout.on("data", (d) => (out += String(d)));
+      p.on("error", () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+      p.on("close", (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? out : null);
+      });
+    });
+  }
+
+  /** git status --porcelain -z → 相对路径(正斜杠) → XY 状态；非 git 目录回 null。
+   *  -z 避开 quotepath 对中文路径的转义；rename 在 -z 下是 new\0old 两段，old 段跳过 */
+  private async gitStatus(root: string): Promise<Map<string, string> | null> {
+    const out = await this.git(["status", "--porcelain", "-z"], root);
+    if (out === null) return null;
+    const map = new Map<string, string>();
+    const parts = out.split("\0");
+    for (let i = 0; i < parts.length - 1; i++) {
+      const tok = parts[i];
+      if (!tok || tok.length < 4) continue;
+      const xy = tok.slice(0, 2);
+      const p = tok.slice(3);
+      if (xy[0] === "R" || xy[0] === "C" || xy[1] === "R" || xy[1] === "C") i++; // 旧路径段
+      map.set(p, xy);
+    }
+    return map;
+  }
+
+  /** agent_settled：合并工具命中清单（piCore 中性回调）与 git 比对兜底，产出「本次改动」 */
+  private async handleRunSettled(files: ToolChangedFile[]): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) return;
+    const startStatus = this.runStartStatusP ? await this.runStartStatusP : null;
+    this.runStartStatusP = null;
+    const nowStatus = await this.gitStatus(root);
+    const relOf = (abs: string): string | null => {
+      const r = path.relative(root, abs);
+      return r.startsWith("..") ? null : r.replace(/\\/g, "/"); // 工作区外不归因
+    };
+    const norm = (p: string): string => path.normalize(p);
+    this.changesDetail.clear();
+    const list: ChangesFileInfo[] = [];
+    // 1) 工具命中（裁决 11②：还原只对工具清单命中文件提供；git-only 仅展示）
+    for (const f of files) {
+      const r = relOf(f.path);
+      const xy = r && nowStatus ? nowStatus.get(r) : undefined;
+      const canGit = nowStatus !== null;
+      // inHead：HEAD 里有此文件（checkout 可回退）；?? 未跟踪 / A 新增不在 HEAD，只能走 patch 逆向
+      const inHead = canGit && !!xy && xy !== "??" && xy[0] !== "A" && xy[1] !== "A";
+      this.changesDetail.set(norm(f.path), {
+        source: "tool",
+        tool: f.tool,
+        patches: f.patches,
+        canGit,
+        inHead,
+        preexisting: !!(r && startStatus?.has(r)),
+      });
+      list.push({ path: norm(f.path), source: "tool" });
+    }
+    // 2) git 兑底（裁决 11①：捕获 bash/powershell 改动）——settled 快照里新出现的路径
+    if (nowStatus) {
+      for (const [r, xy] of nowStatus) {
+        const abs = norm(path.join(root, r));
+        if ([...this.changesDetail.keys()].some((k) => k.toLowerCase() === abs.toLowerCase())) continue;
+        if (startStatus?.has(r)) continue; // 运行前已 dirty，不归因本轮
+        this.changesDetail.set(abs, { source: "git", tool: "", patches: [], canGit: true, inHead: xy !== "??" && xy[0] !== "A", preexisting: false });
+        list.push({ path: abs, source: "git" });
+      }
+    }
+    this.changesFiles = list;
+    this.changesDismissed = false;
+    this.postChangesList();
+  }
+
+  /** 「查看本次改动」主链路：文件 QuickPick → 动作二选（diff / 还原） */
+  private async showChangesFlow(): Promise<void> {
+    if (!this.changesFiles.length) {
+      this.post({ type: "notice", text: this.L.chgNone });
+      return;
+    }
+    const items = this.changesFiles.map((f) => {
+      const d = this.changesDetail.get(f.path);
+      const src = !d ? ""
+        : d.source === "git" ? this.L.chgGitOnly
+        : this.revertable(d) ? this.L.chgToolRev
+        : this.L.chgToolIrrev;
+      return {
+        label: "$(git-compare) " + path.basename(f.path),
+        description: src + (d?.preexisting ? " · " + this.L.chgPreexisting : ""),
+        detail: f.path,
+        path: f.path,
+      };
+    });
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.chgPickPh });
+    if (!pick) return;
+    const d = this.changesDetail.get(pick.path);
+    const actions: string[] = [];
+    if (d?.canGit && d.inHead) actions.push(this.L.chgActDiff);
+    if (d && this.revertable(d)) actions.push(this.L.chgActRevert);
+    if (!actions.length) {
+      this.post({ type: "notice", text: this.L.chgNoAction });
+      return;
+    }
+    const act = actions.length === 1 ? actions[0]
+      : await vscode.window.showQuickPick(actions, { placeHolder: path.basename(pick.path) });
+    if (act === this.L.chgActDiff) await this.openHeadDiff(pick.path);
+    else if (act === this.L.chgActRevert && d) await this.revertFile(pick.path, d);
+  }
+
+  /** 还原资格（裁决 11②③）：仅工具命中；tracked 走 git，未跟踪/无 git 仅 edit 有 patch 可逆打 */
+  private revertable(d: { source: string; tool: string; patches: string[]; canGit: boolean; inHead: boolean }): boolean {
+    if (d.source !== "tool") return false;
+    if (d.canGit && d.inHead) return true;
+    return d.tool === "edit" && d.patches.length > 0;
+  }
+
+  /** vscode.diff 左侧：HEAD 版本只读内容（TextDocumentContentProvider 回调） */
+  private async headContent(uri: vscode.Uri): Promise<string> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const rel = decodeURIComponent(uri.query);
+    if (!root) return this.L.chgHeadFail;
+    const out = await this.git(["show", "HEAD:" + rel], root);
+    return out ?? this.L.chgHeadFail;
+  }
+
+  /** 查看 tracked 文件的 HEAD ↔ 工作区 diff */
+  private async openHeadDiff(abs: string): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) return;
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    const headUri = vscode.Uri.parse("pi-head:/" + encodeURIComponent(abs) + "?" + encodeURIComponent(rel));
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      headUri,
+      vscode.Uri.file(abs),
+      path.basename(abs) + "  (HEAD ↔ " + this.L.chgWorking + ")",
+      { preview: true }
+    );
+  }
+
+  /** 单文件还原（破坏性操作，deleteSession 同规格：模态二次确认，失败只报不硬打） */
+  private async revertFile(
+    abs: string,
+    d: { source: string; tool: string; patches: string[]; canGit: boolean; inHead: boolean; preexisting: boolean }
+  ): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) return;
+    // 编辑器里有未保存修改时提醒：还原的是磁盘内容，脏缓冲不会自动同步
+    const dirty = vscode.workspace.textDocuments.some((doc) => doc.uri.fsPath === abs && doc.isDirty);
+    const detailParts = [abs];
+    if (d.preexisting) detailParts.push(this.L.chgPreexisting);
+    if (dirty) detailParts.push(this.L.chgDirtyWarn);
+    const yes = await vscode.window.showWarningMessage(
+      this.L.chgRevertAsk,
+      { modal: true, detail: detailParts.join("\n") },
+      this.L.chgRevertBtn
+    );
+    if (yes !== this.L.chgRevertBtn) return;
+    try {
+      if (d.canGit && d.inHead) {
+        const rel = path.relative(root, abs).replace(/\\/g, "/");
+        const out = await this.git(["checkout", "HEAD", "--", rel], root);
+        if (out === null) {
+          this.post({ type: "notice", text: this.L.chgRevertFail + "git checkout 失败" });
+          return;
+        }
+      } else {
+        // 未跟踪/无 git：edit patch 链逆序逆向（裁决 11③）。任一步不符 → 拒打不落盘
+        let content = fs.readFileSync(abs, "utf8");
+        for (let i = d.patches.length - 1; i >= 0; i--) {
+          const r = reverseApplyPatch(content, d.patches[i]);
+          if (!r.ok || r.content === null) {
+            this.post({ type: "notice", text: this.L.chgIrreversible + (r.reason ?? "") });
+            return;
+          }
+          content = r.content;
+        }
+        fs.writeFileSync(abs, content, "utf8");
+      }
+      this.post({ type: "notice", text: this.L.chgRevertDone + path.basename(abs) });
+      this.changesFiles = this.changesFiles.filter((f) => f.path !== abs);
+      this.changesDetail.delete(abs);
+      this.postChangesList();
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.chgRevertFail + (err?.message ?? err) });
+    }
   }
 }
 

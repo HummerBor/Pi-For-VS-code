@@ -5,7 +5,7 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload } from "../src/protocol";
+import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo } from "../src/protocol";
 import { toolDetail } from "../src/toolDetail";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -39,6 +39,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var pmAt = document.getElementById('pm-at') as HTMLElement;
   var historyEl = document.getElementById('history') as HTMLElement;
   var bannerEl = document.getElementById('banner') as HTMLElement;
+  var changesBarEl = document.getElementById('changesbar') as HTMLElement;
 
   // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──
   var ICON_PATHS = {
@@ -190,6 +191,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     x.onclick = function () { vscode.postMessage({ type: 'bannerClose' }); };
     bannerEl.appendChild(x);
     bannerEl.style.display = 'flex';
+  }
+
+  /** 工单七：本轮变更文件条。宿主已算好清单，这里只渲染；
+   *  查看/关闭都上报宿主（showChanges 出 QuickPick，dismiss 宿主收口不重发） */
+  function renderChanges(files: ChangesFileInfo[]) {
+    if (!files || !files.length) { changesBarEl.style.display = 'none'; changesBarEl.innerHTML = ''; return; }
+    changesBarEl.innerHTML = '';
+    var txt = document.createElement('span'); txt.className = 'b-txt';
+    txt.textContent = L.changesCount.replace('{n}', String(files.length));
+    changesBarEl.appendChild(txt);
+    var act = document.createElement('button'); act.className = 'b-act'; act.textContent = L.changesView;
+    act.onclick = function () { vscode.postMessage({ type: 'showChanges' }); };
+    changesBarEl.appendChild(act);
+    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
+    x.onclick = function () { vscode.postMessage({ type: 'changesDismiss' }); };
+    changesBarEl.appendChild(x);
+    changesBarEl.style.display = 'flex';
   }
   // 毫秒 → 紧凑时长（42s / 1m23s / 1h2m）；供 Working 实时计数与本轮耗时显示共用
   function fmtDur(ms) {
@@ -904,6 +922,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
     else if (m.type === 'state') applyState(m);
     else if (m.type === 'banner') renderBanner(m.banner);
+    else if (m.type === 'changesList') renderChanges(m.files);
     else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }
   });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）

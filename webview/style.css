@@ -137,10 +137,11 @@ body[data-theme='midnight'] pre.code { background: #101a30; }
 body[data-theme='midnight'] #composer { background: #0e1830; border-color: #22345c; }
 body[data-theme='midnight'] #input { color: #dbe4f0; }
 body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { background: #14203a; border-color: #22345c; }
-/* ── 压缩横幅（工单六）：header 下、messages 上的单行通知条，随主题走 VS Code 变量 ── */
-#banner { display: none; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.12)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
-#banner .b-txt { flex: 1; min-width: 0; }
-#banner .b-act { flex: none; font-size: 11px; padding: 2px 8px; cursor: pointer; border: none; border-radius: 3px; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); }
-#banner .b-act:hover { background: var(--vscode-button-hoverBackground, rgba(0,120,212,.85)); }
-#banner .b-close { flex: none; cursor: pointer; opacity: .55; padding: 0 2px; }
-#banner .b-close:hover { opacity: 1; }
+/* ── 压缩横幅（工单六）+ 变更文件条（工单七）：header 下、messages 上的单行通知条，随主题走 VS Code 变量 ──
+   注意：本文件注释只能用成对的星号斜杠包住，双斜杠会整段失效（老坑，别改） ── */
+#banner, #changesbar { display: none; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.12)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
+#banner .b-txt, #changesbar .b-txt { flex: 1; min-width: 0; }
+#banner .b-act, #changesbar .b-act { flex: none; font-size: 11px; padding: 2px 8px; cursor: pointer; border: none; border-radius: 3px; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); }
+#banner .b-act:hover, #changesbar .b-act:hover { background: var(--vscode-button-hoverBackground, rgba(0,120,212,.85)); }
+#banner .b-close, #changesbar .b-close { flex: none; cursor: pointer; opacity: .55; padding: 0 2px; }
+#banner .b-close:hover, #changesbar .b-close:hover { opacity: 1; }
