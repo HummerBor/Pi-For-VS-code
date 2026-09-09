@@ -474,13 +474,6 @@ export class PiCore {
       case "openPath":
         await this.ui.openPath(m.path);
         break;
-      case "deleteSession":
-        try {
-          fs.rmSync(m.file, { force: true });
-        } catch {
-          // ignore
-        }
-        break;
       case "getFiles":
         await this.sendWorkspaceFiles();
         break;

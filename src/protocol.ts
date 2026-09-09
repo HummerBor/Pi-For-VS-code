@@ -69,10 +69,8 @@ export interface WvOpenPathMsg {
   type: "openPath";
   path: string;
 }
-export interface WvDeleteSessionMsg {
-  type: "deleteSession";
-  file: string;
-}
+// WvDeleteSessionMsg 已删（工单四-3 死链清理）：webview 从无发送端，宿主 case 曾是裸 rmSync。
+// 删除走宿主 QuickPick deleteSessionPick 路径（4781f78），webview 直删不再提供
 export interface WvGetFilesMsg {
   type: "getFiles";
 }
@@ -112,7 +110,6 @@ export type WebviewToHost =
   | WvOpenSessionMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
-  | WvDeleteSessionMsg
   | WvGetFilesMsg
   | WvMoreMsg
   | WvSettingsMsg

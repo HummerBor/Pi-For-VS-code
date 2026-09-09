@@ -604,13 +604,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       case "openPath":
         await this.openFilePath(m.path);
         break;
-      case "deleteSession":
-        try {
-          fs.rmSync(m.file, { force: true });
-        } catch {
-          // ignore
-        }
-        break;
       case "getFiles":
         await this.sendWorkspaceFiles();
         break;
@@ -792,8 +785,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 删除历史会话：二级选择 + 确认弹窗（破坏性不可逆）。
    *  守卫：① 当前打开的会话不删（pi 还在追加写入，删了数据丢失且进程行为未定义）；
-   *  ② 路径必须位于 sessions 目录内（listSessions 虽然只从这里收，但 case
-   *  "deleteSession" 曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上） */
+   *  ② 路径必须位于 sessions 目录内（listSessions 虽然只从这里收，但 webview 直删
+   *  死链曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上） */
   private async deleteSessionPick(scope: "project" | "all" | "auto"): Promise<void> {
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const sessions = scope === "all" ? listSessions() : listSessions(wsPath);
