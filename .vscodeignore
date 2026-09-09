@@ -1,6 +1,7 @@
 .vscode/**
 src/**
 webview/**
+scripts/**
 node_modules/**
 out/**/*.map
 dist/**/*.map
