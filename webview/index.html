@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="{{lang}}">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}'; img-src data:;">
+  <style>{{css}}</style>
+  <style>html { background: {{floorColor}} !important; }</style>{{solidBgStyle}}
+</head>
+<body data-theme="{{theme}}">
+  {{bgLayer}}
+  <div id="header">
+    <div id="hdr-row1">
+      <img id="logo" src="{{duckUri}}" title="Pi For VSC">
+      <span id="session" class="hdr-btn" title="{{t:sessionBtnTitle}}">{{t:sessionLabel}}—</span>
+      <span class="spacer"></span>
+      <span id="history" class="ico-btn" title="{{t:historyTitle}}"></span>
+      <span id="newchat" class="ico-btn" title="{{t:newChatTitle}}"></span>
+      <span id="more" class="ico-btn" title="{{t:moreTitle}}"></span>
+      <span id="lang" class="ico-btn" title="{{t:langBtnTitle}}">{{langBtn}}</span>
+      <span id="theme" class="ico-btn" title="{{t:themeTitle}}"></span>
+    </div>
+  </div>
+  <div id="messages">
+    <div id="welcome">
+      <img class="w-duck" src="{{duckUri}}" width="96" height="96">
+      <div class="w-title">{{t:welcomeTitle}}</div>
+      <div class="w-tip"></div>
+      <div class="w-sub">{{t:welcomeSub}}</div>
+    </div>
+  </div>
+  <div id="queuebar"></div>
+  <div id="statusline"><span id="status"></span></div>
+  <div id="composer">
+    <div id="suggest"></div>
+    <div id="plusmenu">
+      <div class="pm-item" id="pm-upload"></div>
+      <div class="pm-item" id="pm-at"></div>
+    </div>
+    <input type="file" id="file" multiple style="display:none">
+    <div id="attachbar"></div>
+    <textarea id="input" placeholder="{{t:inputPlaceholder}}"></textarea>
+    <div id="ctoolbar">
+      <span id="attach" class="tb-btn" title="{{t:attachTitle}}"></span>
+      <span id="codechip" style="display:none"></span>
+      <span class="tb-spacer"></span>
+      <button id="stop" title="{{t:stopTitle}}"></button>
+      <button id="send" title="{{t:sendTitle}}"></button>
+    </div>
+  </div>
+  <div id="bottombar">
+    <span id="model" class="tb-btn" title="{{t:modelTitle}}">—</span>
+    <span id="think" class="tb-btn" title="{{t:thinkTitle}}">{{t:thinkLabel}}—</span>
+    <span id="modebadge" class="tb-btn" title="{{t:modeBadgeTitle}}"></span>
+    <span id="usage"></span>
+    <span id="ver"></span>
+  </div>
+  <script nonce="{{nonce}}">{{js}}</script>
+</body>
+</html>

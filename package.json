@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent (RPC mode)",
-  "version": "0.0.70",
+  "version": "0.0.73",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -109,12 +109,17 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "build:webview": "vite build",
+    "watch:webview": "vite build --watch",
+    "compile": "npm run build:webview && tsc -p ./",
+    "package": "npm run compile && npx @vscode/vsce package",
+    "release": "npm version patch --no-git-tag-version && npm run compile && npx @vscode/vsce package",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vite": "^8.2.2"
   }
 }

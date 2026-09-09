@@ -1,0 +1,139 @@
+html, body { height: 100%; margin: 0; }
+html { background: #1f1f1f !important; } /* 默认地板色；宿主按设置追加 inline 覆盖 */
+body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); color: var(--vscode-editor-foreground); background: var(--vscode-sideBar-background); }
+
+/* ── 头部 ── */
+#header { padding: 6px 10px 5px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
+#hdr-row1 { display: flex; align-items: center; gap: 6px; }
+#bg-layer { position: fixed; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; z-index: 0; }
+body > :not(#bg-layer) { position: relative; z-index: 1; }
+#logo { width: 18px !important; height: 18px !important; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; border: none; padding: 0; background: none; border-radius: 0; }
+#welcome { display: flex; flex-direction: column; align-items: center; padding-top: 18vh; }
+#welcome .w-duck { width: 96px !important; height: 96px !important; object-fit: contain; image-rendering: pixelated; border: none; padding: 0; background: none; border-radius: 0; }
+#welcome .w-title { margin-top: 14px; font-size: 15px; font-weight: 600; }
+#welcome .w-tip { margin-top: 10px; font-size: 11px; opacity: .6; max-width: 280px; text-align: center; line-height: 1.7; }
+#welcome .w-sub { margin-top: 6px; font-size: 11px; opacity: .55; }
+#title { font-weight: bold; font-size: 12px; }
+#session { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ctoolbar #usage { font-size: 11px; opacity: .6; margin-right: 8px; white-space: nowrap; }
+.ico-btn { cursor: pointer; padding: 3px 5px; border-radius: 4px; opacity: .8; display: inline-flex; align-items: center; line-height: 0; }
+.ico-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }
+.spacer { flex: 1; }
+.spacer-right { margin-left: auto; }
+.hdr-btn { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; max-width: 100%; }
+.hdr-btn:hover { opacity: 1; text-decoration: underline; }
+
+/* ── 消息区 ── */
+#messages { flex: 1; overflow-y: auto; padding: 10px 10px 4px; }
+* { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.5) transparent; } /* 标准属性兑底：部分 Chromium 环境里 webkit 伪元素滚动条不生效 */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 1.5px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,.65); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+#queuebar { padding: 0 12px 3px; }
+.q-item { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .65; padding: 2px 0; }
+.q-item .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; }
+.bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; max-width: 88%; }
+.bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }
+.bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }
+.bubble.errmsg { background: transparent; border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c); color: var(--vscode-errorForeground, #f66); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+.errmsg-retry { cursor: pointer; text-decoration: underline; font-family: var(--vscode-font-family, sans-serif); opacity: .9; }
+.errmsg-retry:hover { opacity: 1; }
+.md-p { white-space: pre-wrap; }
+.md-h { font-weight: bold; margin: 6px 0 2px; }
+.md-li { padding-left: 12px; }
+.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.md-table th, .md-table td { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding: 3px 8px; text-align: left; }
+.md-table th { background: var(--vscode-editorWidget-background, rgba(128,128,128,.12)); }
+.md-quote { border-left: 3px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin: 2px 0; opacity: .85; }
+code { font-family: var(--vscode-editor-font-family, monospace); font-size: .92em; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.2)); padding: 0 3px; border-radius: 3px; }
+pre.code { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.15)); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 6px 0; }
+details.think { margin: 6px 0; opacity: .55; font-size: 12px; }
+details.think summary { cursor: pointer; user-select: none; }
+.think-body { white-space: pre-wrap; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin-top: 4px; }
+.tool { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .85; margin: 5px 0 2px 8px; padding: 2px 6px; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); }
+.tool-out { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .55; white-space: pre-wrap; margin: 0 0 4px 16px; }
+.notice { font-size: 11px; opacity: .55; margin: 4px 8px; }
+
+/* ── 工具行（CC 风格块结构）── */
+.tool { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px 2px; padding: 4px 8px; font-size: 12px; cursor: pointer; border-radius: 6px; font-family: var(--vscode-font-family); }
+.tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.12)); }
+.tool .t-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-descriptionForeground, #888); }
+.tool.ok .t-dot { background: #4ec96e; box-shadow: 0 0 4px rgba(78,201,110,.5); }
+.tool.err .t-dot { background: #f66; box-shadow: 0 0 4px rgba(255,102,102,.5); }
+.tool.run .t-dot { background: transparent; border: 2px solid var(--vscode-focusBorder, #0078d4); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+.tool .t-name { font-weight: bold; color: var(--vscode-editor-foreground); }
+.tool .t-detail { opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.tool .t-arrow { opacity: .4; display: inline-flex; align-items: center; transition: transform .15s; }
+.tool.open .t-arrow { transform: rotate(90deg); }
+.tool-box { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; }
+.tool-box .tb-row { display: flex; gap: 8px; padding: 6px 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; }
+.tool-box .tb-row + .tb-row { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
+.tool-box .tb-tag { flex: none; opacity: .65; width: 26px; }
+.tool-box .tb-val { white-space: pre-wrap; word-break: break-all; opacity: .85; }
+
+/* ── 输入区（Claude Code 风格卡片）── */
+#composer { margin: 0 10px 8px; position: relative; display: flex; flex-direction: column; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 10px; background: var(--vscode-input-background); }
+#composer:focus-within { border-color: var(--vscode-focusBorder, #0078d4); }
+#attachbar { display: none; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+#ctoolbar #codechip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 18px; padding: 1px 10px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 999px; background: transparent; cursor: pointer; white-space: nowrap; opacity: .85; height: auto; }
+#ctoolbar #codechip:hover { border-color: var(--vscode-focusBorder, #0078d4); opacity: 1; }
+.chip-img { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; border-radius: 7px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; }
+.chip-img img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; }
+.chip-x { cursor: pointer; opacity: .6; padding: 0 2px; }
+.chip-file { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 10px; border-radius: 999px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-x:hover { opacity: 1; }
+#suggest { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }
+.sg-item { display: flex; align-items: center; gap: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.sg-item.active, .sg-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
+.sg-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-detail { margin-left: auto; opacity: .45; font-size: 11px; white-space: nowrap; }
+.sg-header { padding: 6px 10px 2px; font-size: 10px; font-weight: bold; opacity: .45; text-transform: uppercase; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); margin-top: 2px; }
+.sg-header:first-child { margin-top: 0; border-top: none; }
+#plusmenu { display: none; position: absolute; bottom: 42px; left: 8px; min-width: 170px; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; overflow: hidden; }
+.pm-item { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.pm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
+.fp { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.fp:hover { color: var(--vscode-textLink-foreground, #4daafc); }
+#input { display: block; width: 100%; box-sizing: border-box; resize: none; height: 54px; min-height: 54px; max-height: 220px; overflow-y: hidden; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 8px 10px; font-family: inherit; font-size: var(--vscode-font-size, 13px); line-height: 1.5; }
+#ctoolbar { display: flex; align-items: center; gap: 6px; padding: 2px 8px 7px; }
+.tb-btn { cursor: pointer; padding: 0 8px; height: 26px; display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; font-size: 12px; opacity: .8; white-space: nowrap; }
+#codechip.off { opacity: .4; text-decoration: line-through; }
+.cc-range { opacity: .6; margin-left: 1px; }
+.tb-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }
+.tb-spacer { flex: 1; }
+#send, #stop { width: 34px; height: 26px; padding: 0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+#send:hover, #stop:hover { background: var(--vscode-button-hoverBackground); }
+#stop { display: none; background: var(--vscode-inputValidation-errorBackground, #b91c1c); }
+
+/* ── 底部状态栏 ── */
+#bottombar { display: flex; align-items: center; gap: 10px; padding: 0 12px 6px; font-size: 11px; opacity: .8; }
+#bottombar #usage { margin-left: auto; white-space: nowrap; opacity: .8; }
+#statusline { display: flex; align-items: center; min-height: 16px; padding: 0 14px 2px; font-size: 11px; }
+#bottombar #ver { opacity: .45; }
+#status.busy { font-weight: 600; color: var(--vscode-textLink-foreground, #4daafc); animation: wpulse 1.2s ease-in-out infinite; }
+#bottombar .tb-btn { padding: 0 6px; height: 20px; }
+.working-row { padding: 4px 14px; font-size: 12px; opacity: .7; }
+@keyframes wpulse { 0%, 100% { opacity: 1; text-shadow: 0 0 10px rgba(77,170,252,.9); } 50% { opacity: .4; text-shadow: none; } }
+
+/* ── 主题（🎨 切换，跟随 VS Code / CC 暗黑 / 午夜蓝）── */
+body[data-theme='cc-dark'] { background: #0a0a0c; color: #e6e6e9; }
+body[data-theme='cc-dark'] #header { border-bottom: 1px solid #22222a; }
+body[data-theme='cc-dark'] .bubble.user { background: #8a4b2f; color: #fff; }
+body[data-theme='cc-dark'] .bubble.assistant { background: #17171c; }
+body[data-theme='cc-dark'] .tool:hover, body[data-theme='cc-dark'] .tool-box { background: #121216; }
+body[data-theme='cc-dark'] pre.code { background: #121216; }
+body[data-theme='cc-dark'] #composer { background: #131318; border-color: #2a2a33; }
+body[data-theme='cc-dark'] #input { color: #e6e6e9; }
+body[data-theme='cc-dark'] #suggest, body[data-theme='cc-dark'] #plusmenu { background: #17171c; border-color: #2a2a33; }
+
+body[data-theme='midnight'] { background: #0b1220; color: #dbe4f0; }
+body[data-theme='midnight'] .bubble.user { background: #2b4a7a; color: #fff; }
+body[data-theme='midnight'] .bubble.assistant { background: #14203a; }
+body[data-theme='midnight'] .tool:hover, body[data-theme='midnight'] .tool-box { background: #101a30; }
+body[data-theme='midnight'] pre.code { background: #101a30; }
+body[data-theme='midnight'] #composer { background: #0e1830; border-color: #22345c; }
+body[data-theme='midnight'] #input { color: #dbe4f0; }
+body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { background: #14203a; border-color: #22345c; }

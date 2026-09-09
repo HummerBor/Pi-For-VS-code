@@ -6,11 +6,11 @@
 
 ## 主题
 
-![主题一览](media/themes.png)
+![主题一览](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/themes.png)
 
 - **跟随 VS Code**：按窗口深浅自动取色，配合壁纸插件也能融进背景
 
-![跟随 VS Code 主题](media/跟随vsc.png)
+![跟随 VS Code 主题](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E8%B7%9F%E9%9A%8Fvsc.png)
 
 ## 特点
 
@@ -23,7 +23,7 @@
 
 在 [扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜 `Pi For VSC` 安装 → 点活动栏 pi 图标。没装 pi 会引导一键安装，没配 key 会引导配置，然后就能聊了：
 
-![干活实景](media/测试.png)
+![干活实景](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E6%B5%8B%E8%AF%95.png)
 
 ## 为什么自己搓一个
 

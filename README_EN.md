@@ -6,11 +6,11 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 ## Themes
 
-![Themes](media/themes.png)
+![Themes](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/themes.png)
 
 - **Follow VS Code**: adapts to the window's color scheme; blends into wallpaper extensions too
 
-![Follow VS Code theme](media/跟随vsc.png)
+![Follow VS Code theme](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E8%B7%9F%E9%9A%8Fvsc.png)
 
 ## Highlights
 
@@ -23,7 +23,7 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) → click the pi icon in the activity bar. Missing pi triggers a one-click install; missing keys walk you through setup. Then just chat:
 
-![Working](media/测试.png)
+![Working](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E6%B5%8B%E8%AF%95.png)
 
 ## Why build it
 

@@ -1,7 +1,10 @@
 .vscode/**
 src/**
+webview/**
 node_modules/**
 out/**/*.map
+dist/**/*.map
+vite.config.ts
 HANDOVER.md
 .gitignore
 tsconfig.json
@@ -9,12 +12,8 @@ tsconfig.json
 *.zip
 **/*.map
 
-# 根目录散落的截图等杂件不打包；media 只带白名单文件
+# 截图只服务 GitHub/Marketplace 的 README（已改为仓库 raw URL），不进 vsix
 /*.png
 media/*
 !media/pi-icon.png
 !media/pi-logo.svg
-!media/image.png
-!media/themes.png
-!media/跟随vsc.png
-!media/测试.png
