@@ -4,6 +4,7 @@ out/
 *.zip
 HANDOVER.md
 DIRECTOR.md
+BUILDER.md
 
 # webview vite 构建产物
 dist/
