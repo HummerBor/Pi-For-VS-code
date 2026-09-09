@@ -624,7 +624,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.split(/[\\/]/).pop() || L.ephemeralSession;
   }
   function applyState(m) {
-    setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
+    // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
+    //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
+    if (statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
     modelEl.innerHTML = ico('cpu') + ' ' + esc(m.model ? (m.model.name || m.model.id) : '—');
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');

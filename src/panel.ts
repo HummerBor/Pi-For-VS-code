@@ -270,6 +270,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     client.onExit = (code, detail) => {
       this.busy = false;
       this.post({ type: "busy", value: false });
+      this.dbg("busy=false (pi_exit)");
       this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
       // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
       if (detail) this.post({ type: "notice", text: this.L.piExitedNotice + code + this.L.piExitedSuf + String.fromCharCode(10) + detail });
@@ -414,6 +415,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const wasBusy = this.busy;
         this.busy = true;
         this.post({ type: "busy", value: true });
+        this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
         const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
         // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
@@ -426,6 +428,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
         }
         try {
+          let steered = false;
           try {
             await client.prompt(text, wasBusy, m.images);
           } catch (e: any) {
@@ -434,18 +437,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             const msg = String(e?.message ?? e);
             if (!/already processing|streamingBehavior/i.test(msg)) throw e;
             this.post({ type: "notice", text: this.L.autoQueued });
+            steered = true;
+            // pi 拒收 = 它一定正在跑上一个 run：busy 必须纠回 true 并同步给 webview。
+            // 若不纠回：steer 不触发 agent_start，下方 4s 兜底会把 busy 清掉 → 整个 run 期间
+            // 宿主自认空闲，后续消息全部误判（Working 消失/排队气泡丢失的根源）
+            this.busy = true;
+            this.post({ type: "busy", value: true });
+            this.dbg("busy=true (steer_resend: pi rejected prompt as already processing)");
             await client.prompt(text, true, m.images);
           }
           // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
           if (!wasBusy && m.text) void this.autoTitleSession(m.text);
           // 命令式应答（如 /llama）不触发 agent_start/agent_settled，乐观置位的 busy 会永远卡住：
-          // 若 4s 后仍未等到 agent_start 则兑底清除（真跑起来的话 agent_start 会先置 pendingPrompt=false）
-          if (!wasBusy) {
+          // 若 4s 后仍未等到 agent_start 则兜底清除（真跑起来的话 agent_start 会先置 pendingPrompt=false）。
+          // steered 的 prompt 不适用：run 属于正在跑的原 prompt（agent_start 早已发过），
+          // busy 已在上方纠回 true，由那个 run 的 agent_settled 收尾
+          if (!wasBusy && !steered) {
             this.pendingPrompt = true;
             setTimeout(() => {
               if (this.busy && this.pendingPrompt) {
                 this.pendingPrompt = false;
                 this.busy = false;
+                this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
                 this.post({ type: "busy", value: false });
               }
             }, 4000);
@@ -453,6 +466,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         } catch (err: any) {
           this.busy = false;
           this.post({ type: "busy", value: false });
+          this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
           this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
         }
         break;
@@ -466,6 +480,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               this.pendingPrompt = false;
               this.busy = false;
               this.post({ type: "busy", value: false });
+              this.dbg("busy=false (abort_while_pendingPrompt)");
               break;
             }
             // pi 不把中断时的部分内容写进会话文件（content 为空），
@@ -1797,6 +1812,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
         this.post({ type: "busy", value: true });
+        this.dbg("busy=true (agent_start)");
         if (this.queued.length) void this.deliverQueuedInHistory();
         break;
 
@@ -1927,6 +1943,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           value: false,
           ...(this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
         });
+        this.dbg("busy=false (agent_settled, elapsedMs=" + (this.runStartTs > 0 ? Date.now() - this.runStartTs : "n/a") + ")");
         this.runStartTs = 0;
         this.lastQueueTotal = 0;
         if (this.abortSkipRender) {
