@@ -414,7 +414,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
         const wasBusy = this.busy;
         this.busy = true;
-        this.post({ type: "busy", value: true });
+        // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
+        // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
+        this.post({
+          type: "busy",
+          value: true,
+          ...(wasBusy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
+        });
         this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
         const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
