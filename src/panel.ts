@@ -92,7 +92,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
       }
     }
-    view.webview.html = getHtml(theme, this.duckUri, floorColor, url.replace(/'/g, "%27"), op, "", this.lang);
+    view.webview.html = getHtml(theme, this.duckUri, floorColor, url.replace(/'/g, "%27"), op, this.lang);
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {

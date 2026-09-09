@@ -109,9 +109,10 @@
     }
   },
   "scripts": {
+    "typecheck:webview": "tsc -p webview --noEmit",
     "build:webview": "vite build",
     "watch:webview": "vite build --watch",
-    "compile": "npm run build:webview && tsc -p ./",
+    "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "package": "npm run compile && npx @vscode/vsce package",
     "release": "npm version patch --no-git-tag-version && npm run compile && npx @vscode/vsce package",
     "ship": "npm run release && git add -A && git commit -m \"chore: release\" && git push && npx @vscode/vsce publish",

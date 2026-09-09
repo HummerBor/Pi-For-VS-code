@@ -4,7 +4,7 @@ webview/**
 node_modules/**
 out/**/*.map
 dist/**/*.map
-vite.config.ts
+vite.config.mts
 HANDOVER.md
 .gitignore
 tsconfig.json
