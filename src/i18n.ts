@@ -48,6 +48,12 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     noSessions: "没有找到历史会话（~/.pi/agent/sessions 为空）",
     pickSessionAll: "选择要恢复的历史会话（全部项目，按最近使用排序）",
     pickSessionProj: "选择当前项目的历史会话继续工作，或开始新会话",
+    // 会话删除（流程入口/确认弹窗走 NATIVE_KEYS 双语；结果通知跟面板语言）
+    delSessionEntry: "$(trash) 删除会话…",
+    delSessionAsk: "删除这个会话？文件将从磁盘永久移除，不可恢复",
+    delSessionCur: "这是当前打开的会话，请先新建或切换到其他会话再删除",
+    delSessionDone: "已删除 ",
+    delSessionFail: "删除失败: ",
     switchCancelled: "切换会话被扩展取消",
     sessionRestored: "已恢复会话: ",
     sessionOpFail: "会话操作失败: ",
@@ -387,6 +393,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     noSessions: "No past sessions found (~/.pi/agent/sessions is empty)",
     pickSessionAll: "Pick a session to resume (all projects, most recent first)",
     pickSessionProj: "Pick a session of this project to continue, or start a new one",
+    delSessionEntry: "$(trash) Delete session…",
+    delSessionAsk: "Delete this session? The file will be permanently removed from disk, this cannot be undone",
+    delSessionCur: "This is the currently open session — create or switch to another one before deleting",
+    delSessionDone: "Deleted ",
+    delSessionFail: "Delete failed: ",
     switchCancelled: "Session switch was cancelled by an extension",
     sessionRestored: "Session restored: ",
     sessionOpFail: "Session operation failed: ",
@@ -715,6 +726,8 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "modeManual", "modeManualDetail", "modeEditAuto", "modeEditAutoDetail", "modePlan", "modePlanDetail", "modeAuto", "modeAutoDetail", "modePicker",
   // 会话选择
   "startNewSession", "browseAllSessions", "pickSessionAll", "pickSessionProj",
+  // 会话删除（入口/确认弹窗双语；同删凭证一致）
+  "delSessionEntry", "delSessionAsk", "delSessionCur",
   // 新建会话确认
   "nsConfirm", "nsAbortAndNew", "cancel",
   // 文件对话框

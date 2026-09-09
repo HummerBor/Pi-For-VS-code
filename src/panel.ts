@@ -729,7 +729,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       label: string;
       description?: string;
       detail?: string;
-      action: "file" | "new" | "all";
+      action: "file" | "new" | "all" | "delete";
       file?: string;
     };
     const items: Item[] = [];
@@ -739,6 +739,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         items.push({ label: this.L.browseAllSessions, action: "all" });
       }
     }
+    // 删除入口独立于会话条目：避免误触（条目点击=切换，删除走二级选择+确认）
+    items.push({ label: this.L.delSessionEntry, action: "delete" });
     for (const s of sessions) {
       items.push({
         label: "$(history) " + (s.name || s.preview || path.basename(s.file)),
@@ -759,6 +761,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           : this.L.pickSessionProj,
     });
     if (!pick) return; // 用户取消 → 保持现状，首次输入消息时再启动 pi
+    if (pick.action === "delete") {
+      await this.deleteSessionPick(scope);
+      return;
+    }
 
     const client = this.ensureClient(true);
     try {
@@ -781,6 +787,57 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       await this.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
+    }
+  }
+
+  /** 删除历史会话：二级选择 + 确认弹窗（破坏性不可逆）。
+   *  守卫：① 当前打开的会话不删（pi 还在追加写入，删了数据丢失且进程行为未定义）；
+   *  ② 路径必须位于 sessions 目录内（listSessions 虽然只从这里收，但 case
+   *  "deleteSession" 曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上） */
+  private async deleteSessionPick(scope: "project" | "all" | "auto"): Promise<void> {
+    const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const sessions = scope === "all" ? listSessions() : listSessions(wsPath);
+    if (!sessions.length) {
+      this.post({ type: "notice", text: this.L.noSessions });
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      sessions.map((s) => ({
+        label: "$(trash) " + (s.name || s.preview || path.basename(s.file)),
+        description: s.cwd || undefined,
+        detail: s.time + "  ·  " + s.file,
+        file: s.file,
+      })),
+      { placeHolder: this.L.delSessionEntry }
+    );
+    if (!pick) return;
+    if (this.lastSessionFile && samePath(pick.file, this.lastSessionFile)) {
+      this.post({ type: "notice", text: this.L.delSessionCur });
+      return;
+    }
+    const root = path.join(os.homedir(), ".pi", "agent", "sessions");
+    let real: string;
+    try {
+      real = fs.realpathSync(pick.file);
+    } catch {
+      this.post({ type: "notice", text: this.L.delSessionFail + "file not found" });
+      return;
+    }
+    if (!real.startsWith(fs.realpathSync(root) + path.sep)) {
+      this.post({ type: "notice", text: this.L.delSessionFail + "outside sessions dir" });
+      return;
+    }
+    const yes = await vscode.window.showWarningMessage(
+      this.L.delSessionAsk,
+      { modal: true, detail: path.basename(pick.file) },
+      this.L.delete
+    );
+    if (yes !== this.L.delete) return;
+    try {
+      fs.rmSync(real, { force: true });
+      this.post({ type: "notice", text: this.L.delSessionDone + path.basename(real) });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.delSessionFail + (err?.message ?? err) });
     }
   }
 
