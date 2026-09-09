@@ -1141,7 +1141,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底 */
+  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底；
+   *  文件也缺失时回退 pi 默认 auto——返回空串会把徽标清空（用户实测徽标消失） */
   private modeBadgeText(): string {
     if (this.lastModeText) return this.lastModeText;
     try {
@@ -1151,7 +1152,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch {
       // ignore
     }
-    return "";
+    return "⚡ Auto";
   }
 
   /** 会话树导航：列出活跃分支上的用户消息，选一条从那里继续（对应 pi TUI 的 /tree，RPC 走 fork） */
