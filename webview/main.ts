@@ -6,6 +6,7 @@
  */
 import { STRINGS, type Lang } from "../src/i18n";
 import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile } from "../src/protocol";
+import { toolDetail } from "../src/toolDetail";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -491,11 +492,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         resultList.push(entry);
       }
     }
-    function historyDetail(args) {
-      if (!args) return '';
-      var v = args.command || args.file_path || args.path || args.url || args.query || args.pattern || args.skill || args.file || args.cmd || '';
-      if (!v) { for (var kk in args) { if (typeof args[kk] === 'string' && args[kk]) { v = args[kk]; break; } } }
-      return typeof v === 'string' ? v.replace(/\s+/g, ' ').slice(0, 120) : '';
+    function historyDetail(args: unknown) {
+      // 已并入共享实现（DIRECTOR 工单三）：与宿主流式工具行同一摘要逻辑，字段并集 + 首字符串兑底
+      return toolDetail(args);
     }
     function toolGroupRun(name, run, mi) {
       var allOk = true;

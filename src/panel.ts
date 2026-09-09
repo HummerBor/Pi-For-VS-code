@@ -7,6 +7,7 @@ import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb, fmt, fmt2 } from "./i18n";
 import { getHtml } from "./webview-html";
 import type { HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
+import { toolDetail } from "./toolDetail";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
@@ -1840,7 +1841,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           type: "toolStart",
           id: e.toolCallId,
           name: e.toolName,
-          detail: toolDetail(e.toolName, e.args),
+          detail: toolDetail(e.args),
         });
         break;
 
@@ -1853,7 +1854,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           isError: !!e.isError,
           text,
           // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来
-          detail: toolDetail(e.toolName, e.args),
+          detail: toolDetail(e.args),
         });
         break;
       }
@@ -2059,16 +2060,6 @@ function readSessionMeta(file: string): { name?: string; cwd?: string; preview?:
   } catch {
     return {};
   }
-}
-
-/** 从工具参数里提取一行摘要（命令 / 文件路径 / URL / 搜索词等） */
-function toolDetail(name: string, args: any): string {
-  if (!args) return "";
-  const v =
-    args.command ?? args.file_path ?? args.path ?? args.url ?? args.query ??
-    args.pattern ?? args.content ?? args.skill ?? args.name;
-  if (typeof v !== "string") return "";
-  return v.replace(/\s+/g, " ").slice(0, 120);
 }
 
 function extractText(content: any): string {
