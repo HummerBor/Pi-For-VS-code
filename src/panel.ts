@@ -1729,6 +1729,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } catch {
         // ignore
       }
+      // 真相对账：get_state.isStreaming 是 pi 的权威状态。只纠「镜像说空闲、真相在跑」方向——
+      // 反向不纠：prompt 乐观置位窗口内 isStreaming 尚为 false，纠了会打断正常反馈（那是 4s 兜底的职责）
+      if (st.isStreaming === true && !this.busy) {
+        this.busy = true;
+        this.pendingPrompt = false;
+        if (!this.runStartTs) this.runStartTs = Date.now();
+        this.post({ type: "busy", value: true });
+        this.dbg("busy=true (reconcile: get_state.isStreaming)");
+      }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
       this.lastSessionName = st?.sessionName ?? null;
@@ -1804,6 +1813,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
  }
 
   private async onPiEvent(e: PiEvent): Promise<void> {
+    // 事件流即真相：这四类事件只在 agent 运行中产生。若 busy 镜像为 false 时收到，
+    // 说明镜像已漂移（如 4s 兜底误清），立即纠回——脱同步不再能存活到 run 结束
+    if (
+      !this.busy &&
+      (e.type === "message_start" || e.type === "message_update" ||
+       e.type === "tool_execution_start" || e.type === "tool_execution_end")
+    ) {
+      this.busy = true;
+      this.pendingPrompt = false;
+      if (!this.runStartTs) this.runStartTs = Date.now();
+      this.post({ type: "busy", value: true });
+      this.dbg("busy=true (reconcile: " + e.type + " while mirror idle)");
+    }
     switch (e.type) {
       case "agent_start":
         this.busy = true;

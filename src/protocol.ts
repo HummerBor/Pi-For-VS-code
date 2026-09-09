@@ -329,6 +329,8 @@ export interface GetMessagesResult {
 }
 /** get_state 响应：会话/模型/思考等级等当前状态（pi 未保证的字段一律保守可选） */
 export interface GetStateResult {
+  /** pi 权限运行状态（rpc.md get_state）：busy 镜像漂移时的对账真相源 */
+  isStreaming?: boolean;
   sessionFile?: string;
   sessionName?: string;
   model?: { id: string; name?: string; provider?: string } | null;
