@@ -54,6 +54,11 @@ export class PiClient {
     this.buffer = "";
     this.stderrTail = "";
 
+    // pi 恰好在写 stdin 时退出会抛 EPIPE 未处理异常，监听后记日志即可（写入结果由响应超时兑底）
+    proc.stdin!.on("error", (err: Error) => {
+      console.error("[pi] stdin 写入失败:", err.message);
+    });
+
     proc.stdout!.on("data", (chunk: Buffer | string) => {
       this.buffer += chunk.toString("utf8");
       for (;;) {
@@ -131,15 +136,34 @@ export class PiClient {
   }
 
   private write(obj: object): void {
-    this.proc?.stdin?.write(JSON.stringify(obj) + "\n");
+    const stdin = this.proc?.stdin;
+    if (!stdin) return;
+    stdin.write(JSON.stringify(obj) + "\n");
   }
 
-  /** 发送一条 RPC 命令，返回命令响应（不是 agent 完整结果） */
-  send(cmd: object): Promise<any> {
+  /** RPC 命令响应超时：pi 正常即时 ack（含拒绝也是 response），超时视为 pi 活着但卡死 */
+  private static readonly SEND_TIMEOUT_MS = 30000;
+
+  /** 发送一条 RPC 命令，返回命令响应（不是 agent 完整结果）。
+   *  超时后从 pending 移除并 reject——迟到响应因 pending 已删而被静默忽略，不会二次 reject */
+  send(cmd: object, timeoutMs = PiClient.SEND_TIMEOUT_MS): Promise<any> {
     if (!this.running) return Promise.reject(new Error("pi 未在运行"));
     const id = "req-" + this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("pi 命令响应超时 (" + timeoutMs / 1000 + "s): " + (cmd as { type?: string }).type));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
       this.write({ ...cmd, id });
     });
   }

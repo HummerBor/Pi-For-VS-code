@@ -1410,7 +1410,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** 检测 pi 是否可用，返回版本号字符串，不可用返回 null */
+  /** 检测 pi 是否可用，返回版本号字符串，不可用返回 null。
+   *  10s 超时杀掉子进程兑底，防 pi --version 挂起时 Promise 永不 resolve */
   private piVersion(): Promise<string | null> {
     return new Promise((resolve) => {
       const p = spawn("pi", ["--version"], {
@@ -1418,9 +1419,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         windowsHide: true,
       });
       let out = "";
+      let done = false;
+      const finish = (v: string | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(v);
+      };
+      const timer = setTimeout(() => {
+        try {
+          p.kill();
+        } catch {
+          // ignore
+        }
+        finish(null);
+      }, 10000);
       p.stdout?.on("data", (d: Buffer) => (out += d.toString()));
-      p.on("error", () => resolve(null));
-      p.on("close", (code) => resolve(code === 0 ? out.trim().split("\n")[0] || "ok" : null));
+      p.on("error", () => finish(null));
+      p.on("close", (code) => finish(code === 0 ? out.trim().split("\n")[0] || "ok" : null));
     });
   }
 
