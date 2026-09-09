@@ -17,7 +17,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var stopBtn = document.getElementById('stop');
   var sendBtn = document.getElementById('send');
   var statusEl = document.getElementById('status');
-  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else { statusEl.textContent = ''; } }
   var modeBadge = document.getElementById('modebadge');
   var langEl = document.getElementById('lang');
   var codechipEl = document.getElementById('codechip');

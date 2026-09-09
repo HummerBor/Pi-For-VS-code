@@ -42,13 +42,15 @@ export function getHtml(
     langBtn: lang === "zh" ? "EN" : "中",
     theme,
     nonce,
-    floorColor,
     duckUri,
-    css,
+    // 样式注入整体在 TS 侧拼装：模板里不放 CSS，避免编辑器把 {{css}} 占位符当真 CSS 报错
+    headAssets:
+      "<style>" + css + "</style>" +
+      "<style>html { background: " + floorColor + " !important; }</style>" +
+      (solidBg ? "<style>body { background: " + solidBg + " !important; }</style>" : ""),
     // 防止产物里出现 </script 提前闭合标签
     js: js.replace(/<\/script/gi, "<\\/script"),
-    // 条件片段：纯色背景覆盖 / 背景图层
-    solidBgStyle: solidBg ? `<style>body { background: ${solidBg} !important; }</style>` : "",
+    // 条件片段：背景图层
     bgLayer: bgImage ? `<div id="bg-layer" style="background-image:url('${bgImage}');opacity:${bgOpacity}"></div>` : "",
   };
 

@@ -1835,6 +1835,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           name: e.toolName,
           isError: !!e.isError,
           text,
+          // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来
+          detail: toolDetail(e.toolName, e.args),
         });
         break;
       }
