@@ -33,6 +33,12 @@ export interface UiActions {
   pickThinking(): Promise<void>;
   pickTheme(): Promise<void>;
   pickLang(): Promise<void>;
+  /** 压缩上下文（面板原生 /compact：直接压不二次确认，810f39c）；带可选指令的入口在 ⚡ 菜单，属 adapter */
+  compactSession(): Promise<void>;
+  /** 导出会话为 HTML（面板原生 /export） */
+  exportSession(): Promise<void>;
+  /** 克隆当前会话（面板原生 /clone） */
+  cloneSession(): Promise<void>;
   openTerminalLogin(): void;
   /** pi 启动失败（找不到命令等）：宿主弹错误框并提供一键安装 */
   startError(err: Error): void;
@@ -110,7 +116,8 @@ export class PiCore {
     this.codeCtx = ctx;
   }
 
-  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底 */
+  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底；
+   *  文件也缺失时回退 pi 默认 auto——返回空串会把徽标清空（用户实测徽标消失，fc134df） */
   modeBadgeText(): string {
     if (this.lastModeText) return this.lastModeText;
     try {
@@ -120,7 +127,7 @@ export class PiCore {
     } catch {
       // ignore
     }
-    return "";
+    return "⚡ Auto";
   }
 
   /** 首次发消息时才启动 pi 后台进程；forceSession=true 时不用 --no-session（如切换历史会话） */
@@ -146,7 +153,7 @@ export class PiCore {
     client.onExit = (code, detail) => {
       this.busy = false;
       this.post({ type: "busy", value: false });
-      this.dbg("busy=false (pi_exit code=" + code + ")");
+      this.dbg("busy=false (pi_exit)");
       this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
       // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
       if (detail) this.post({ type: "notice", text: this.L.piExitedNotice + code + this.L.piExitedSuf + String.fromCharCode(10) + detail });
@@ -268,27 +275,35 @@ export class PiCore {
         break;
       }
       case "prompt": {
-        // pi 的 TUI 内置命令（/login /settings 等）在 RPC 模式下不会执行，只会被当成普通消息——拦截并给出正确入口
-        const tuiCmds: Record<string, { text?: string; run?: () => Promise<void> | void }> = {
-          "/login": { run: () => this.ui.openTerminalLogin() },
-          "/settings": { text: this.L.tuiSettings },
-          "/hotkeys": { text: this.L.tuiHotkeys },
-          "/theme": { text: this.L.tuiTheme },
-          "/help": { text: this.L.tuiHelp },
-          "/resume": { text: this.L.tuiResume },
-          "/model": { text: this.L.tuiModel },
-          "/thinking": { text: this.L.tuiThinking },
-          "/tree": { run: () => this.ui.treeFork() },
-          "/import": { run: () => this.ui.importSession() },
-          "/share": { run: () => this.ui.shareSession() },
-          "/copy": { text: this.L.tuiCopy },
-          "/quit": { text: this.L.tuiQuit },
-        };
+        // 斜杠命令拦截（必须在乐观置 busy 之前）：
+        // - 面板原生命令 → 本地执行，不碰 prompt（原因见 nativeSlashCommands 注释）
+        // - 终端专用命令 → 提示去终端，同样不能漏给模型
+        // - 技能/模板（/skill:xx、/模板名）不在表里 → 正常走 prompt，pi 展开后是真任务，busy 合理
+        // 按首 token 匹配：/compact xxx、/model gpt 这类带参数写法也能命中（参数忽略，
+        // 需要参数的原生命令自己弹输入框）
         const trimmed = String(m.text ?? "").trim().toLowerCase();
-        if (tuiCmds[trimmed]) {
-          const entry = tuiCmds[trimmed];
-          if (entry.text) this.post({ type: "notice", text: entry.text });
-          if (entry.run) void entry.run();
+        const firstTok = trimmed.split(/\s+/)[0];
+        const native = this.nativeSlashCommands().find((c) => "/" + c.name === firstTok);
+        if (native) {
+          void native.run();
+          break;
+        }
+        const tuiOnly: Record<string, string> = {
+          "/hotkeys": this.L.tuiHotkeys,
+          "/help": this.L.tuiHelp,
+          "/copy": this.L.tuiCopy,
+          "/quit": this.L.tuiQuit,
+          "/logout": this.L.tuiOnly,
+          "/name": this.L.tuiOnly,
+          "/session": this.L.tuiOnly,
+          "/scoped-models": this.L.tuiOnly,
+          "/reload": this.L.tuiOnly,
+          "/trust": this.L.tuiOnly,
+          "/changelog": this.L.tuiOnly,
+          "/debug": this.L.tuiOnly,
+        };
+        if (tuiOnly[firstTok]) {
+          this.post({ type: "notice", text: tuiOnly[firstTok] });
           break;
         }
         const client = this.ensureClient();
@@ -311,7 +326,13 @@ export class PiCore {
         // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
         const wasBusy = this.busy;
         this.busy = true;
-        this.post({ type: "busy", value: true });
+        // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
+        // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
+        this.post({
+          type: "busy",
+          value: true,
+          ...(wasBusy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
+        });
         this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
         const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
@@ -330,6 +351,10 @@ export class PiCore {
         // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
         //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
         // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
+        // 工单五-2 重审结论（直连）：兜底保留。正常 prompt 的 agent_start 毫秒级到达，
+        // 兜底唯一日常触发场景是「不产生 agent 运行的命令式 prompt」（扩展 registerCommand
+        // 集合开放无法枚举拦截，b040fb2 只拦了 /mode）——撤掉兜底这类 prompt 的 busy
+        // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
         if (!wasBusy) {
           this.pendingPrompt = true;
           setTimeout(() => {
@@ -347,6 +372,10 @@ export class PiCore {
           } catch (e: any) {
             // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
             // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
+            // 工单五-3 可达性结论（直连）：自愈保留。panel 读 wasBusy 与调 client.prompt 之间
+            // 无异步间隙（同一线程同步块），正常永不触发拒收；唯一可达场景是镜像已漂移
+            // （4s 兜底误清 busy 后用户再发消息 → steer=false 撞上运行中的 session.prompt）。
+            // 它是对账/兜底两层全失效时的最后一层，撤掉后漂移会以「发送失败」报错形式砸给用户
             const msg = String(e?.message ?? e);
             if (!/already processing|streamingBehavior/i.test(msg)) throw e;
             this.post({ type: "notice", text: this.L.autoQueued });
@@ -498,6 +527,31 @@ export class PiCore {
     }
   }
 
+  /** 面板原生斜杠命令表：输入框拦截、/ 补全两处共用一份（ce8521b，自 panel.ts 对账移植）。
+   *  这些命令绝不能走 client.prompt——pi SDK 对未注册的 /xxx 会把字面文本发给模型
+   *  （用户消息变成 "/compact"），对已注册扩展命令则立即返回且零 agent 事件
+   *  （面板乐观 busy → 假忙 4s），两条路都不对。
+   *  run 目标：纯 UI 流程经 UiActions 住 adapter，会话编排（newSession）留在本类 */
+  private nativeSlashCommands(): { name: string; desc: string; run: () => Promise<void> }[] {
+    return [
+      { name: "model", desc: this.L.natModel, run: () => this.ui.pickModel() },
+      { name: "thinking", desc: this.L.natThinking, run: () => this.ui.pickThinking() },
+      { name: "theme", desc: this.L.natTheme, run: () => this.ui.pickTheme() },
+      { name: "mode", desc: this.L.natMode, run: () => this.ui.pickMode() },
+      { name: "new", desc: this.L.natNew, run: () => this.newSession() },
+      { name: "resume", desc: this.L.natResume, run: () => this.ui.pickSession("project") },
+      { name: "fork", desc: this.L.natFork, run: () => this.ui.treeFork() },
+      { name: "tree", desc: this.L.natFork, run: () => this.ui.treeFork() },
+      { name: "import", desc: this.L.natImport, run: () => this.ui.importSession() },
+      { name: "share", desc: this.L.natShare, run: () => this.ui.shareSession() },
+      { name: "export", desc: this.L.natExport, run: () => this.ui.exportSession() },
+      { name: "compact", desc: this.L.natCompact, run: () => this.ui.compactSession() },
+      { name: "clone", desc: this.L.natClone, run: () => this.ui.cloneSession() },
+      { name: "login", desc: this.L.natLogin, run: async () => this.ui.openTerminalLogin() },
+      { name: "settings", desc: this.L.natSettings, run: () => this.ui.settings() },
+    ];
+  }
+
   /** ⚙ 新建会话（⚡ /commands 与 webview 皆可触发）：会话恢复编排的一部分 */
   private async newSession(): Promise<void> {
     const client = this.ensureClient();
@@ -569,13 +623,25 @@ export class PiCore {
       // 配置（已合并进操作命令菜单，条目在菜单里分组展示）
       { group: this.L.grpConfig, label: this.L.slashSettings, description: this.L.slashSettingsDesc, builtin: "settings" },
     ];
-    const ext = cmds.map((c: any) => ({
+    // 面板原生命令与 pi 扩展命令并列展示；同名（如 /mode 两边都有）以原生为准去重，
+    // 否则补全面板出现两条 /mode，一条走本地一条走扩展
+    const nat = this.nativeSlashCommands();
+    const nativeNames = new Set(nat.map((c) => c.name));
+    const native = nat.map((c) => ({
       group: this.L.grpCmds,
       label: "/" + c.name,
-      description: c.description || c.source || "",
+      description: c.desc,
       name: c.name,
     }));
-    this.post({ type: "slashList", commands: [...builtin, ...ext] });
+    const ext = cmds
+      .filter((c: any) => !nativeNames.has(String(c.name)))
+      .map((c: any) => ({
+        group: this.L.grpCmds,
+        label: "/" + c.name,
+        description: c.description || c.source || "",
+        name: c.name,
+      }));
+    this.post({ type: "slashList", commands: [...builtin, ...native, ...ext] });
   }
 
   /** 给 webview 提供工作区文件列表（相对路径 + 所在目录），供 @ 补全 */
@@ -729,6 +795,12 @@ export class PiCore {
         if (!this.runStartTs) this.runStartTs = Date.now();
         this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
         this.dbg("busy=true (reconcile: get_state.isStreaming)");
+      }
+      // 工单五-1 观察期断言（直连后镜像应与真相零漂移）：反向不一致只记日志不纠——
+      // busy=true 且已过 pendingPrompt 窗口时 pi 却空闲，意味着某个 busy setter 误清/漏清。
+      // 零触发观察期满后，本处与 onPiEvent 顶部的对账纠偏逻辑一并删除（DIRECTOR.md 工单五-1）
+      if (this.busy && !this.pendingPrompt && st.isStreaming === false) {
+        this.dbg("MISMATCH(reverse, observe-only): mirror busy but pi idle, pendingPrompt=false");
       }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
