@@ -5,7 +5,7 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile } from "../src/protocol";
+import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload } from "../src/protocol";
 import { toolDetail } from "../src/toolDetail";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -38,6 +38,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var pmUpload = document.getElementById('pm-upload') as HTMLElement;
   var pmAt = document.getElementById('pm-at') as HTMLElement;
   var historyEl = document.getElementById('history') as HTMLElement;
+  var bannerEl = document.getElementById('banner') as HTMLElement;
 
   // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──
   var ICON_PATHS = {
@@ -172,6 +173,24 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var modeText = 'Auto';
   var busyTimer = null; var busyStart = 0;
   function renderStatus() { modeBadge.textContent = modeText; }
+
+  /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
+   *  关闭/一键压缩都上报宿主，横幅状态机在 piCore（webview 重建不丢状态） */
+  function renderBanner(b: BannerPayload | null) {
+    if (!b) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; return; }
+    bannerEl.innerHTML = '';
+    var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = b.text;
+    bannerEl.appendChild(txt);
+    if (b.actionLabel) {
+      var act = document.createElement('button'); act.className = 'b-act'; act.textContent = b.actionLabel;
+      act.onclick = function () { vscode.postMessage({ type: 'compactSession' }); };
+      bannerEl.appendChild(act);
+    }
+    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
+    x.onclick = function () { vscode.postMessage({ type: 'bannerClose' }); };
+    bannerEl.appendChild(x);
+    bannerEl.style.display = 'flex';
+  }
   // 毫秒 → 紧凑时长（42s / 1m23s / 1h2m）；供 Working 实时计数与本轮耗时显示共用
   function fmtDur(ms) {
     var s = Math.floor(ms / 1000);
@@ -884,6 +903,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
     else if (m.type === 'state') applyState(m);
+    else if (m.type === 'banner') renderBanner(m.banner);
     else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }
   });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）

@@ -92,6 +92,13 @@
           "default": true,
           "description": "模型请求失败时自动重试（超时/过载/限流），启动 pi 时自动应用"
         },
+        "piChat.contextWarnPercent": {
+          "type": "number",
+          "default": 70,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "上下文占用超过该百分比时，面板顶部提醒建议压缩（同一会话只提醒一次，压缩后重置）"
+        },
         "piChat.steeringMode": {
           "type": "string",
           "enum": [

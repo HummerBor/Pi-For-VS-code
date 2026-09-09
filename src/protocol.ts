@@ -93,6 +93,14 @@ export interface WvPickLangMsg {
   type: "pickLang";
 }
 
+/** 横幅关闭按钮（工单六）：webview 只上报，横幅状态机在 piCore，宿主回发 banner:null 收口 */
+export interface WvBannerCloseMsg {
+  type: "bannerClose";
+}
+/** 横幅「一键压缩」按钮：宿主走 ui.compactSession() 直压语义（同 810f39c 口径） */
+export interface WvCompactSessionMsg {
+  type: "compactSession";
+}
 export type WebviewToHost =
   | WvReadyMsg
   | WvPromptMsg
@@ -116,7 +124,9 @@ export type WebviewToHost =
   | WvPickModelMsg
   | WvPickThinkingMsg
   | WvPickThemeMsg
-  | WvPickLangMsg;
+  | WvPickLangMsg
+  | WvBannerCloseMsg
+  | WvCompactSessionMsg;
 
 /* ══════════════ 宿主 → webview ══════════════ */
 
@@ -287,6 +297,18 @@ export interface ThemeMsg {
   type: "theme";
   name: string;
 }
+/** 面板顶部横幅（工单六：压缩显性化/阈值预警）。文案由宿主组装（含时间戳/占比，
+ *  随宿主 i18n 走），webview 只负责渲染；actionLabel 有值时带操作按钮 */
+export interface BannerPayload {
+  kind: "compacted" | "contextWarning";
+  text: string;
+  actionLabel?: string;
+}
+export interface BannerMsg {
+  type: "banner";
+  /** null = 收起横幅 */
+  banner: BannerPayload | null;
+}
 // sessionList / listSessions 死链已删除（工单二b）：webview 从无该消息处理器（会话切换走宿主 QuickPick），
 // 面板内历史列表若重做再按需重建
 
@@ -315,7 +337,8 @@ export type HostToWebview =
   | SlashListMsg
   | FileListMsg
   | StateMsg
-  | ThemeMsg;
+  | ThemeMsg
+  | BannerMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 
@@ -412,6 +435,21 @@ export interface PiExtensionErrorEvent {
 export interface PiAgentSettledEvent {
   type: "agent_settled";
 }
+/** 压缩开始（工单六）：手动压缩已有 compactDone 通知，start 事件本单不消费 */
+export interface PiCompactionStartEvent {
+  type: "compaction_start";
+  reason?: "manual" | "threshold" | "overflow";
+}
+/** 压缩结束：threshold/overflow=自动压缩（显性化横幅）；result 是 pi CompactionResult，
+ *  形状未逐字段验证，保守 unknown（裁决 4） */
+export interface PiCompactionEndEvent {
+  type: "compaction_end";
+  reason?: "manual" | "threshold" | "overflow";
+  result?: unknown;
+  aborted?: boolean;
+  willRetry?: boolean;
+  errorMessage?: unknown;
+}
 /** 未识别事件：仅透传可能的错误信息（panel.ts onPiEvent default 分支，用显式断言取值）。
  *  不并入 PiEvent 联合——type: string 会毒化判别联合的字面量收窄 */
 export interface PiUnknownEvent {
@@ -434,4 +472,6 @@ export type PiEvent =
   | PiAutoRetryEndEvent
   | PiQueueUpdateEvent
   | PiExtensionErrorEvent
-  | PiAgentSettledEvent;
+  | PiAgentSettledEvent
+  | PiCompactionStartEvent
+  | PiCompactionEndEvent;

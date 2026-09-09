@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
-import type { GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
+import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
 import { toolDetail } from "./toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
@@ -71,6 +71,10 @@ export class PiCore {
   /** 启动恢复闸门：按项目恢复上次会话期间，webviewReady 的重绘等它完成，
    * 避免先画出 -c 恢复的会话再跳到记住的会话（「闪一下 + 标题/内容对不上」的根源） */
   private restoringSession: Promise<void> | null = null;
+  /** 压缩横幅（工单六）：单份持有、变更才下发；webview 重建后 webviewReady 握手重发 */
+  private banner: BannerPayload | null = null;
+  /** 阈值预警闸门：涨破阈值只提醒一次（同一会话）；占比回落（压缩后）/换会话 re-arm */
+  private contextWarnArmed = true;
 
   /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换；持久化由 adapter 完成 */
   lang: Lang = "zh";
@@ -101,6 +105,14 @@ export class PiCore {
   }
   get isNoSession(): boolean {
     return this.clientNoSession;
+  }
+
+  /** 横幅状态机出口（工单六）：内容变化才下发——refreshState 高频调用，不重发相同文案 */
+  private setBanner(b: BannerPayload | null): void {
+    const next = b ?? null;
+    if (JSON.stringify(next) === JSON.stringify(this.banner)) return;
+    this.banner = next;
+    this.post({ type: "banner", banner: next });
   }
 
   /** 关键链路诊断日志（排查图片丢失/状态机等诡异问题用） */
@@ -283,6 +295,8 @@ export class PiCore {
             // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建（切语言/改背景）后不会重发，
             // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
             this.post({ type: "mode", text: this.modeBadgeText() });
+            // 压缩横幅随握手重发：横幅状态在宿主（工单六），webview 重建后不丢
+            this.post({ type: "banner", banner: this.banner });
           } catch {
             // ignore
           }
@@ -539,6 +553,14 @@ export class PiCore {
         break;
       case "pickLang":
         await this.ui.pickLang();
+        break;
+      case "bannerClose":
+        // 用户手动关横幅：宿主状态机收口，webview 重建后也不会重发
+        this.setBanner(null);
+        break;
+      case "compactSession":
+        // 横幅「一键压缩」：直压语义（810f39c 口径）；带指令入口在 ⚡ 菜单，归 adapter
+        await this.ui.compactSession();
         break;
     }
   }
@@ -822,8 +844,33 @@ export class PiCore {
       }
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
+      // 换会话（切换/新会话/分叉都会换 sessionFile）：阈值预警 re-arm + 清会话域横幅（工单六）
+      if ((st?.sessionFile ?? null) !== this.lastSessionFile) {
+        this.contextWarnArmed = true;
+        if (this.banner) this.setBanner(null);
+      }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
+      // 上下文阈值预警（工单六）：涨破阈值提醒一次，占比回落（压缩后）re-arm 并收预警横幅。
+      // 阈值走 VS Code 设置 piChat.contextWarnPercent（默认 70），经 caps 读取不碰 vscode
+      const pct = stats?.contextUsage?.percent ?? null;
+      if (typeof pct === "number") {
+        const warnAt = this.caps.getConfig("piChat", "contextWarnPercent", 70);
+        if (pct >= warnAt) {
+          if (this.contextWarnArmed) {
+            this.contextWarnArmed = false;
+            this.setBanner({
+              kind: "contextWarning",
+              text: fmt(this.L.bannerContextWarn, Math.round(pct)),
+              actionLabel: this.L.bannerCompactBtn,
+            });
+            this.dbg("banner: contextWarning (pct=" + Math.round(pct) + ")");
+          }
+        } else {
+          this.contextWarnArmed = true;
+          if (this.banner?.kind === "contextWarning") this.setBanner(null);
+        }
+      }
       this.post({
         type: "state",
         ver: this.version,
@@ -1004,6 +1051,25 @@ export class PiCore {
         } else if (e.attempt && e.attempt > 1) {
           this.post({ type: "notice", text: fmt(this.L.retryOk, e.attempt) });
         }
+        break;
+      }
+
+      case "compaction_end": {
+        // 自动压缩（threshold/overflow）成功 → 横幅显性化（工单六）。手动压缩已有
+        // compactDone 通知不重复；aborted/willRetry 属未完成或将重试，静默等下一次 end
+        if (e.reason !== "manual" && e.aborted !== true && e.willRetry !== true) {
+          const err = typeof e.errorMessage === "string" ? e.errorMessage : "";
+          if (err) {
+            // 压缩失败不可见，后续请求会莫名超限——透传面板
+            this.post({ type: "notice", text: this.L.compactionFail + err.slice(0, 150) });
+          } else {
+            const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            this.setBanner({ kind: "compacted", text: fmt(this.L.bannerCompacted, time) });
+            this.dbg("banner: compacted (reason=" + (e.reason ?? "?") + ")");
+          }
+        }
+        // 压缩后占比大降：刷新用量显示 + re-arm 阈值预警
+        await this.refreshState();
         break;
       }
 
