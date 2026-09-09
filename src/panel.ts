@@ -1095,7 +1095,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       {
         label: this.L.cmdCompact,
         run: async () => {
-          await this.compactSession();
+          await this.compactSession(true);
         },
       },
       {
@@ -1184,11 +1184,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return "⚡ Auto";
   }
 
-  /** 压缩上下文（⚡ 菜单与 /compact 共用；对应 pi TUI 的 /compact） */
-  private async compactSession(): Promise<void> {
+  /** 压缩上下文。withNote=true 时先问可选指令（⚡ 菜单入口，用户主动选的不算打扰）；
+   *  /compact 直接压不二次确认——用户实测：敲完命令再弹框属于繁琐 */
+  private async compactSession(withNote = false): Promise<void> {
     const client = this.ensureClient(true);
-    const inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });
-    if (inst === undefined) return;
+    let inst: string | undefined;
+    if (withNote) {
+      inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });
+      if (inst === undefined) return;
+    }
     this.post({ type: "status", text: this.L.compacting });
     const r = await client.compact(inst || undefined);
     this.post({ type: "status", text: "" });
