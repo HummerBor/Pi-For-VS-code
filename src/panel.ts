@@ -4,46 +4,29 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient } from "./piClient";
-import { STRINGS, NATIVE_KEYS, Lang, bb, fmt, fmt2 } from "./i18n";
+import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
-import type { GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
-import { toolDetail } from "./toolDetail";
+import type { HostToWebview, WebviewToHost } from "./protocol";
+import { extractText, PiCore, UiActions } from "./piCore";
+import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
 
   private view?: vscode.WebviewView;
-  private client?: PiClient;
-  private clientNoSession = false;
+  /** 核心控制器（piCore）：状态机/prompt 组装/事件路由住核心；本类只当 VS Code adapter（工单四） */
+  private readonly core: PiCore;
   private sessionPickerShown = false;
-  private busy = false;
-  private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
-  /** 中断后跳过一次 settled 重绘（会话里被中断的消息是空的，重绘会抹掉现场） */
-  private abortSkipRender = false;
-  private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
-  /** 最近一次已知会话名/文件（用于自动命名判断） */
-  private lastSessionName: string | null = null;
-  /** 命令式应答标记：发出 prompt 后未等到 agent_start 前为 true（用于清除乐观 busy/免误导性中断提示） */
-  private pendingPrompt = false;
-  /** 本轮 agent 运行起点（agent_start 时记录，settled 时算实测耗时）；0=无运行 */
-  private runStartTs = 0;
-  private lastSessionFile: string | null = null;
-  /** 已自动命名过的会话文件（避免重复 RPC） */
-  private autoTitledFor: string | null = null;
-  /** pi 侧 queue_update 报告的排队总数（steering+followUp），用于检测“队列变短=插话已被取走” */
-  private lastQueueTotal = 0;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
   private piCheckDone = false;
   /** 本窗口是否已提醒过配置凭证（避免反复打扰） */
   private authOfferShown = false;
   private selTimer: NodeJS.Timeout | undefined;
   private editorDisposables: vscode.Disposable[] = [];
-  /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换，globalState 持久化 */
+  /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换，globalState 持久化；变更须同步 core.lang */
   private lang: Lang = "zh";
   /** 鸭子 logo 的 data URI（重生成 HTML 时复用，不必每次读盘） */
   private duckUri = "";
-  /** 最近一次权限模式徽标文本（webview 重建后补发用：session_start 的 setStatus 只推一次） */
-  private lastModeText = "";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -51,6 +34,64 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly version: string
   ) {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
+    // 组装核心：宿主能力与 UI 动作由本 adapter 注入，webview 消息经 post 桥回传
+    this.core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.post(msg), version);
+    this.core.lang = this.lang;
+  }
+
+  /** HostCapabilities 的 VS Code 落地：核心（piCore）所需宿主能力，签名不含 vscode 类型 */
+  private buildCaps(): HostCapabilities {
+    return {
+      getCwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
+      getConfig: <T>(section: string, key: string, defaultValue: T): T =>
+        vscode.workspace.getConfiguration(section).get<T>(key, defaultValue),
+      getPersist: <T>(key: string, defaultValue: T): T => this.globalState.get<T>(key, defaultValue),
+      setPersist: (key, value) => void this.globalState.update(key, value),
+      showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
+        vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
+      showInputBox: async (options) => vscode.window.showInputBox(options),
+      showConfirm: async (title, options) => {
+        const sel = await vscode.window.showWarningMessage(
+          title,
+          { modal: true, detail: options.detail },
+          options.confirmText,
+          options.cancelText
+        );
+        return sel === options.confirmText;
+      },
+      notify: async (level, message, actions) => {
+        const items = actions ?? [];
+        if (level === "error") return vscode.window.showErrorMessage(message, ...items);
+        if (level === "warn") return vscode.window.showWarningMessage(message, ...items);
+        return vscode.window.showInformationMessage(message, ...items);
+      },
+      uiRequest: (req) => void this.core.handleUiRequest(req),
+    };
+  }
+
+  /** UiActions 的 VS Code 落地：webview 消息路由里属于原生 UI 流程的分支，方法体即原 panel 实现 */
+  private buildUi(): UiActions {
+    return {
+      pickSession: (scope) => this.pickSession(scope),
+      treeFork: () => this.forkToMessage(),
+      importSession: () => this.importSession(),
+      shareSession: () => this.shareSession(),
+      uploadImage: () => this.pickLocalFiles(),
+      pickMode: () => this.pickModeMenu(),
+      revealSessionFile: (file) => this.revealSessionFile(file),
+      openPath: (p) => this.openFilePath(p),
+      more: () => this.runCommand(),
+      settings: () => this.settingsMenu(),
+      pickModel: () => this.pickModel(),
+      pickThinking: () => this.pickThinking(),
+      pickTheme: () => this.pickTheme(),
+      pickLang: () => this.toggleLang(),
+      compactSession: () => this.compactSession(),
+      exportSession: () => this.exportSession(),
+      cloneSession: () => this.cloneSession(),
+      openTerminalLogin: () => this.openTerminalLogin(),
+      startError: (err) => this.onStartError(err),
+    };
   }
 
   /** 当前语言字典：面板通知/状态跟随中/EN 按钮；原生对话框专用键双语展示 */
@@ -112,25 +153,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
     view.onDidDispose(() => bgWatcher.dispose());
     // webview 若仍被销毁重建（极端情况）：从活着的 pi 进程重绘当前会话，不用重选
-    if (this.client?.running) {
+    if (this.core.clientRef?.running) {
       void (async () => {
         try {
-          const d = await this.client!.getMessages();
+          const d = await this.core.clientRef!.getMessages();
           this.post({ type: "render", messages: d?.messages ?? [] });
-          this.post({ type: "busy", value: this.busy });
+          this.post({ type: "busy", value: this.core.isBusy });
         } catch {
           // ignore
         }
-        await this.refreshState();
+        await this.core.refreshState();
       })();
     } else if (
       vscode.workspace.getConfiguration("piChat").get<string>("sessionMode", "continue") !== "ephemeral"
     ) {
       // 首次打开面板 → 主动启动 pi（持久模式，continue/-c 恢复最近会话）：
       // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
-      this.ensureClient();
+      this.core.ensureClient();
     }
-    view.webview.onDidReceiveMessage((m) => void this.onWebviewMessage(m));
+    view.webview.onDidReceiveMessage((m: WebviewToHost) => void this.core.onWebviewMessage(m));
 
     // 监听编辑器选区，自动把选中代码 / 整个文件作为上下文（CC 同款）
     if (!this.editorDisposables.length) {
@@ -161,14 +202,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             else if (pick === this.L.openNodejs)
               void vscode.env.openExternal(vscode.Uri.parse("https://nodejs.org"));
           } else {
-            const c = this.ensureClient();
+            const c = this.core.ensureClient();
             void c;
             // pi 已装但没配过模型凭证 → 引导配置
             void this.maybeOfferKeyConfig(false);
           }
         })();
-      } else if (!this.client) {
-        const c = this.ensureClient();
+      } else if (!this.core.clientRef) {
+        const c = this.core.ensureClient();
         void c;
       }
     };
@@ -185,30 +226,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.client?.dispose();
+    this.core.dispose();
     for (const d of this.editorDisposables) d.dispose();
     this.editorDisposables = [];
     if (this.selTimer) clearTimeout(this.selTimer);
-  }
-
-  /** 关键链路诊断日志（排查图片丢失等诡异问题用） */
-  private dbg(msg: string): void {
-    try {
-      fs.appendFileSync(path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log"),
-        new Date().toISOString() + " " + msg + String.fromCharCode(10));
-    } catch { /* ignore */ }
   }
 
   private post(msg: HostToWebview): void {
     void this.view?.webview.postMessage(msg);
   }
 
-  /** 计算当前编辑器的代码上下文（选区 → 选中行；无选区 → 整个文件）并推给 webview */
+  /** 计算当前编辑器的代码上下文（选区 → 选中行；无选区 → 整个文件）并推给 webview；
+   *  上下文本体存核心（prompt 组装消费），本方法只负责计算+推送（工单四接线） */
   private pushCodeContext(): void {
     const ed = vscode.window.activeTextEditor;
     if (!ed || ed.document.uri.scheme !== "file") {
-      if (this.codeCtx) {
-        this.codeCtx = null;
+      if (this.core.hasCodeContext) {
+        this.core.setCodeContext(null);
         this.post({ type: "codeCtx", ctx: null });
       }
       return;
@@ -225,7 +259,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 点了空白处，无选区 → 带整个文件（太大则放弃）
       text = doc.getText();
       if (text.length > 80 * 1024) {
-        this.codeCtx = null;
+        this.core.setCodeContext(null);
         this.post({ type: "codeCtx", ctx: null });
         return;
       }
@@ -236,401 +270,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       text = doc.getText(new vscode.Range(sel.start, sel.end));
       range = s === e ? "L" + s : "L" + s + "-L" + e;
     }
-    this.codeCtx = { name: path.basename(doc.fileName), rel, range, text };
+    this.core.setCodeContext({ name: path.basename(doc.fileName), rel, range, text });
     this.post({
       type: "codeCtx",
-      ctx: { name: this.codeCtx.name, rel: this.codeCtx.rel, range, lines: text.split("\n").length },
+      ctx: { name: path.basename(doc.fileName), rel, range, lines: text.split("\n").length },
     });
-  }
-
-  /** 启动恢复闸门：按项目恢复上次会话期间，webviewReady 的重绘等它完成，
-   * 避免先画出 -c 恢复的会话再跳到记住的会话（「闪一下 + 标题/内容对不上」的根源） */
-  private restoringSession: Promise<void> | null = null;
-
-  /** 首次发消息时才启动 pi 后台进程；forceSession=true 时不用 --no-session（如切换历史会话） */
-  private ensureClient(forceSession = false): PiClient {
-    if (this.client) return this.client;
-
-    const cwd =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    const cfg = vscode.workspace.getConfiguration("piChat");
-    // ⚠ 会话模式读取：默认必须与 package.json 里的 default 保持一致（continue）。
-    // 教训：曾默认 ephemeral(--no-session)，用户聊天全程不落盘，进程被替换后记录永久丢失。
-    const mode = cfg.get<string>("sessionMode", "continue");
-    const ephemeral = mode === "ephemeral" && !forceSession;
-    const args = ephemeral ? ["--no-session"] : mode === "continue" ? ["-c"] : [];
-    const sessionDir = cfg.get<string>("sessionDir", "");
-    if (sessionDir) args.push("--session-dir", sessionDir);
-    this.clientNoSession = ephemeral;
-
-    const client = new PiClient();
-    this.client = client;
-
-    client.onUiRequest = (req) => void this.handleUiRequest(req);
-    client.onExit = (code, detail) => {
-      this.busy = false;
-      this.post({ type: "busy", value: false });
-      this.dbg("busy=false (pi_exit)");
-      this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
-      // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
-      if (detail) this.post({ type: "notice", text: this.L.piExitedNotice + code + this.L.piExitedSuf + String.fromCharCode(10) + detail });
-    };
-    client.onError = (err) => {
-      this.post({ type: "notice", text: this.L.startFail + err.message });
-      void vscode.window
-        .showErrorMessage(this.L.piStartFail + err.message, this.L.installPiBtn)
-        .then((pick) => {
-          if (pick === this.L.installPiBtn) void this.installPi();
-        });
-    };
-    client.events.on("event", (e: PiEvent) => void this.onPiEvent(e));
-
-    this.post({ type: "status", text: this.L.startingPi });
-    // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
-    // 这里把 VSCode 内置 http.proxy 设置透传给 pi（HTTP_PROXY/HTTPS_PROXY）
-    const proxyUrl = vscode.workspace.getConfiguration("http").get<string>("proxy", "").trim();
-    client.start(cwd, args, proxyUrl || undefined);
-
-    // 插话送达方式（默认逐条，CC 风格：排队消息一条条处理）
-    const steerMode = cfg.get<string>("steeringMode", "one-at-a-time");
-    // 模型请求失败自动重试（默认开启，Z.ai 免费档超时/过载常见）
-    const autoRetry = cfg.get<boolean>("autoRetry", true);
-    void (async () => {
-      try {
-        await client.setSteeringMode(steerMode as "all" | "one-at-a-time");
-        await client.setAutoRetry(autoRetry);
-      } catch {
-        // 应用失败不影响使用
-      }
-    })();
-
-    // 恢复上次使用的模型 / 思考等级（跨窗口、跨重启记忆）
-    const lastModel = this.globalState.get<{ provider: string; id: string } | undefined>(
-      "piChat.lastModel"
-    );
-    const lastThinking = this.globalState.get<string | undefined>("piChat.lastThinking");
-    if (lastModel || lastThinking) {
-      void (async () => {
-        try {
-          if (lastModel) await client.setModel(lastModel.provider, lastModel.id);
-          if (lastThinking) await client.setThinkingLevel(lastThinking);
-        } catch {
-          // 恢复失败不影响使用
-        }
-        await this.refreshState();
-      })();
-    }
-
-    // 初始化状态和已有会话内容：按项目恢复上次使用的会话文件（免重选，且不串项目）。
-    // 注意顺序：先等恢复（可能 switchSession）完成再刷新状态/重绘，
-    // 否则标题是 -c 恢复的会话、内容却是记住的会话，两边对不上
-    this.restoringSession = (async () => {
-      try {
-        const last = this.getSessionForWs(cwd);
-        if (last && fs.existsSync(last)) {
-          try {
-            await client.switchSession(last);
-          } catch {
-            // 文件失效则退回 -c 恢复的最近会话
-          }
-          await this.refreshState(); // 切换后立刻同步标题，杜绝「内容 A 标题 B」
-        } else {
-          await this.refreshState();
-        }
-        const d = await client.getMessages();
-        this.post({ type: "render", messages: d?.messages ?? [] });
-      } catch {
-        // 忽略
-      } finally {
-        this.restoringSession = null;
-      }
-    })();
-    return client;
-  }
-
-  private async onWebviewMessage(m: WebviewToHost): Promise<void> {
-    switch (m.type) {
-      case "webviewReady": {
-        // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
-        // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险
-        void (async () => {
-          try {
-            // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
-            if (this.restoringSession) await this.restoringSession.catch(() => {});
-            const d = await this.client?.getMessages();
-            this.post({ type: "render", messages: d?.messages ?? [] });
-            this.post({ type: "busy", value: this.busy });
-            // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建（切语言/改背景）后不会重发，
-            // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
-            this.post({ type: "mode", text: this.modeBadgeText() });
-          } catch {
-            // ignore
-          }
-          await this.refreshState();
-        })();
-        break;
-      }
-      case "prompt": {
-        // 斜杠命令拦截（必须在乐观置 busy 之前）：
-        // - 面板原生命令 → 本地执行，不碰 prompt（原因见 nativeSlashCommands 注释）
-        // - 终端专用命令 → 提示去终端，同样不能漏给模型
-        // - 技能/模板（/skill:xx、/模板名）不在表里 → 正常走 prompt，pi 展开后是真任务，busy 合理
-        // 按首 token 匹配：/compact xxx、/model gpt 这类带参数写法也能命中（参数忽略，
-        // 需要参数的原生命令自己弹输入框）
-        const trimmed = String(m.text ?? "").trim().toLowerCase();
-        const firstTok = trimmed.split(/\s+/)[0];
-        const native = this.nativeSlashCommands().find((c) => "/" + c.name === firstTok);
-        if (native) {
-          void native.run();
-          break;
-        }
-        const tuiOnly: Record<string, string> = {
-          "/hotkeys": this.L.tuiHotkeys,
-          "/help": this.L.tuiHelp,
-          "/copy": this.L.tuiCopy,
-          "/quit": this.L.tuiQuit,
-          "/logout": this.L.tuiOnly,
-          "/name": this.L.tuiOnly,
-          "/session": this.L.tuiOnly,
-          "/scoped-models": this.L.tuiOnly,
-          "/reload": this.L.tuiOnly,
-          "/trust": this.L.tuiOnly,
-          "/changelog": this.L.tuiOnly,
-          "/debug": this.L.tuiOnly,
-        };
-        if (tuiOnly[firstTok]) {
-          this.post({ type: "notice", text: tuiOnly[firstTok] });
-          break;
-        }
-        const client = this.ensureClient();
-        this.dbg("prompt: images=" + (m.images ? m.images.length : 0) + " files=" + (m.files ? m.files.length : 0) + " busy=" + this.busy);
-        let text = m.text;
-        const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
-        // 附件文件（顶部胶囊行，可多个）→ 拼进消息文本
-        if (Array.isArray(m.files) && m.files.length) {
-          for (const f of m.files) {
-            if (f && typeof f.text === "string" && f.text.length) {
-              // 不用 ``` 包裹：文件内容本身可能含 ``` 会提前闭合围栏；用唯一结束行分界
-              text = "--- 附件: " + (f.name || "file") + " ---\n" + f.text + "\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
-            }
-          }
-        }
-        if (m.attachCode && this.codeCtx) {
-          const c = this.codeCtx;
-          text = "--- 代码上下文: " + c.rel + " (" + c.range + ") ---\n" + c.text + "\n--- 代码上下文结束 ---\n\n" + text;
-        }
-        // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
-        const wasBusy = this.busy;
-        this.busy = true;
-        // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
-        // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
-        this.post({
-          type: "busy",
-          value: true,
-          ...(wasBusy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
-        });
-        this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
-        // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
-        const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
-        // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
-        if (wasBusy) {
-          // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
-          const qid = "q" + Date.now();
-          this.queued.push({ qid, sentText: text, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-          this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
-        } else {
-          this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
-        }
-        let steered = false;
-        // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到
-        //（实录 07:30:16.357 事件 vs ~16.358 响应，1ms 反转）。若在响应回来后才置
-        // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
-        //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
-        // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
-        // 工单五-2 重审结论（直连）：兜底保留。正常 prompt 的 agent_start 毫秒级到达，
-        // 兜底唯一日常触发场景是「不产生 agent 运行的命令式 prompt」（扩展 registerCommand
-        // 集合开放无法枚举拦截，b040fb2 只拦了 /mode）——撤掉兜底这类 prompt 的 busy
-        // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
-        if (!wasBusy) {
-          this.pendingPrompt = true;
-          setTimeout(() => {
-            if (!steered && this.busy && this.pendingPrompt) {
-              this.pendingPrompt = false;
-              this.busy = false;
-              this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
-              this.post({ type: "busy", value: false });
-            }
-          }, 4000);
-        }
-        try {
-          try {
-            await client.prompt(text, wasBusy, m.images);
-          } catch (e: any) {
-            // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
-            // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
-            // 工单五-3 可达性结论（直连）：自愈保留。panel 读 wasBusy 与调 client.prompt 之间
-            // 无异步间隙（同一线程同步块），正常永不触发拒收；唯一可达场景是镜像已漂移
-            // （4s 兙底误清 busy 后用户再发消息 → steer=false 撞上运行中的 session.prompt）。
-            // 它是对账/兙底两层全失效时的最后一层，撤掉后漂移会以「发送失败」报错形式砸给用户
-            const msg = String(e?.message ?? e);
-            if (!/already processing|streamingBehavior/i.test(msg)) throw e;
-            this.post({ type: "notice", text: this.L.autoQueued });
-            steered = true;
-            // pi 拒收 = 它一定正在跑上一个 run：busy 必须纠回 true 并同步给 webview。
-            // 若不纠回：steer 不触发 agent_start，下方 4s 兜底会把 busy 清掉 → 整个 run 期间
-            // 宿主自认空闲，后续消息全部误判（Working 消失/排队气泡丢失的根源）
-            this.busy = true;
-            this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
-            this.dbg("busy=true (steer_resend: pi rejected prompt as already processing)");
-            await client.prompt(text, true, m.images);
-          }
-          // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
-          if (!wasBusy && m.text) void this.autoTitleSession(m.text);
-        } catch (err: any) {
-          this.busy = false;
-          this.post({ type: "busy", value: false });
-          this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
-          this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
-        }
-        break;
-      }
-      case "abort":
-        try {
-          if (this.client?.running) {
-            await this.client.abort();
-            if (this.busy && this.pendingPrompt) {
-              // 命令式应答（如 /llama，无 agent 运行）：没有可中断的东西，直接清掉乐观 busy，不弹中断提示
-              this.pendingPrompt = false;
-              this.busy = false;
-              this.post({ type: "busy", value: false });
-              this.dbg("busy=false (abort_while_pendingPrompt)");
-              break;
-            }
-            // pi 不把中断时的部分内容写进会话文件（content 为空），
-            // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场
-            this.abortSkipRender = true;
-            this.post({ type: "notice", text: this.L.aborted });
-          }
-        } catch {
-          // ignore
-        }
-        break;
-      case "retryFromLast": {
-        // 模型请求失败后回退：fork 到最近一条用户消息（错误消息从活跃分支清除），原文填回输入框供修改重发
-        try {
-          const fm = await this.client?.getForkMessages();
-          const list: any[] = fm?.messages ?? [];
-          const last = list[list.length - 1];
-          if (!last) {
-            this.post({ type: "notice", text: this.L.noMsgToFork });
-            break;
-          }
-          const fr = await this.client!.fork(last.entryId);
-          if (fr?.cancelled) {
-            this.post({ type: "notice", text: this.L.forkCancelled });
-            break;
-          }
-          let text = String(last.text ?? "");
-          // 剥离头部块：新格式（结束行分界）为主，老格式（围栏）兜底
-          const hdr = text.match(/^--- 代码上下文: .+? \((.+?)\) ---\n/);
-          if (hdr) {
-            const term = "\n--- 代码上下文结束 ---\n";
-            const ei = text.indexOf(term);
-            if (ei > 0) {
-              text = text.slice(ei + term.length);
-              if (text.startsWith("\n")) text = text.slice(1);
-            } else {
-              const ci = text.lastIndexOf("\n```\n\n");
-              text = ci > hdr[0].length ? text.slice(ci + 6) : text.slice(hdr[0].length);
-            }
-          }
-          let am: RegExpMatchArray | null;
-          while ((am = text.match(/^--- 附件: ([^\n]*) ---\n/))) {
-            const term2 = "\n--- 附件结束: " + am[1] + " ---\n";
-            const ei2 = text.indexOf(term2);
-            if (ei2 < 0) break;
-            text = text.slice(ei2 + term2.length);
-            if (text.startsWith("\n")) text = text.slice(1);
-          }
-          this.post({ type: "fillInput", text });
-          this.syncRenderKeepQueued();
-          this.post({ type: "notice", text: this.L.forked });
-        } catch (err) {
-          this.post({ type: "notice", text: this.L.forkFail + (err as Error).message });
-        }
-        break;
-      }
-      case "pickSession":
-        await this.pickSession("project");
-        break;
-      case "treeFork":
-        await this.forkToMessage();
-        break;
-      case "importSession":
-        await this.importSession();
-        break;
-      case "shareSession":
-        await this.shareSession();
-        break;
-      case "newSession":
-        await this.newSession();
-        break;
-      case "uploadImage":
-        await this.pickLocalFiles();
-        break;
-      case "attachFile":
-        // 非图片文件 → 顶部附件行胶囊（与拖拽/粘贴/上传同一模型）
-        if (typeof m.text === "string" && m.text.length) {
-          this.post({ type: "addFiles", files: [{ name: String(m.name || "file"), text: m.text }] });
-        }
-        break;
-      case "pickMode":
-        await this.pickModeMenu();
-        break;
-      case "getSlash":
-        await this.sendSlashCommands();
-        break;
-      case "openSession":
-        await this.openSessionFile(m.file);
-        break;
-      case "revealSessionFile":
-        try {
-          const sdoc = await vscode.workspace.openTextDocument(vscode.Uri.file(m.file));
-          await vscode.window.showTextDocument(sdoc.uri, { viewColumn: vscode.ViewColumn.Beside, preview: true });
-        } catch (err: any) {
-          this.post({ type: "notice", text: this.L.openSessionFileFail + (err?.message ?? err) });
-        }
-        break;
-      case "openPath":
-        await this.openFilePath(m.path);
-        break;
-      case "getFiles":
-        await this.sendWorkspaceFiles();
-        break;
-      case "more":
-        await this.runCommand();
-        break;
-      case "settings":
-        await this.settingsMenu();
-        break;
-      case "pickModel":
-        await this.pickModel();
-        break;
-      case "pickThinking":
-        await this.pickThinking();
-        break;
-      case "pickTheme":
-        await this.pickTheme();
-        break;
-      case "pickLang":
-        await this.toggleLang();
-        break;
-    }
   }
 
   /** 中/EN 语言切换：持久化后重生成 HTML（webviewReady 握手会自动重绘历史） */
   private async toggleLang(): Promise<void> {
     this.lang = this.lang === "zh" ? "en" : "zh";
+    this.core.lang = this.lang; // 核心的通知/状态文案跟随
     await this.globalState.update("piChat.lang", this.lang);
     this.applyHtml();
   }
@@ -657,50 +307,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.post({ type: "notice", text: this.L.themeSet + pick.label });
   }
 
-  private async newSession(): Promise<void> {
-    const client = this.ensureClient();
-    // 防误触：agent 正在干活时，新会话会终止当前任务，先确认
-    if (this.busy) {
-      const pick = await vscode.window.showWarningMessage(
-        this.L.nsConfirm,
-        { modal: true },
-        this.L.nsAbortAndNew,
-        this.L.cancel
-      );
-      if (pick !== this.L.nsAbortAndNew) return;
-      try {
-        await client.abort();
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      const result = await client.newSession();
-      if (result?.cancelled) {
-        this.post({ type: "notice", text: this.L.nsCancelled });
-        return;
-      }
-      this.post({ type: "render", messages: [] });
-      this.queued = [];
-      this.post({ type: "queuedClear" });
-      // 不再发「已开始新会话」通知：欢迎页本身就是反馈，多余通知会挂在欢迎页下面
-      // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去
-      const lastModel = this.globalState.get<{ provider: string; id: string } | undefined>(
-        "piChat.lastModel"
-      );
-      const lastThinking = this.globalState.get<string | undefined>("piChat.lastThinking");
-      try {
-        if (lastModel) await client.setModel(lastModel.provider, lastModel.id);
-        if (lastThinking) await client.setThinkingLevel(lastThinking);
-      } catch {
-        // 补回失败不影响使用
-      }
-      await this.refreshState();
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.nsFail + (err?.message ?? err) });
-    }
-  }
-
   /**
    * 弹出历史会话选择。
    * scope="project" 只显示当前工作空间的会话；"all" 显示全部；"auto"=项目会话+浏览全部入口（面板打开时用）。
@@ -709,9 +315,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     // ephemeral 进程没挂会话文件，需要重启为持久模式才能恢复历史
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
+    if (this.core.clientRef?.running && this.core.isNoSession) {
+      this.core.disposeClient();
       this.post({ type: "status", text: this.L.restartingPi });
     }
 
@@ -759,7 +364,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     try {
       if (pick.action === "new") {
         this.post({ type: "render", messages: [] });
@@ -777,7 +382,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const name = (pick.label ?? "").replace(/^\$\(history\) /, "");
         this.post({ type: "notice", text: this.L.sessionRestored + name });
       }
-      await this.refreshState();
+      await this.core.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
@@ -804,7 +409,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { placeHolder: this.L.delSessionEntry }
     );
     if (!pick) return;
-    if (this.lastSessionFile && samePath(pick.file, this.lastSessionFile)) {
+    if (this.core.currentSessionFile && samePath(pick.file, this.core.currentSessionFile)) {
       this.post({ type: "notice", text: this.L.delSessionCur });
       return;
     }
@@ -905,133 +510,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       fs.mkdirSync(path.dirname(modeFile), { recursive: true });
       fs.writeFileSync(modeFile, JSON.stringify({ mode: pick.id }, null, 2) + "\n", "utf8");
       const badge = pick.label.replace(/^\$\([^)]+\) /, "");
-      this.lastModeText = badge;
+      this.core.setModeText(badge);
       this.post({ type: "mode", text: badge });
       this.post({ type: "notice", text: this.L.modeSet + pick.label.replace(/^\$\([^)]*\) /, "") });
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.modeSaveFail + (err?.message ?? err) });
-    }
-  }
-
-  /** 面板原生斜杠命令表：输入框拦截、/ 补全两处共用一份。
-   *  这些命令绝不能走 client.prompt——pi SDK 对未注册的 /xxx 会把字面文本发给模型
-   *  （用户消息变成 "/compact"），对已注册扩展命令则立即返回且零 agent 事件
-   *  （面板乐观 busy → 假忙 4s），两条路都不对 */
-  private nativeSlashCommands(): { name: string; desc: string; run: () => Promise<void> }[] {
-    return [
-      { name: "model", desc: this.L.natModel, run: () => this.pickModel() },
-      { name: "thinking", desc: this.L.natThinking, run: () => this.pickThinking() },
-      { name: "theme", desc: this.L.natTheme, run: () => this.pickTheme() },
-      { name: "mode", desc: this.L.natMode, run: () => this.pickModeMenu() },
-      { name: "new", desc: this.L.natNew, run: () => this.newSession() },
-      { name: "resume", desc: this.L.natResume, run: () => this.pickSession("project") },
-      { name: "fork", desc: this.L.natFork, run: () => this.forkToMessage() },
-      { name: "tree", desc: this.L.natFork, run: () => this.forkToMessage() },
-      { name: "import", desc: this.L.natImport, run: () => this.importSession() },
-      { name: "share", desc: this.L.natShare, run: () => this.shareSession() },
-      { name: "export", desc: this.L.natExport, run: () => this.exportSession() },
-      { name: "compact", desc: this.L.natCompact, run: () => this.compactSession() },
-      { name: "clone", desc: this.L.natClone, run: () => this.cloneSession() },
-      { name: "login", desc: this.L.natLogin, run: async () => this.openTerminalLogin() },
-      { name: "settings", desc: this.L.natSettings, run: () => this.settingsMenu() },
-    ];
-  }
-
-  /** 给 webview 提供 /命令列表（懒加载一次） */
-  private async sendSlashCommands(): Promise<void> {
-    let cmds: any[] = [];
-    try {
-      const client = this.ensureClient();
-      const d = await client.getCommands();
-      cmds = d?.commands ?? [];
-    } catch {
-      // pi 未就绪时给空列表
-    }
-    const builtin: any[] = [
-      // 上下文
-      { group: this.L.grpContext, label: this.L.slashUpload, description: this.L.slashUploadDesc, builtin: "uploadImage" },
-      { group: this.L.grpContext, label: this.L.slashMention, description: this.L.slashMentionDesc, builtin: "mentionFile" },
-      // 会话
-      { group: this.L.grpSession, label: this.L.slashNew, description: this.L.slashNewDesc, builtin: "newSession" },
-      { group: this.L.grpSession, label: this.L.slashResume, description: this.L.slashResumeDesc, builtin: "pickSession" },
-      { group: this.L.grpSession, label: this.L.slashTree, description: this.L.slashTreeDesc, builtin: "treeFork" },
-      { group: this.L.grpSession, label: this.L.slashImport, description: this.L.slashImportDesc, builtin: "importSession" },
-      { group: this.L.grpSession, label: this.L.slashShare, description: this.L.slashShareDesc, builtin: "shareSession" },
-      { group: this.L.grpSession, label: this.L.slashMore, description: this.L.slashMoreDesc, builtin: "more" },
-      // 模型
-      { group: this.L.grpModel, label: this.L.slashModel, description: this.L.slashModelDesc, builtin: "pickModel" },
-      { group: this.L.grpModel, label: this.L.slashThinking, description: this.L.slashThinkingDesc, builtin: "pickThinking" },
-      { group: this.L.grpModel, label: this.L.slashMode, description: this.L.slashModeDesc, builtin: "pickMode" },
-      // 配置（已合并进操作命令菜单，条目在菜单里分组展示）
-      { group: this.L.grpConfig, label: this.L.slashSettings, description: this.L.slashSettingsDesc, builtin: "settings" },
-    ];
-    // 面板原生命令与 pi 扩展命令并列展示；同名（如 /mode 两边都有）以原生为准去重，
-    // 否则补全面板出现两条 /mode，一条走本地一条走扩展
-    const nat = this.nativeSlashCommands();
-    const nativeNames = new Set(nat.map((c) => c.name));
-    const native = nat.map((c) => ({
-      group: this.L.grpCmds,
-      label: "/" + c.name,
-      description: c.desc,
-      name: c.name,
-    }));
-    const ext = cmds
-      .filter((c: any) => !nativeNames.has(String(c.name)))
-      .map((c: any) => ({
-        group: this.L.grpCmds,
-        label: "/" + c.name,
-        description: c.description || c.source || "",
-        name: c.name,
-      }));
-    this.post({ type: "slashList", commands: [...builtin, ...native, ...ext] });
-  }
-
-  /** 给 webview 提供工作区文件列表（相对路径 + 所在目录），供 @ 补全 */
-  private async sendWorkspaceFiles(): Promise<void> {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const files: { rel: string; dir: string }[] = [];
-    if (root) {
-      const walk = (dir: string, depth: number) => {
-        if (depth > 6 || files.length > 2000) return;
-        let entries: fs.Dirent[];
-        try {
-          entries = fs.readdirSync(dir, { withFileTypes: true });
-        } catch {
-          return;
-        }
-        for (const ent of entries) {
-          if (ent.name.startsWith(".") || ent.name === "node_modules" || ent.name === "out") continue;
-          const full = path.join(dir, ent.name);
-          const rel = path.relative(root, full).replace(/\\/g, "/");
-          if (ent.isDirectory()) {
-            files.push({ rel: rel + "/", dir: "" });
-            walk(full, depth + 1);
-          } else {
-            files.push({ rel, dir: path.dirname(rel) });
-          }
-        }
-      };
-      walk(root, 0);
-    }
-    this.post({ type: "fileList", files });
-  }
-
-  /** 从历史面板点击某条会话 → 切换过去 */
-  private async openSessionFile(file: string): Promise<void> {
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
-    }
-    try {
-      const client = this.ensureClient(true);
-      const r = await client.switchSession(file);
-      if (r?.cancelled) return;
-      const d = await client.getMessages();
-      this.post({ type: "render", messages: d?.messages ?? [] });
-      this.post({ type: "notice", text: this.L.sessionRestored });
-      await this.refreshState();
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
   }
 
@@ -1121,11 +604,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** ⚡ 命令菜单：对应 pi 命令行里的各种操作指令 */
   private async runCommand(): Promise<void> {
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
+    if (this.core.clientRef?.running && this.core.isNoSession) {
+      this.core.disposeClient();
     }
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     this.post({ type: "status", text: "" });
 
     type Item = vscode.QuickPickItem & { run?: () => Promise<void> };
@@ -1220,24 +702,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底；
-   *  文件也缺失时回退 pi 默认 auto——返回空串会把徽标清空（用户实测徽标消失） */
-  private modeBadgeText(): string {
-    if (this.lastModeText) return this.lastModeText;
-    try {
-      const m = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "mode.json"), "utf8")).mode;
-      const labels: Record<string, string> = { manual: "Manual", "edit-auto": "Edit automatically", plan: "Plan", auto: "Auto" };
-      if (m && labels[m]) return "⚡ " + labels[m];
-    } catch {
-      // ignore
-    }
-    return "⚡ Auto";
-  }
-
   /** 压缩上下文。withNote=true 时先问可选指令（⚡ 菜单入口，用户主动选的不算打扰）；
    *  /compact 直接压不二次确认——用户实测：敲完命令再弹框属于繁琐 */
   private async compactSession(withNote = false): Promise<void> {
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     let inst: string | undefined;
     if (withNote) {
       inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });
@@ -1256,7 +724,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 导出会话为 HTML（⚡ 菜单与 /export 共用） */
   private async exportSession(): Promise<void> {
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     const target = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(os.homedir(), "Desktop", "pi-session.html")),
       filters: { HTML: ["html"] },
@@ -1271,7 +739,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 克隆当前会话（⚡ 菜单与 /clone 共用） */
   private async cloneSession(): Promise<void> {
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     const r = await client.clone();
     if (r?.cancelled) return;
     this.post({ type: "notice", text: this.L.cloned });
@@ -1279,7 +747,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 会话树导航：列出活跃分支上的用户消息，选一条从那里继续（对应 pi TUI 的 /tree，RPC 走 fork） */
   private async forkToMessage(): Promise<void> {
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     try {
       const d = await client.getForkMessages();
       const msgs: any[] = d?.messages ?? [];
@@ -1314,11 +782,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "notice", text: this.L.importInvalid });
       return;
     }
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
+    if (this.core.clientRef?.running && this.core.isNoSession) {
+      this.core.disposeClient();
     }
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     try {
       const destDir = path.join(os.homedir(), ".pi", "agent", "sessions");
       fs.mkdirSync(destDir, { recursive: true });
@@ -1329,7 +796,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const d = await client.getMessages();
       this.post({ type: "render", messages: d?.messages ?? [] });
       this.post({ type: "notice", text: this.L.imported + path.basename(dest) });
-      await this.refreshState();
+      await this.core.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
@@ -1337,7 +804,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 分享会话：导出 HTML 并在浏览器打开，把文件发给对方即可（GitHub gist 自动分享需终端版 /share） */
   private async shareSession(): Promise<void> {
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     try {
       const out = path.join(os.tmpdir(), "pi-session-" + new Date().toISOString().replace(/[:.]/g, "-") + ".html");
       const r = await client.exportHtml(out);
@@ -1489,11 +956,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** ⚙ 设置菜单（/ 菜单入口用） */
   private async settingsMenu(): Promise<void> {
-    if (this.client?.running && this.clientNoSession) {
-      this.client.dispose();
-      this.client = undefined;
+    if (this.core.clientRef?.running && this.core.isNoSession) {
+      this.core.disposeClient();
     }
-    const client = this.ensureClient(true);
+    const client = this.core.ensureClient(true);
     const items = await this.buildSettingsItems(client);
     const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.settingsPh });
     if (!pick?.run) return;
@@ -1536,7 +1002,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       );
       if (pick === this.L.configKeyBtn) await this.configApiKey();
       else if (pick === this.L.loginBtn) {
-        const c = this.ensureClient();
+        const c = this.core.ensureClient();
         this.post({ type: "user", text: "/login" });
         await c.prompt("/login");
       }
@@ -1596,8 +1062,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (code === 0) {
         this.post({ type: "notice", text: this.L.installDone });
         // 装完后（重新）拉起客户端；还没有凭证则直接弹 key 配置
-        if (!this.client?.running) this.client = undefined;
-        const c = this.ensureClient();
+        if (!this.core.clientRef?.running) this.core.disposeClient();
+        const c = this.core.ensureClient();
         void c;
         void this.maybeOfferKeyConfig(true);
       } else {
@@ -1688,7 +1154,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async pickModel(): Promise<void> {
-    const client = this.ensureClient();
+    const client = this.core.ensureClient();
     let models: any[] = [];
     try {
       models = (await client.getAvailableModels())?.models ?? [];
@@ -1717,14 +1183,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         id: pick.model.id,
       });
       this.post({ type: "notice", text: this.L.modelSet + pick.label });
-      await this.refreshState();
+      await this.core.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.switchFail + (err?.message ?? err) });
     }
   }
 
   private async pickThinking(): Promise<void> {
-    const client = this.ensureClient();
+    const client = this.core.ensureClient();
     let levels: string[] = [];
     try {
       levels = (await client.getAvailableThinkingLevels())?.levels ?? [];
@@ -1742,391 +1208,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       await client.setThinkingLevel(pick);
       void this.globalState.update("piChat.lastThinking", pick);
-      await this.refreshState();
+      await this.core.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.setFail + (err?.message ?? err) });
     }
   }
 
-  /** 扩展的 UI 请求 → VS Code 原生对话框 */
-  private async handleUiRequest(req: any): Promise<void> {
-    const client = this.client;
-    if (!client) return;
-    const respond = (resp: Record<string, unknown>) =>
-      client.respondUi({ type: "extension_ui_response", id: req.id, ...resp });
+  /** 历史面板 📄 按钮：在旁栏打开会话 .jsonl 文件（原 webview case 内联体，提方法供 UiActions） */
+  private async revealSessionFile(file: string): Promise<void> {
     try {
-      switch (req.method) {
-        case "select": {
-          const pick = await vscode.window.showQuickPick(req.options ?? [], {
-            placeHolder: req.title ?? this.L.pleaseSelect,
-          });
-          if (pick === undefined) respond({ cancelled: true });
-          else respond({ value: pick });
-          break;
-        }
-        case "confirm": {
-          const sel = await vscode.window.showWarningMessage(
-            req.title ?? this.L.confirm,
-            { modal: true, detail: req.message ?? "" },
-            this.L.confirm,
-            this.L.cancel
-          );
-          if (sel === undefined) respond({ cancelled: true });
-          else respond({ confirmed: sel === this.L.confirm });
-          break;
-        }
-        case "input":
-        case "editor": {
-          // editor（多行编辑）降级为单行输入框
-          const val = await vscode.window.showInputBox({
-            prompt: req.title ?? this.L.pleaseInput,
-            placeHolder: req.placeholder,
-            value: req.prefill,
-          });
-          if (val === undefined) respond({ cancelled: true });
-          else respond({ value: val });
-          break;
-        }
-        case "notify": {
-          // fire-and-forget，无需应答
-          this.post({
-            type: "notice",
-            text: (req.title ? req.title + ": " : "") + (req.message ?? ""),
-          });
-          break;
-        }
-        case "setStatus": {
-          // 模式扩展用 statusKey="mode" 推送当前权限模式，显示在底部状态栏
-          if (req.statusKey === "mode") {
-            this.lastModeText = req.statusText ?? "";
-            this.post({ type: "mode", text: this.lastModeText });
-          }
-          break;
-        }
-        default:
-          // setStatus/setWidget/setTitle 等忽略
-          break;
-      }
-    } catch {
-      respond({ cancelled: true });
+      const sdoc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      await vscode.window.showTextDocument(sdoc.uri, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.openSessionFileFail + (err?.message ?? err) });
     }
   }
 
-  /** 读取当前项目对应的“上次会话”（全局 Map：工作区路径 → 会话文件） */
-  private getSessionForWs(cwd: string): string | undefined {
-    const map = this.globalState.get<Record<string, string>>("piChat.lastSessionByWs") ?? {};
-    const key = cwd.replace(/\\+$/, "").toLowerCase();
-    return map[key];
-  }
-
-  /** 写入当前项目对应的“上次会话” */
-  private setSessionForWs(file: string): void {
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!cwd) return;
-    const map = this.globalState.get<Record<string, string>>("piChat.lastSessionByWs") ?? {};
-    map[cwd.replace(/\\+$/, "").toLowerCase()] = file;
-    void this.globalState.update("piChat.lastSessionByWs", map);
-  }
-
-  /** CC 风格自动命名：未命名会话收到首条真实用户消息后，用消息前 40 字做会话标题 */
-  private async autoTitleSession(text: string): Promise<void> {
-    try {
-      const client = this.client;
-      if (!client?.running) return;
-      if (this.lastSessionName) return; // 已有名字，不覆盖
-      const st = await client.getState().catch(() => null);
-      if (!st?.sessionFile || st.sessionName) return;
-      if (this.autoTitledFor === st.sessionFile) return;
-      const title = text.replace(/\s+/g, " ").trim().slice(0, 40);
-      if (!title) return;
-      await client.setSessionName(title);
-      this.autoTitledFor = st.sessionFile;
-      this.lastSessionName = title;
-      void this.refreshState(); // 头部「会话: …」立即更新
-    } catch {
-      // ignore
-    }
-  }
-
-  /** 拉取当前模型/思考等级/token 用量并更新头部状态栏 */
-  private async refreshState(): Promise<void> {
-    const client = this.client;
-    if (!client?.running) return;
-    try {
-      const st = await client.getState();
-      let stats: GetSessionStatsResult | null = null;
-      try {
-        stats = await client.getSessionStats();
-      } catch {
-        // ignore
-      }
-      // 真相对账：get_state.isStreaming 是 pi 的权威状态。只纠「镜像说空闲、真相在跑」方向——
-      // 反向不纠：prompt 乐观置位窗口内 isStreaming 尚为 false，纠了会打断正常反馈（那是 4s 兜底的职责）
-      if (st.isStreaming === true && !this.busy) {
-        this.busy = true;
-        this.pendingPrompt = false;
-        if (!this.runStartTs) this.runStartTs = Date.now();
-        this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
-        this.dbg("busy=true (reconcile: get_state.isStreaming)");
-      }
-      // 工单五-1 观察期断言（直连后镜像应与真相零漂移）：反向不一致只记日志不纠——
-      // busy=true 且已过 pendingPrompt 窗口时 pi 却空闲，意味着某个 busy setter 误清/漏清。
-      // 零触发观察期满后，本处与 onPiEvent 顶部的对账纠偏逻辑一并删除（DIRECTOR.md 工单五-1）
-      if (this.busy && !this.pendingPrompt && st.isStreaming === false) {
-        this.dbg("MISMATCH(reverse, observe-only): mirror busy but pi idle, pendingPrompt=false");
-      }
-      // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
-      if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
-      this.lastSessionName = st?.sessionName ?? null;
-      this.lastSessionFile = st?.sessionFile ?? null;
-      this.post({
-        type: "state",
-        ver: this.version,
-        model: st?.model
-          ? { name: st.model.name, provider: st.model.provider, id: st.model.id }
-          : null,
-        thinkingLevel: st?.thinkingLevel ?? null,
-        sessionName: st?.sessionName ?? null,
-        sessionFile: st?.sessionFile ?? null,
-        stats: stats
-          ? {
-              contextPercent: stats?.contextUsage?.percent ?? null,
-              cost: stats?.cost ?? 0,
-            }
-          : null,
+  /** pi 启动失败（找不到命令等）：面板通知 + 原生错误框提供一键安装（原 client.onError 内联体） */
+  private onStartError(err: Error): void {
+    this.post({ type: "notice", text: this.L.startFail + err.message });
+    void vscode.window
+      .showErrorMessage(this.L.piStartFail + err.message, this.L.installPiBtn)
+      .then((pick) => {
+        if (pick === this.L.installPiBtn) void this.installPi();
       });
-    } catch {
-      // ignore
-    }
-  }
-
-  /** agent_start 时把已被 pi 取走的排队气泡原地转正为普通气泡（不做整页重绘，避免打断流式渲染顺序） */
-  private async deliverQueuedInHistory(): Promise<void> {
-    try {
-      const d = await this.client?.getMessages();
-      const histTexts = (d?.messages ?? [])
-        .filter((m) => m.role === "user")
-        .map((m) => extractText(m.content));
-      const remaining: typeof this.queued = [];
-      for (const q of this.queued) {
-        if (histTexts.some((t: string) => t.includes(q.sentText))) {
-          // 已进历史 → 转正（webview 移除 ⏳ 行并追加普通用户气泡）
-          this.post({
-            type: "queuedDelivered",
-            qid: q.qid,
-            show: true,
-            text: q.text,
-            imageCount: q.imageCount,
-            codeInfo: q.codeInfo,
-          });
-        } else {
-          remaining.push(q);
-        }
-      }
-      this.queued = remaining;
-    } catch {
-      // ignore
-    }
-  }
-
-  /** 拉取会话历史重绘；逐条送达模式下排队会分多次取走，尚未进历史的排队项保留在 queuebar */
-  private syncRenderKeepQueued(): void {
-    void (async () => {
-      try {
-        const d = await this.client?.getMessages();
-        const msgs = d?.messages ?? [];
-        const histTexts = msgs
-          .filter((m) => m.role === "user")
-          .map((m) => extractText(m.content));
-        this.queued = this.queued.filter(
-          (q) => !histTexts.some((t: string) => t.includes(q.sentText))
-        );
-        this.post({ type: "queuedClear" });
-        this.post({ type: "render", messages: msgs });
-      } catch {
-        // ignore
-      }
-    })();
- }
-
-  private async onPiEvent(e: PiEvent): Promise<void> {
-    // 事件流即真相：这四类事件只在 agent 运行中产生。若 busy 镜像为 false 时收到，
-    // 说明镜像已漂移（如 4s 兜底误清），立即纠回——脱同步不再能存活到 run 结束
-    if (
-      !this.busy &&
-      (e.type === "message_start" || e.type === "message_update" ||
-       e.type === "tool_execution_start" || e.type === "tool_execution_end")
-    ) {
-      this.busy = true;
-      this.pendingPrompt = false;
-      if (!this.runStartTs) this.runStartTs = Date.now();
-      this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
-      this.dbg("busy=true (reconcile: " + e.type + " while mirror idle)");
-    }
-    switch (e.type) {
-      case "agent_start":
-        this.busy = true;
-        this.pendingPrompt = false;
-        this.runStartTs = Date.now();
-        // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
-        this.abortSkipRender = false;
-        this.post({ type: "busy", value: true, elapsedMs: 0 });
-        this.dbg("busy=true (agent_start)");
-        if (this.queued.length) void this.deliverQueuedInHistory();
-        break;
-
-      case "message_start": {
-        // 每条新的助手消息（含插话后继续生成的下一条）都开新气泡，避免增量拼进上一条导致错位
-        if ((e.message?.role ?? "assistant") === "assistant") {
-          this.post({ type: "newLive" });
-        }
-        break;
-      }
-
-      case "message_update": {
-        const d = e.assistantMessageEvent;
-        if (d?.type === "text_delta" && d.delta) {
-          this.post({ type: "delta", text: d.delta, ci: d.contentIndex ?? 0 });
-        } else if (d?.type === "thinking_delta" && d.delta) {
-          this.post({ type: "thinking", text: d.delta, ci: d.contentIndex ?? 0 });
-        } else if (d?.type === "toolcall_start") {
-          // 大参数工具（如 write 整个文件）光生成参数就要几十秒：转发开始事件，面板显示呼吸工具行
-          this.post({ type: "toolCallStart", ci: d.contentIndex ?? 0, id: d.id, name: d.toolName });
-        } else if (d?.type === "toolcall_delta") {
-          this.post({ type: "toolCallDelta", ci: d.contentIndex ?? 0, chunk: d.delta ?? "" });
-        }
-        break;
-      }
-
-      case "tool_execution_start":
-        this.post({
-          type: "toolStart",
-          id: e.toolCallId,
-          name: e.toolName,
-          detail: toolDetail(e.args),
-        });
-        break;
-
-      case "tool_execution_end": {
-        const text = extractText(e.result?.content);
-        this.post({
-          type: "toolEnd",
-          id: e.toolCallId,
-          name: e.toolName,
-          isError: !!e.isError,
-          text,
-          // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来
-          detail: toolDetail(e.args),
-        });
-        break;
-      }
-
-      case "model_select":
-      case "thinking_level_select":
-        await this.refreshState();
-        break;
-
-      case "auto_retry_start": {
-        // 模型请求失败（超时/过载/限流）自动重试：面板必须可见
-        const why =
-          typeof e.errorMessage === "string"
-            ? e.errorMessage
-            : typeof e.error === "string"
-              ? e.error
-              : "";
-        this.post({
-          type: "notice",
-          text:
-            fmt2(this.L.retryAttempt, e.attempt ?? "?", e.maxAttempts ?? "?") +
-            (why ? ": " + why.slice(0, 120) : ""),
-        });
-        this.post({
-          type: "status",
-          text: fmt2(this.L.retrying, e.attempt ?? "?", e.maxAttempts ?? "?"),
-        });
-        break;
-      }
-      case "auto_retry_end": {
-        this.post({ type: "status", text: "" });
-        if (e.success === false) {
-          this.post({
-            type: "notice",
-            text:
-              fmt(this.L.retryFailPre, e.attempt ?? "?") +
-              (e.finalError ? String(e.finalError).slice(0, 150) : this.L.netErr) +
-              this.L.resendHint,
-          });
-        } else if (e.attempt && e.attempt > 1) {
-          this.post({ type: "notice", text: fmt(this.L.retryOk, e.attempt) });
-        }
-        break;
-      }
-
-      case "queue_update": {
-        const steering = e.steering ?? [];
-        const followUp = e.followUp ?? [];
-        const total = steering.length + followUp.length;
-        // 关键：steering 是插进当前运行，不会触发 agent_start；只能靠队列变短感知插话已被取走
-        if (total < this.lastQueueTotal && this.queued.length) {
-          let n = Math.min(this.lastQueueTotal - total, this.queued.length);
-          while (n-- > 0) {
-            const q = this.queued.shift()!;
-            this.post({
-              type: "queuedDelivered",
-              qid: q.qid,
-              show: true,
-              text: q.text,
-              imageCount: q.imageCount,
-              codeInfo: q.codeInfo,
-            });
-          }
-        }
-        this.lastQueueTotal = total;
-        this.post({ type: "queue", steering, followUp });
-        break;
-      }
-
-      case "extension_error":
-        this.post({
-          type: "notice",
-          text: this.L.extErr + e.event + "): " + e.error,
-        });
-        break;
-
-      case "agent_settled": {
-        this.busy = false;
-        // 本轮实测耗时随 busy:false 下发（中断也算一轮，时长到中断为止）；
-        // 无 agent 运行（命令式应答）不带字段，webview 不显示耗时
-        this.post({
-          type: "busy",
-          value: false,
-          ...(this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
-        });
-        this.dbg("busy=false (agent_settled, elapsedMs=" + (this.runStartTs > 0 ? Date.now() - this.runStartTs : "n/a") + ")");
-        this.runStartTs = 0;
-        this.lastQueueTotal = 0;
-        if (this.abortSkipRender) {
-          // 中断后的重绘会抹掉现场（会话文件里被中断的消息是空的），跳过
-          this.abortSkipRender = false;
-          await this.refreshState();
-          break;
-        }
-        // 用完整会话消息重绘，纠正流式过程中的偏差；尚未送达的排队项保留气泡
-        this.syncRenderKeepQueued();
-        await this.refreshState();
-        break;
-      }
-
-      default: {
-        // 其余事件若携带错误信息（如模型请求超时），透传到面板，避免报错无反馈
-        const u = e as PiUnknownEvent;
-        const err = u.error ?? u.errorMessage ?? u.reason;
-        if (typeof err === "string" && err) {
-          this.post({ type: "notice", text: "⚠ " + u.type + ": " + err.slice(0, 200) });
-        }
-        break;
-      }
-    }
   }
 }
 
@@ -2231,15 +1336,3 @@ function readSessionMeta(file: string): { name?: string; cwd?: string; preview?:
     return {};
   }
 }
-
-function extractText(content: any): string {
-  if (typeof content === "string") return content;
-  let out = "";
-  if (Array.isArray(content)) {
-    for (const c of content) {
-      if (c?.type === "text" && c.text) out += c.text;
-    }
-  }
-  return out;
-}
-

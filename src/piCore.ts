@@ -252,7 +252,23 @@ export class PiCore {
     this.caps.setPersist("piChat.lastSessionByWs", map);
   }
 
-  private async onWebviewMessage(m: WebviewToHost): Promise<void> {
+  /** pickModeMenu（adapter）写入新徽标文本；webview 重建补发用（modeBadgeText 兑底） */
+  setModeText(text: string): void {
+    this.lastModeText = text;
+  }
+
+  /** adapter 的 deleteSessionPick 守卫读取：当前打开的会话不删 */
+  get currentSessionFile(): string | null {
+    return this.lastSessionFile;
+  }
+
+  /** adapter 的 pushCodeContext 判断「无编辑器且无上下文」时是否需要发清理消息 */
+  get hasCodeContext(): boolean {
+    return this.codeCtx !== null;
+  }
+
+  /** webview 消息路由入口（adapter 的 onDidReceiveMessage 直连本方法） */
+  async onWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
@@ -692,8 +708,9 @@ export class PiCore {
     }
   }
 
-  /** 扩展的 UI 请求 → 宿主原生对话框（能力经 HostCapabilities 注入，本文件不碰 vscode） */
-  private async handleUiRequest(req: any): Promise<void> {
+  /** 扩展的 UI 请求 → 宿主原生对话框（能力经 HostCapabilities 注入，本文件不碰 vscode）；
+   *  public：adapter 的 caps.uiRequest 也委托到这里 */
+  async handleUiRequest(req: any): Promise<void> {
     const client = this.client;
     if (!client) return;
     const respond = (resp: Record<string, unknown>) =>
@@ -775,8 +792,9 @@ export class PiCore {
     }
   }
 
-  /** 拉取当前模型/思考等级/token 用量并更新头部状态栏 */
-  private async refreshState(): Promise<void> {
+  /** 拉取当前模型/思考等级/token 用量并更新头部状态栏；
+   *  public：adapter 的 webview 重建恢复路径（resolveWebviewView）也调用 */
+  async refreshState(): Promise<void> {
     const client = this.client;
     if (!client?.running) return;
     try {

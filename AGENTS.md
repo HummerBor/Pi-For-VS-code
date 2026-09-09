@@ -22,9 +22,10 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   src/piSdk.ts 定位并 import 用户已装的 pi 包（前置条件不变：机器上必须有 pi）。RPC 版整树
   保留在分支 `rpc-subprocess`。改 piClient 前先读其头注释的「RPC 语义保留对照」——
   preflight 验收即回、拒收报错文案与 steer 自愈正则的匹配是跨模块契约，别动。
-- **piCore.ts / hostCapabilities.ts**：工单四的半成品（核心/宿主分层），未接线未完成；
-  接完前保持未跟踪不提交，门禁若被其类型错误拦住就地修类型不修行为（已发生一例：
-  piCore.ts getConfig 泛型字面量收窄，注解 string 解决）。
+- **核心/宿主分层（工单四，已接线）**：piCore.ts（核心控制器，禁 import vscode，宿主能力经
+  hostCapabilities.ts 接口注入）+ panel.ts（VS Code adapter：实现 HostCapabilities/UiActions，组装 PiCore）。
+  改核心逻辑（状态机/prompt 组装/事件路由）去 piCore.ts，VS Code UI 流程留 panel.ts；
+  webview 消息路由入口是 core.onWebviewMessage。对账基线：55e977b 的 panel.ts（e04a1dd 已同步漂移）
 - **vsix 瘦身**：media 只带 `pi-icon.png`/`pi-logo.svg`；README 截图引用 `raw.githubusercontent.com`
   仓库 URL——改截图必须 push 后才在市场生效。
 - **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（@ts-nocheck 已摘）。改它保持 ES5 var
@@ -52,7 +53,8 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 ## 结构
 
 ```
-src/            宿主侧（panel.ts 面板逻辑 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
+src/            宿主侧（panel.ts VS Code adapter / piCore.ts 核心控制器 / hostCapabilities.ts 宿主能力接口 /
+                piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
                 protocol.ts 消息协议 /
                 toolDetail.ts 共享摘要 / i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
