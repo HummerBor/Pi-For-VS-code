@@ -3,6 +3,7 @@ out/
 *.vsix
 *.zip
 HANDOVER.md
+DIRECTOR.md
 
 # webview vite 构建产物
 dist/

@@ -1,10 +1,11 @@
-// @ts-nocheck —— ES5 风格的历史代码忠实还原，不做 TS 严格检查（运行时语义与重构前逐字符一致）
 /**
  * webview 前端脚本（聊天面板全部交互逻辑）。
  * 由 vite 构建：npm run build:webview → dist/webview/main.js，宿主 getHtml 注入 webview。
- * 历史说明：曾以字符串数组内联在 panel.ts 里，故主体保留 ES5 var 风格，行为与重构前一致。
+ * 历史说明：曾以字符串数组内联在 panel.ts 里，故主体保留 ES5 var 风格。
+ * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/i18n";
+import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile } from "../src/protocol";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -12,30 +13,30 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState
 const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh") as Lang];
 (function(){
   var vscode = acquireVsCodeApi();
-  var messages = document.getElementById('messages');
-  var input = document.getElementById('input');
-  var stopBtn = document.getElementById('stop');
-  var sendBtn = document.getElementById('send');
-  var statusEl = document.getElementById('status');
-  var modeBadge = document.getElementById('modebadge');
-  var langEl = document.getElementById('lang');
-  var codechipEl = document.getElementById('codechip');
+  var messages = document.getElementById('messages') as HTMLElement;
+  var input = document.getElementById('input') as HTMLTextAreaElement;
+  var stopBtn = document.getElementById('stop') as HTMLButtonElement;
+  var sendBtn = document.getElementById('send') as HTMLButtonElement;
+  var statusEl = document.getElementById('status') as HTMLElement;
+  var modeBadge = document.getElementById('modebadge') as HTMLElement;
+  var langEl = document.getElementById('lang') as HTMLElement;
+  var codechipEl = document.getElementById('codechip') as HTMLElement;
   var codeCtx = null; var codeOn = true;
-  var modelEl = document.getElementById('model');
-  var thinkEl = document.getElementById('think');
-  var sessionEl = document.getElementById('session');
-  var moreEl = document.getElementById('more');
-  var themeEl = document.getElementById('theme');
-  var usageEl = document.getElementById('usage');
-  var newChatEl = document.getElementById('newchat');
-  var attachbarEl = document.getElementById('attachbar');
-  var attachEl = document.getElementById('attach');
-  var fileInput = document.getElementById('file');
-  var suggestEl = document.getElementById('suggest');
-  var plusmenuEl = document.getElementById('plusmenu');
-  var pmUpload = document.getElementById('pm-upload');
-  var pmAt = document.getElementById('pm-at');
-  var historyEl = document.getElementById('history');
+  var modelEl = document.getElementById('model') as HTMLElement;
+  var thinkEl = document.getElementById('think') as HTMLElement;
+  var sessionEl = document.getElementById('session') as HTMLElement;
+  var moreEl = document.getElementById('more') as HTMLElement;
+  var themeEl = document.getElementById('theme') as HTMLElement;
+  var usageEl = document.getElementById('usage') as HTMLElement;
+  var newChatEl = document.getElementById('newchat') as HTMLElement;
+  var attachbarEl = document.getElementById('attachbar') as HTMLElement;
+  var attachEl = document.getElementById('attach') as HTMLElement;
+  var fileInput = document.getElementById('file') as HTMLInputElement;
+  var suggestEl = document.getElementById('suggest') as HTMLElement;
+  var plusmenuEl = document.getElementById('plusmenu') as HTMLElement;
+  var pmUpload = document.getElementById('pm-upload') as HTMLElement;
+  var pmAt = document.getElementById('pm-at') as HTMLElement;
+  var historyEl = document.getElementById('history') as HTMLElement;
 
   // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──
   var ICON_PATHS = {
@@ -55,7 +56,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     check: '<path d="M3.2 8.6l3 3L12.8 4.4"/>',
     at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>'
   };
-  function ico(name, size) {
+  function ico(name: string, size?: number) {
     var s = size || 14;
     return '<svg viewBox="0 0 16 16" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
   }
@@ -69,13 +70,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return parts.join(' ');
   }
   var linkifyEnabled = true; // renderAll 批量重绘时关掉老消息的 linkify，只留最近几条（全量扫正则是大会话卡顿的主因）
-  function linkify(root) {
+  function linkify(root: HTMLElement | null) {
     if (!root || !linkifyEnabled) return;
     var nodes = [];
     var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    while (w.nextNode()) { var n = w.currentNode; if (n.parentNode.nodeName !== 'PRE' && n.parentNode.classList && !n.parentNode.classList.contains('fp')) nodes.push(n); }
+    while (w.nextNode()) { var n = w.currentNode as HTMLElement; var par = n.parentNode as HTMLElement; if (par.nodeName !== 'PRE' && par.classList && !par.classList.contains('fp')) nodes.push(n); }
     for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i]; var txt = n.nodeValue; if (!txt) continue;
+      var n2 = nodes[i]; var txt = n2.nodeValue; if (!txt) continue;
       FILE_RE.lastIndex = 0; if (!FILE_RE.test(txt)) continue;
       FILE_RE.lastIndex = 0;
       var frag = document.createDocumentFragment(); var last = 0, m2;
@@ -90,18 +91,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         last = m2.index + m2[0].length;
       }
       if (last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last)));
-      n.parentNode.replaceChild(frag, n);
+      n2.parentNode!.replaceChild(frag, n2);
     }
   }
   // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）
   messages.addEventListener('click', function (e) {
-    var t = e.target;
+    var t = e.target as HTMLElement | null;
     while (t && t !== messages) {
       if (t.classList && t.classList.contains('fp')) {
         e.stopPropagation(); vscode.postMessage({ type: 'openPath', path: t.getAttribute('data-p') });
         return;
       }
-      t = t.parentNode;
+      t = t.parentNode as HTMLElement | null;
     }
   }, true);
 
@@ -129,7 +130,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）
     input.focus(); updateSuggest();
   });
-  document.addEventListener('click', function (e) { if (!plusmenuEl.contains(e.target) && e.target !== attachEl) plusmenuEl.style.display = 'none'; });
+  document.addEventListener('click', function (e) { var tgt = e.target as Node; if (!plusmenuEl.contains(tgt) && tgt !== attachEl) plusmenuEl.style.display = 'none'; });
 
   // ── 历史会话：点 ⏱ 直接打开原生会话菜单（QuickPick）──
   historyEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
@@ -158,7 +159,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var liveLast = null;
   var toolEls = {};
 
-  function el(tag, cls, text) {
+  function el(tag: string, cls: string, text?: string) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text !== undefined && text !== '') e.textContent = text;
@@ -266,7 +267,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     linkify(parent);
   }
 
-  function addUser(text, imageCount, codeInfo, fileCount) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } messages.appendChild(b); scroll(); }
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } messages.appendChild(b); scroll(); }
   var queuedItems = [];
   function addQueued(q) {
     queuedItems.push(q);
@@ -291,7 +292,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!liveMsg) liveMsg = { content: [] };
     if (!liveParts) liveParts = {};
   }
-  function liveBlock(ci, kind, name) {
+  function liveBlock(ci: number, kind: string, name?: string) {
     liveEnsure();
     while (liveMsg.content.length <= ci) liveMsg.content.push(null);
     var p = liveParts[ci];
@@ -389,7 +390,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     p.buf += t; p.body.appendChild(document.createTextNode(t));
     scroll();
   }
-  function toolStart(id, name, detail, collapsed) {
+  function toolStart(id: string, name: string, detail?: string, collapsed?: boolean) {
     var t = el('div', 'tool run');
     t.appendChild(el('span', 't-dot'));
     t.appendChild(el('span', 't-name', name));
@@ -816,8 +817,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files); });
-  window.addEventListener('message', function (ev) {
-    var m = ev.data;
+  window.addEventListener('message', function (ev: MessageEvent) {
+    var m = ev.data as HostToWebview;
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     else if (m.type === 'delta') appendDelta(m.text, m.ci);
@@ -835,7 +836,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     else if (m.type === 'busy') setBusy(m.value);
-    else if (m.type === 'render') setTimeout(function () { renderAll(m.messages); }, 0); // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'render') { var rm = m; setTimeout(function () { renderAll(rm.messages); }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }

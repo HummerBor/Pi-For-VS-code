@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb, fmt, fmt2 } from "./i18n";
 import { getHtml } from "./webview-html";
+import type { HostToWebview, PiEvent, PiUnknownEvent, WebviewToHost } from "./protocol";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
@@ -195,7 +196,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch { /* ignore */ }
   }
 
-  private post(msg: any): void {
+  private post(msg: HostToWebview): void {
     void this.view?.webview.postMessage(msg);
   }
 
@@ -278,7 +279,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (pick === this.L.installPiBtn) void this.installPi();
         });
     };
-    client.events.on("event", (e: any) => void this.onPiEvent(e));
+    client.events.on("event", (e: PiEvent) => void this.onPiEvent(e));
 
     this.post({ type: "status", text: this.L.startingPi });
     // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
@@ -343,7 +344,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return client;
   }
 
-  private async onWebviewMessage(m: any): Promise<void> {
+  private async onWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
@@ -1784,7 +1785,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     })();
  }
 
-  private async onPiEvent(e: any): Promise<void> {
+  private async onPiEvent(e: PiEvent): Promise<void> {
     switch (e.type) {
       case "agent_start":
         this.busy = true;
@@ -1931,9 +1932,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       default: {
         // 其余事件若携带错误信息（如模型请求超时），透传到面板，避免报错无反馈
-        const err = e.error ?? e.errorMessage ?? e.reason;
+        const u = e as PiUnknownEvent;
+        const err = u.error ?? u.errorMessage ?? u.reason;
         if (typeof err === "string" && err) {
-          this.post({ type: "notice", text: "⚠ " + e.type + ": " + err.slice(0, 200) });
+          this.post({ type: "notice", text: "⚠ " + u.type + ": " + err.slice(0, 200) });
         }
         break;
       }
