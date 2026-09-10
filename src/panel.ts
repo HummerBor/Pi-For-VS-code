@@ -836,6 +836,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     const client = this.core.ensureClient(true);
     try {
+      // 大小上限：50MB（审计要求，超大文件 copyFileSync 本身会长时间阻塞 + 耗尽内存）
+      const srcStat = fs.statSync(src);
+      if (srcStat.size > 50 * 1024 * 1024) {
+        this.post({ type: "notice", text: this.L.importTooLarge });
+        return;
+      }
       const destDir = path.join(os.homedir(), ".pi", "agent", "sessions");
       fs.mkdirSync(destDir, { recursive: true });
       const dest = path.join(destDir, "imported-" + Date.now() + "-" + path.basename(src));

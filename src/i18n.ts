@@ -308,6 +308,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     slashShareDesc: "导出 HTML 并在浏览器打开，把文件发给对方即可",
     imported: "✔ 会话已导入并切换: ",
     importInvalid: "ⓘ 请选择 .jsonl 会话文件",
+    importTooLarge: "ⓘ 文件过大（最大 50MB），无法导入",
     shareDone: "✔ HTML 已在浏览器打开，把该文件发给对方即可分享（GitHub gist 自动分享需终端版 /share）",
 
     // ── UI 请求（pi 扩展）──
@@ -674,6 +675,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     slashShareDesc: "Export HTML and open in browser; send the file to share",
     imported: "✔ Session imported and switched: ",
     importInvalid: "ⓘ Please pick a .jsonl session file",
+    importTooLarge: "ⓘ File too large (max 50MB), cannot import",
     shareDone: "✔ HTML opened in your browser — send that file to share (GitHub gist auto-share needs terminal /share)",
 
     pleaseSelect: "Please select",
