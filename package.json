@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.0.86",
+  "version": "0.0.87",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
