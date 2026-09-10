@@ -124,7 +124,7 @@
     "test:revert": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/patchRevert.test.mts",
     "package": "npm run compile && npx @vscode/vsce package",
     "release": "npm version patch --no-git-tag-version && npm run compile && npx @vscode/vsce package",
-    "ship": "npm run release && git add -A && git commit -m \"chore: release\" && node scripts/publish.js",
+    "ship": "npm run release && node scripts/publish.js",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
