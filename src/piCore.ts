@@ -83,6 +83,10 @@ export class PiCore {
    *  extractFileOpsFromMessage；bash/powershell 改动 pi 自身不追踪，由 adapter git 比对兜底）。
    *  会话域持有：agent_start 清空、换 sessionFile 清空，多标签落地时直接复用为归属层 */
   private runChangedFiles = new Map<string, ToolChangedFile>();
+  /** 工单七：toolCallId → 文件路径。end 事件不带 args（实查 pi-agent-core types.d.ts:410
+   *  只有 toolCallId/toolName/result/isError），patch 归档必须靠 start 时记下的映射。
+   *  注：此修复曾随 5f30a51 后的未提交态被 11:24 的 checkout 连坐丢失，本次重打 */
+  private toolCallPaths = new Map<string, string>();
   /** 工单七 run 边界回调：核心只产中性事件，adapter 拿它做 git 快照/比对。
    *  可为 null（宿主未接时收集照常、事件丢弃） */
   onRunStart: (() => void) | null = null;
@@ -880,6 +884,7 @@ export class PiCore {
         if (this.banner) this.setBanner(null);
         // 工单七：变更清单同样是会话域信息，不残留到别的会话
         this.runChangedFiles.clear();
+        this.toolCallPaths.clear();
       }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
@@ -994,6 +999,7 @@ export class PiCore {
         this.runStartTs = Date.now();
         // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
         this.runChangedFiles.clear();
+        this.toolCallPaths.clear();
         try { this.onRunStart?.(); } catch { /* 快照失败不阻断 agent 运行 */ }
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
@@ -1032,6 +1038,8 @@ export class PiCore {
             && typeof (e.args as Record<string, unknown>).path === "string") {
           const p = (e.args as Record<string, string>).path;
           if (!this.runChangedFiles.has(p)) this.runChangedFiles.set(p, { path: p, tool: e.toolName, patches: [] });
+          // end 事件无 args，靠 toolCallId 找回文件（patch 归档必需）
+          this.toolCallPaths.set(e.toolCallId, p);
         }
         this.post({
           type: "toolStart",
@@ -1045,10 +1053,9 @@ export class PiCore {
         // 工单七：edit 的 result.details.patch（jsdiff unified）按时间序累积——
         // 未跟踪文件逆序逆向还原的唯一依据（裁决 11③）；write 无 details，不可还原
         const patch = e.result?.details?.patch;
-        const known = typeof e.args === "object" && e.args !== null
-          && typeof (e.args as Record<string, unknown>).path === "string"
-          ? this.runChangedFiles.get((e.args as Record<string, string>).path)
-          : undefined;
+        // end 事件不带 args（见 toolCallPaths 注释），按 toolCallId 找回路径再归档 patch
+        const callPath = this.toolCallPaths.get(e.toolCallId);
+        const known = callPath ? this.runChangedFiles.get(callPath) : undefined;
         if (e.toolName === "edit" && known && typeof patch === "string" && patch) known.patches.push(patch);
         const text = extractText(e.result?.content);
         this.post({

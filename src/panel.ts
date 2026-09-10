@@ -721,16 +721,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     ];
 
-    // 工单七：清单在手时⚡菜单保留查看入口——顶栏条被 ✕ 收起后查看能力不丢失
-    if (this.changesFiles.length) {
-      items.unshift({
-        label: this.L.cmdViewChanges,
-        run: async () => {
-          await this.showChangesFlow();
-        },
-      });
-    }
-
     // 合并设置菜单（分组展示，原 ⚙ 按钮内容全部保留在此）
     items.push({ label: this.L.grpConfig, kind: vscode.QuickPickItemKind.Separator });
     items.push(...(await this.buildSettingsItems(client)));
@@ -1424,7 +1414,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           detail: f.path,
           path: f.path,
           buttons: [
-            ...(d?.canGit && d.inHead
+            ...(d && (d.canGit && d.inHead || d.source === "tool" && d.patches.length > 0)
               ? [{ iconPath: new vscode.ThemeIcon("diff"), tooltip: this.L.chgActDiff, act: "diff" }]
               : []),
             ...(d && this.revertable(d)
@@ -1439,7 +1429,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     qp.onDidTriggerItemButton(async ({ item, button }) => {
       const act = (button as ChgButton).act;
       const d = this.changesDetail.get(item.path);
-      if (act === "diff") await this.openHeadDiff(item.path);
+      if (act === "diff") await this.openChangesDiff(item.path);
       else if (act === "revert" && d) {
         await this.revertFile(item.path, d);
         qp.items = buildItems(); // 还原完原地刷新清单（revertFile 已把文件移出 changesFiles）
@@ -1450,8 +1440,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       qp.hide();
       if (!item) return;
       const d = this.changesDetail.get(item.path);
-      if (d?.canGit && d.inHead) void this.openHeadDiff(item.path);
-      else if (d && this.revertable(d)) void this.revertFile(item.path, d);
+      if (d && (d.canGit && d.inHead || d.source === "tool" && d.patches.length > 0)) void this.openChangesDiff(item.path);
       else this.post({ type: "notice", text: this.L.chgNoAction });
     });
     qp.show();
@@ -1464,9 +1453,51 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return d.tool === "edit" && d.patches.length > 0;
   }
 
+  /** diff 入口路由：tracked 开 HEAD 对比；未跟踪/无基线开「本轮改动前 ↔ 当前」
+   *  （patch 链逆向取 pi 动文件前的状态，未跟踪文件也有代码对比可看） */
+  private hunkKey(p: string): string {
+    return path.normalize(p);
+  }
+
+  private async openChangesDiff(abs: string): Promise<void> {
+    const d = this.changesDetail.get(this.hunkKey(abs));
+    if (d?.canGit && d.inHead) await this.openHeadDiff(abs);
+    else await this.openPrerunDiff(abs);
+  }
+
+  /** 未跟踪文件的对比：本轮改动前（patch 逆向）↔ 当前 */
+  private async openPrerunDiff(abs: string): Promise<void> {
+    const headUri = vscode.Uri.parse("pi-head:/" + encodeURIComponent(abs) + "?" + encodeURIComponent("prerun:" + abs));
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      headUri,
+      vscode.Uri.file(abs),
+      path.basename(abs) + "  (本轮改动前 ↔ " + this.L.chgWorking + ")",
+      { preview: true }
+    );
+  }
+
   /** vscode.diff 左侧：HEAD 版本只读内容（TextDocumentContentProvider 回调） */
   private async headContent(uri: vscode.Uri): Promise<string> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    // 未跟踪文件的对比侧：query 带 prerun: 前缀 → 返回本轮改动前内容（patch 链逆向，
+    // 任一步不符返回失败占位——与 revertFile 同源校验，不硬猜）
+    if (uri.query.startsWith("prerun%3A") || uri.query.startsWith("prerun:")) {
+      const abs = decodeURIComponent(uri.query.slice(7));
+      const d = this.changesDetail.get(this.hunkKey(abs));
+      if (!d || !d.patches.length) return "";
+      try {
+        let content = fs.readFileSync(abs, "utf8");
+        for (let i = d.patches.length - 1; i >= 0; i--) {
+          const r = reverseApplyPatch(content, d.patches[i]);
+          if (!r.ok || r.content === null) return this.L.chgHeadFail;
+          content = r.content;
+        }
+        return content;
+      } catch {
+        return this.L.chgHeadFail;
+      }
+    }
     const rel = decodeURIComponent(uri.query);
     if (!root) return this.L.chgHeadFail;
     const out = await this.git(["show", "HEAD:" + rel], root);

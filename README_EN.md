@@ -17,6 +17,7 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 - **No terminal needed**: pi is installed with one click from the panel and launched in the background — you just describe the task; keys, models and sessions are clicks too
 - **Lightweight & fast**: a webview driving the pi engine in-process (no subprocess remote-control) — streaming at terminal TUI speed, no Electron nesting — happy to stay open all day
 - **Customizable**: icon, tips, themes — all just strings to edit; reload and done
+- **Change review**: when pi finishes a run, the panel lists exactly the files it touched this run — open a native diff in one click, or revert a file whole if you don't like it (your own uncommitted work is never touched). The confidence to run in Auto mode
 - **Local-first data**: session history and credentials stay on your machine, no cloud, no telemetry
 
 ## Getting started
