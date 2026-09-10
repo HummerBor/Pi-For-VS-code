@@ -27,6 +27,8 @@ export interface UiActions {
   pickMode(): Promise<void>;
   revealSessionFile(file: string): Promise<void>;
   openPath(path: string): Promise<void>;
+  /** 拖入 URI → 绝对路径（vscode.Uri 转 fsPath 并校验存在；不存在的丢弃） */
+  resolveUris(uris: string[]): Promise<{ name: string; path: string }[]>;
   more(): Promise<void>;
   settings(): Promise<void>;
   pickModel(): Promise<void>;
@@ -370,7 +372,11 @@ export class PiCore {
         // 附件文件（顶部胶囊行，可多个）→ 拼进消息文本
         if (Array.isArray(m.files) && m.files.length) {
           for (const f of m.files) {
-            if (f && typeof f.text === "string" && f.text.length) {
+            if (!f) continue;
+            if (f.path) {
+              // 路径模式：让 pi 自己读文件，不把内容内联进 prompt
+              text = "--- 附件: " + (f.name || "file") + " (路径: " + f.path + ")\n请用 read 工具读取此文件。\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
+            } else if (typeof f.text === "string" && f.text.length) {
               // 不用 ``` 包裹：文件内容本身可能含 ``` 会提前闭合围栏；用唯一结束行分界
               text = "--- 附件: " + (f.name || "file") + " ---\n" + f.text + "\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
             }
@@ -541,8 +547,25 @@ export class PiCore {
         break;
       case "attachFile":
         // 非图片文件 → 顶部附件行胶囊（与拖拽/粘贴/上传同一模型）
-        if (typeof m.text === "string" && m.text.length) {
+        if (typeof m.data === "string" && m.data.length) {
+          // 路径兑底字节通道：OS 拖入/剪贴板拿不到绝对路径，宿主落临时文件再把路径交给 pi
+          const safeName = String(m.name || "file").replace(/[\\/:*?"<>|]/g, "_");
+          const tmp = path.join(os.tmpdir(), "pi-attach-" + Date.now() + "-" + safeName);
+          try {
+            fs.writeFileSync(tmp, Buffer.from(m.data, "base64"));
+            this.post({ type: "addFiles", files: [{ name: safeName, path: tmp }] });
+          } catch (err: any) {
+            this.post({ type: "notice", text: this.L.attachTempFail + String(err?.message ?? err).slice(0, 120) });
+          }
+        } else if (typeof m.text === "string" && m.text.length) {
           this.post({ type: "addFiles", files: [{ name: String(m.name || "file"), text: m.text }] });
+        }
+        break;
+      case "attachUri":
+        // VS Code 资源管理器拖入：URI 转 fsPath 后走同一条 addFiles 回发
+        if (Array.isArray(m.uris) && m.uris.length) {
+          const files = await this.ui.resolveUris(m.uris);
+          if (files.length) this.post({ type: "addFiles", files });
         }
         break;
       case "pickMode":

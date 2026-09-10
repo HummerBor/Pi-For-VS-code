@@ -103,6 +103,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pickMode: () => this.pickModeMenu(),
       revealSessionFile: (file) => this.revealSessionFile(file),
       openPath: (p) => this.openFilePath(p),
+      resolveUris: async (uris) => {
+        const out: { name: string; path: string }[] = [];
+        for (const u of uris) {
+          try {
+            const fsPath = vscode.Uri.parse(u).fsPath;
+            if (fsPath && fs.statSync(fsPath).isFile()) out.push({ name: path.basename(fsPath), path: fsPath });
+          } catch { /* 拖入项不是本地文件（远端/虚拟文档）→ 丢弃 */ }
+        }
+        return out;
+      },
       more: () => this.runCommand(),
       settings: () => this.settingsMenu(),
       pickModel: () => this.pickModel(),
@@ -480,7 +490,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!uris?.length) return;
     const images: any[] = [];
     const imgExts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
-    const textFiles: { name: string; text: string }[] = [];
+    const textFiles: { name: string; text?: string; path?: string }[] = [];
     for (const uri of uris) {
       try {
         const ext = path.extname(uri.fsPath).toLowerCase();
@@ -497,13 +507,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             name: path.basename(uri.fsPath),
           });
         } else if (textFiles.length < 5) {
-          // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）
-          const stat = fs.statSync(uri.fsPath);
-          if (stat.size > 200 * 1024) {
-            this.post({ type: "notice", text: this.L.fileTooBigI + path.basename(uri.fsPath) });
-            continue;
-          }
-          textFiles.push({ name: path.basename(uri.fsPath), text: fs.readFileSync(uri.fsPath, "utf8") });
+          // 路径模式：把绝对路径传给 webview，由 webview 传给 pi 让 pi 自己读
+          textFiles.push({ name: path.basename(uri.fsPath), path: uri.fsPath });
         }
       } catch {
         // ignore

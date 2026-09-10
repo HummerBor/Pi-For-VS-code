@@ -681,19 +681,49 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     } else { usageEl.textContent = ''; }
   }
 
-  function handleFiles(files) {
+  function handleFiles(files, dt) {
     var textDone = false;
     var fileCount = 0;
+    // VS Code 资源管理器拖入：File 对象无 MIME 无 path，但 dataTransfer 带资源 URI
+    var uris = null;
+    if (dt) {
+      var raw = dt.getData('resourceurls') || dt.getData('text/uri-list') || '';
+      var list = String(raw || '').split(/\s+/).filter(function (u) { return /^file:/i.test(u); });
+      if (list.length) uris = list;
+    }
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
-      if (f.type.indexOf('image/') !== 0) {
-        // 非图片 → 读成文本，作为顶部附件行胶囊（最多 5 个，单个超 200KB 跳过）
+      // 图片判定：f.type 不可靠——从 VS Code 资源管理器拖入的 File 没有 MIME（type 为空），
+      // 只看 type 会把图片误判成普通文件；用扩展名兑底
+      var isImg = f.type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name || '');
+      if (!isImg) {
         if (pendingFiles.length >= 5) { notice(L.maxFiles); break; }
-        if (f.size > 200 * 1024) { notice(L.fileTooBig + (f.name || '')); continue; }
+        // 路径模式：只传路径，不读内容，不限大小。三级兑底：
+        // ① Electron 暴露的 f.path（部分版本 OS 拖入可用）
+        var p = (f as any).path;
+        if (p) {
+          (function(file, filePath) {
+            pendingFiles.push({ name: file.name || 'file', path: filePath });
+            renderAttach();
+          })(f, p);
+          continue;
+        }
+        // ② 资源 URI（VS Code 资源管理器拖入）→ 宿主转 fsPath 后回发 addFiles
+        if (uris && uris.length) {
+          vscode.postMessage({ type: 'attachUri', uris: uris });
+          uris = null; // 一拖多文件只发一次，URI 已覆盖整个 drop
+          continue;
+        }
+        // ③ 字节通道：OS 拖入拿不到任何路径 → 读 base64 交宿主落临时文件（20MB 上限防 webview 卡死）
+        if (f.size > 20 * 1024 * 1024) { notice(L.attachTooBig + (f.name || '')); continue; }
         (function(file) {
           var r = new FileReader();
-          r.onload = function() { pendingFiles.push({ name: file.name || 'file', text: String(r.result || '') }); renderAttach(); };
-          r.readAsText(file);
+          r.onload = function() {
+            var data = String(r.result || '').split(',')[1] || '';
+            if (!data) { notice('ⓐ ' + L.dragNoPath); return; }
+            vscode.postMessage({ type: 'attachFile', name: file.name || 'file', data: data });
+          };
+          r.readAsDataURL(file);
         })(f);
         continue;
       }
@@ -710,7 +740,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           probe.onload = function() {
             // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
             if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight)); return; }
-            pendingImages.push({ data: data, mimeType: file.type, name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
+            pendingImages.push({ data: data, mimeType: file.type || 'image/png', name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
             renderAttach();
           };
           probe.src = url;
@@ -740,6 +770,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         var p = pendingFiles[idx];
         var chip = el('span', 'chip-file');
         chip.innerHTML = ico('filecode', 12) + ' ' + esc(p.name);
+        if (p.path) {
+          chip.title = p.path;
+          var pathHint = el('span', '', ' · ' + esc(p.path.split(/[\\/]/).pop() || p.path));
+          pathHint.style.opacity = '.6';
+          pathHint.style.fontSize = '10px';
+          chip.appendChild(pathHint);
+        }
         var x = el('span', 'chip-x', '\u00d7');
         x.addEventListener('click', function() { pendingFiles.splice(idx, 1); renderAttach(); });
         chip.appendChild(x);
@@ -822,7 +859,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var t = input.value.trim();
     if (!t && !pendingImages.length && !pendingFiles.length) return;
     var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
-    var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text }; });
+    var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
     var attachCode = codeCtx && codeOn;
     input.value = '';
     autoSize();
@@ -831,7 +868,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   sendBtn.addEventListener('click', send);
   stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });
-  fileInput.addEventListener('change', function () { handleFiles(fileInput.files || []); fileInput.value = ''; });
+  fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
   sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
   themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });
@@ -869,10 +906,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   input.addEventListener('paste', function (e) {
     var files = filesFromClipboard((e.clipboardData || {}).items || []);
-    if (files.length) { e.preventDefault(); handleFiles(files); }
+    if (files.length) { e.preventDefault(); handleFiles(files, null); }
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
-  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files); });
+  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files, dt); });
   window.addEventListener('message', function (ev: MessageEvent) {
     var m = ev.data as HostToWebview;
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);

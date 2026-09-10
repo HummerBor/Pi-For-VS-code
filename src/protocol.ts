@@ -19,7 +19,7 @@ export interface WvPromptMsg {
   type: "prompt";
   text: string;
   images?: { data: string; mimeType: string }[];
-  files?: { name: string; text: string }[];
+  files?: { name: string; text?: string; path?: string }[];
   attachCode?: boolean;
 }
 export interface WvAbortMsg {
@@ -49,7 +49,15 @@ export interface WvUploadImageMsg {
 export interface WvAttachFileMsg {
   type: "attachFile";
   name?: string;
-  text: string;
+  text?: string;
+  /** 路径兑底字节通道：webview 拿不到绝对路径时（OS 拖入/剪贴板），base64 交宿主落临时文件 */
+  data?: string;
+  path?: string;
+}
+/** VS Code 资源管理器拖入：webview 拿不到 File.path，但 dataTransfer 带资源 URI，宿主转 fsPath */
+export interface WvAttachUriMsg {
+  type: "attachUri";
+  uris: string[];
 }
 export interface WvPickModeMsg {
   type: "pickMode";
@@ -121,6 +129,7 @@ export type WebviewToHost =
   | WvNewSessionMsg
   | WvUploadImageMsg
   | WvAttachFileMsg
+  | WvAttachUriMsg
   | WvPickModeMsg
   | WvGetSlashMsg
   | WvOpenSessionMsg
@@ -273,7 +282,7 @@ export interface AddImagesMsg {
 }
 export interface AddFilesMsg {
   type: "addFiles";
-  files: { name: string; text: string }[];
+  files: { name: string; text?: string; path?: string }[];
 }
 export interface SlashCommand {
   name: string;
