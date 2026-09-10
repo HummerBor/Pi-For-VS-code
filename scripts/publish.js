@@ -19,6 +19,25 @@ const path = require("path");
 
 const cwd = __dirname + "/..";
 
+// ── 输入读取：Windows 主场景用 PowerShell Read-Host ────────────
+// 选型理由：process.stdin.read(1) 紧循环阻塞事件循环 → I/O 永不处理
+// → read() 恒 null → 100% CPU 空转挂死（构造性死锁）。spawnSync
+// 调用 PowerShell Read-Host 为真正阻塞调用，能拿回键入值，无空转风险。
+// POSIX 分支可加 fs.readFileSync(0, "utf8") 但本项目仅 Windows 使用，
+// 不加跨平台分支。禁止引入 readline-sync 等新依赖。
+function readInput(prompt) {
+  var r = spawnSync("powershell", ["-NoProfile", "-Command", "Read-Host '" + prompt + "'"], {
+    encoding: "utf-8",
+    cwd: cwd,
+    stdio: ["inherit", "pipe", "inherit"],
+  });
+  if (r.status !== 0) {
+    console.error("\x1b[1;31m[ship] ✗ 读取输入失败（exit " + r.status + "）\x1b[0m");
+    process.exit(1);
+  }
+  return (r.stdout || "").trim();
+}
+
 // ── 0. 闸门：确认拦截 ──────────────────────────────────────────
 function confirmShip() {
   // 非交互环境检查 PI_CONFIRM_SHIP
@@ -32,29 +51,12 @@ function confirmShip() {
   }
 
   // 读取当前版本号
-  const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
+  var pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
   console.log("\x1b[36m[ship] ========== 发版确认 ==========\x1b[0m");
   console.log("\x1b[33m目标版本：" + pkg.version + "\x1b[0m");
 
-  process.stdout.write("\x1b[33m即将执行：git add -A → 逐hunk确认 → git commit → push → publish。键入 yes 继续：\x1b[0m");
-
-  // 逐字符读取（process.stdin 已是 tty 模式，read 同步调用）
-  let input = "";
-  let c;
-  try {
-    // 读取直到换行/回车
-    while (true) {
-      const n = process.stdin.read(1);
-      if (n === null) continue;
-      c = n.toString();
-      if (c === "\n" || c === "\r") break;
-      input += c;
-    }
-  } catch (e) {
-    // 无输入或中断
-  }
-
-  if (input.trim() !== "yes") {
+  var input = readInput("即将执行：git add -A → 逐hunk确认 → git commit → push → publish。键入 yes 继续：");
+  if (input !== "yes") {
     console.error("\x1b[1;31m[ship] ✗ 确认失败，已取消发版\x1b[0m");
     process.exit(1);
   }
@@ -66,7 +68,7 @@ function runShip() {
   confirmShip();
 
   console.log("\x1b[36m[ship] git add -A\x1b[0m");
-  const r1 = spawnSync("git", ["add", "-A"], { stdio: "inherit", cwd: cwd, shell: true });
+  var r1 = spawnSync("git", ["add", "-A"], { stdio: "inherit", cwd: cwd, shell: true });
   if (r1.status !== 0) {
     console.error("\x1b[1;31m[ship] ✗ git add -A 失败\x1b[0m");
     process.exit(r1.status || 1);
@@ -74,30 +76,20 @@ function runShip() {
 
   // 逐 hunk 打印归属确认
   console.log("\x1b[36m[ship] 逐 hunk 确认文件归属...\x1b[0m");
-  const r2 = spawnSync("git", ["diff", "--cached"], { cwd: cwd, encoding: "utf-8" });
-  const diffText = r2.stdout;
+  var r2 = spawnSync("git", ["diff", "--cached"], { cwd: cwd, encoding: "utf-8" });
+  var diffText = r2.stdout;
   if (diffText) {
-    const hunks = diffText.split(/^diff --git/m).filter(Boolean);
+    var hunks = diffText.split(/^diff --git/m).filter(Boolean);
     hunks.forEach(function (h) {
-      const header = h.split("\n")[0];
+      var header = h.split("\n")[0];
       console.log("\x1b[33m--- " + header + " ---\x1b[0m");
       console.log(h);
     });
     // PI_CONFIRM_SHIP=1 时跳过交互（CI/自动化场景）
     if (process.env.PI_CONFIRM_SHIP !== "1") {
-      process.stdout.write("\x1b[33m确认以上 hunk 归属无误，键入 yes 继续：\x1b[0m");
-      let input2 = "";
-      try {
-        while (true) {
-          const n = process.stdin.read(1);
-          if (n === null) continue;
-          const ch = n.toString();
-          if (ch === "\n" || ch === "\r") break;
-          input2 += ch;
-        }
-      } catch (e) {}
-      if (input2.trim() !== "yes") {
-        console.error("\x1b[1;31m[ship] ✗ 确认失败，已取消发版\x1b[0m");
+      var input2 = readInput("确认以上 hunk 归属无误，键入 yes 继续：");
+      if (input2 !== "yes") {
+        console.error("\x1b[1;31m[ship] ✗ hunk 确认失败，已取消发版\x1b[0m");
         process.exit(1);
       }
       console.log("\x1b[32m[ship] ✓ 已确认\x1b[0m");
@@ -109,10 +101,10 @@ function runShip() {
   }
 }
 
-// ── 2. 提交 ─────────────────────────────────────────────────────
+// ── 1. 提交 ─────────────────────────────────────────────────────
 function gitCommit() {
   console.log("\x1b[36m[ship] git commit -m \"chore: release\"\x1b[0m");
-  const r = spawnSync("git", ["commit", "-m", "chore: release"], { stdio: "inherit", cwd: cwd, shell: true });
+  var r = spawnSync("git", ["commit", "-m", "chore: release"], { stdio: "inherit", cwd: cwd, shell: true });
   if (r.status !== 0) {
     console.error("\x1b[1;31m[ship] ✗ git commit 失败\x1b[0m");
     process.exit(r.status || 1);
@@ -120,10 +112,10 @@ function gitCommit() {
   console.log("\x1b[32m[ship] ✓ 已提交\x1b[0m");
 }
 
-// ── 3. 推送 + 发布（原逻辑） ───────────────────────────────────
+// ── 2. 推送 + 发布（原逻辑） ───────────────────────────────────
 function run(step, cmd, args) {
   console.log("\x1b[36m[ship] " + step + ": " + cmd + " " + args.join(" ") + "\x1b[0m");
-  const r = spawnSync(cmd, args, { stdio: "inherit", shell: true });
+  var r = spawnSync(cmd, args, { stdio: "inherit", shell: true });
   if (r.status !== 0) {
     console.error("\x1b[1;31m[ship] ✗ " + step + " 失败（退出码 " + r.status + "）——后续步骤已跳过！\x1b[0m");
     console.error("\x1b[1;31m[ship]   提交仍保留在本地；修复后手动补跑: git push && npx @vscode/vsce publish\x1b[0m");
@@ -143,5 +135,3 @@ try {
   console.error("\x1b[1;31m[ship] 发版异常：" + e.message + "\x1b[0m");
   process.exit(1);
 }
-// test
-// test
