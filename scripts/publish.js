@@ -70,7 +70,7 @@ function runShip() {
   confirmShip();
 
   console.log("\x1b[36m[ship] git add -A\x1b[0m");
-  var r1 = spawnSync("git", ["add", "-A"], { stdio: "inherit", cwd: cwd, shell: true });
+  var r1 = spawnSync("git", ["add", "-A"], { stdio: "inherit", cwd: cwd });
   if (r1.status !== 0) {
     console.error("\x1b[1;31m[ship] ✗ git add -A 失败\x1b[0m");
     process.exit(r1.status || 1);
@@ -106,7 +106,7 @@ function runShip() {
 // ── 1. 提交 ─────────────────────────────────────────────────────
 function gitCommit() {
   console.log("\x1b[36m[ship] git commit -m \"chore: release\"\x1b[0m");
-  var r = spawnSync("git", ["commit", "-m", "chore: release"], { stdio: "inherit", cwd: cwd, shell: true });
+  var r = spawnSync("git", ["commit", "-m", "chore: release"], { stdio: "inherit", cwd: cwd });
   if (r.status !== 0) {
     console.error("\x1b[1;31m[ship] ✗ git commit 失败\x1b[0m");
     process.exit(r.status || 1);
