@@ -293,6 +293,17 @@ export class PiCore {
 
   /** webview 消息路由入口（adapter 的 onDidReceiveMessage 直连本方法） */
   async onWebviewMessage(m: WebviewToHost): Promise<void> {
+    // 兜底 catch：case 内未自行接住的抛错不得静默蒸发（async 方法无人接 reject，
+    // compactSession 抛错零反馈事故的类级修复，2026-09-09）；各 case 自身的
+    // try/catch 优先生效，此处只接漏网之鱼
+    try {
+      await this.dispatchWebviewMessage(m);
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.opFail + (err?.message ?? err) });
+    }
+  }
+
+  private async dispatchWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
@@ -1092,6 +1103,11 @@ export class PiCore {
         }
         break;
       }
+
+      case "compaction_start":
+        // start 事件不消费（工单六只显性化 end）。缺此 case 时会落 default 分支被当
+        // 未知事件透传「⚠ compaction_start: manual」假警告（2026-09-09 实测抓到）
+        break;
 
       case "compaction_end": {
         // 自动压缩（threshold/overflow）成功 → 横幅显性化（工单六）。手动压缩已有

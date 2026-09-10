@@ -13,10 +13,14 @@ tsconfig.json
 *.zip
 **/*.map
 
+# 内部工作文档不进 vsix（2026-09-09 事故：DIRECTOR/BUILDER/总监/AGENTS 随包泄漏到市场）
+AGENTS.md
+DIRECTOR.md
+BUILDER.md
+总监.md
+
 # 截图只服务 GitHub/Marketplace 的 README（已改为仓库 raw URL），不进 vsix
 /*.png
 media/*
 !media/pi-icon.png
 !media/pi-logo.svg
-out/piCore.js
-out/hostCapabilities.js

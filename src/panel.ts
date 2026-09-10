@@ -721,6 +721,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     ];
 
+    // 工单七：清单在手时⚡菜单保留查看入口——顶栏条被 ✕ 收起后查看能力不丢失
+    if (this.changesFiles.length) {
+      items.unshift({
+        label: this.L.cmdViewChanges,
+        run: async () => {
+          await this.showChangesFlow();
+        },
+      });
+    }
+
     // 合并设置菜单（分组展示，原 ⚙ 按钮内容全部保留在此）
     items.push({ label: this.L.grpConfig, kind: vscode.QuickPickItemKind.Separator });
     items.push(...(await this.buildSettingsItems(client)));
@@ -744,7 +754,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (inst === undefined) return;
     }
     this.post({ type: "status", text: this.L.compacting });
-    const r = await client.compact(inst || undefined);
+    let r;
+    try {
+      r = await client.compact(inst || undefined);
+    } catch (err: any) {
+      // pi 对过小/已压缩的会话直接抛错（agent-session.js: prepareCompaction 返回 null →
+      // "Nothing to compact"/"Already compacted"），不接住就是零反馈（2026-09-09 短会话实测）
+      this.post({ type: "status", text: "" });
+      const msg = String(err?.message ?? err);
+      if (/Nothing to compact/i.test(msg)) this.post({ type: "notice", text: this.L.compactTooSmall });
+      else if (/Already compacted/i.test(msg)) this.post({ type: "notice", text: this.L.compactAlready });
+      else this.post({ type: "notice", text: this.L.compactFail + msg });
+      return;
+    }
     this.post({ type: "status", text: "" });
     this.post({
       type: "notice",
@@ -1385,33 +1407,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "notice", text: this.L.chgNone });
       return;
     }
-    const items = this.changesFiles.map((f) => {
-      const d = this.changesDetail.get(f.path);
-      const src = !d ? ""
-        : d.source === "git" ? this.L.chgGitOnly
-        : this.revertable(d) ? this.L.chgToolRev
-        : this.L.chgToolIrrev;
-      return {
-        label: "$(git-compare) " + path.basename(f.path),
-        description: src + (d?.preexisting ? " · " + this.L.chgPreexisting : ""),
-        detail: f.path,
-        path: f.path,
-      };
+    // 2026-09-10 交互收敛（用户反馈两层 QuickPick 不友好）：文件清单拍成一层，
+    // 行内按钮直达 diff/还原，回车默认「看」（能 diff 就 diff，否则尝试还原）
+    type ChgButton = vscode.QuickInputButton & { act?: string };
+    type ChgItem = vscode.QuickPickItem & { path: string; buttons?: ChgButton[] };
+    const buildItems = (): ChgItem[] =>
+      this.changesFiles.map((f) => {
+        const d = this.changesDetail.get(f.path);
+        const src = !d ? ""
+          : d.source === "git" ? this.L.chgGitOnly
+          : this.revertable(d) ? this.L.chgToolRev
+          : this.L.chgToolIrrev;
+        return {
+          label: "$(git-compare) " + path.basename(f.path),
+          description: src + (d?.preexisting ? " · " + this.L.chgPreexisting : ""),
+          detail: f.path,
+          path: f.path,
+          buttons: [
+            ...(d?.canGit && d.inHead
+              ? [{ iconPath: new vscode.ThemeIcon("diff"), tooltip: this.L.chgActDiff, act: "diff" }]
+              : []),
+            ...(d && this.revertable(d)
+              ? [{ iconPath: new vscode.ThemeIcon("discard"), tooltip: this.L.chgActRevert, act: "revert" }]
+              : []),
+          ],
+        };
+      });
+    const qp = vscode.window.createQuickPick<ChgItem>();
+    qp.items = buildItems();
+    qp.placeholder = this.L.chgPickPh;
+    qp.onDidTriggerItemButton(async ({ item, button }) => {
+      const act = (button as ChgButton).act;
+      const d = this.changesDetail.get(item.path);
+      if (act === "diff") await this.openHeadDiff(item.path);
+      else if (act === "revert" && d) {
+        await this.revertFile(item.path, d);
+        qp.items = buildItems(); // 还原完原地刷新清单（revertFile 已把文件移出 changesFiles）
+      }
     });
-    const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.chgPickPh });
-    if (!pick) return;
-    const d = this.changesDetail.get(pick.path);
-    const actions: string[] = [];
-    if (d?.canGit && d.inHead) actions.push(this.L.chgActDiff);
-    if (d && this.revertable(d)) actions.push(this.L.chgActRevert);
-    if (!actions.length) {
-      this.post({ type: "notice", text: this.L.chgNoAction });
-      return;
-    }
-    const act = actions.length === 1 ? actions[0]
-      : await vscode.window.showQuickPick(actions, { placeHolder: path.basename(pick.path) });
-    if (act === this.L.chgActDiff) await this.openHeadDiff(pick.path);
-    else if (act === this.L.chgActRevert && d) await this.revertFile(pick.path, d);
+    qp.onDidAccept(() => {
+      const item = qp.selectedItems[0];
+      qp.hide();
+      if (!item) return;
+      const d = this.changesDetail.get(item.path);
+      if (d?.canGit && d.inHead) void this.openHeadDiff(item.path);
+      else if (d && this.revertable(d)) void this.revertFile(item.path, d);
+      else this.post({ type: "notice", text: this.L.chgNoAction });
+    });
+    qp.show();
   }
 
   /** 还原资格（裁决 11②③）：仅工具命中；tracked 走 git，未跟踪/无 git 仅 edit 有 patch 可逆打 */
