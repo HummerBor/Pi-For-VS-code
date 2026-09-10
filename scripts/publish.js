@@ -35,7 +35,9 @@ function readInput(prompt) {
     console.error("\x1b[1;31m[ship] ✗ 读取输入失败（exit " + r.status + "）\x1b[0m");
     process.exit(1);
   }
-  return (r.stdout || "").trim();
+  // 管道回显双行（"yes\nyes"），取最后一行非空行，避免 trim 把真 yes 判成假
+  var lines = (r.stdout || "").split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : "";
 }
 
 // ── 0. 闸门：确认拦截 ──────────────────────────────────────────
