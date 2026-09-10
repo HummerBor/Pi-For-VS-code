@@ -136,8 +136,11 @@ export class PiCore {
   /** 关键链路诊断日志（排查图片丢失/状态机等诡异问题用） */
   private dbg(msg: string): void {
     try {
-      fs.appendFileSync(path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log"),
-        new Date().toISOString() + " " + msg + String.fromCharCode(10));
+      const fpath = path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
+      // 日志轮转：超过 5MB 时把旧日志改名保留一代（rename 比截断简单，不用读盘；
+      // 旧文件最多保留一代，不会无限膨胀；再超限就覆盖新文件，因为诊断日志可重放）
+      try { const s = fs.statSync(fpath); if (s.size > 5 * 1024 * 1024) { fs.renameSync(fpath, fpath + ".1"); } } catch { /* 不存在/无权限则跳过 */ }
+      fs.appendFileSync(fpath, new Date().toISOString() + " " + msg + String.fromCharCode(10));
     } catch { /* ignore */ }
   }
 
