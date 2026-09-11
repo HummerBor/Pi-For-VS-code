@@ -1,0 +1,298 @@
+# pi-for-vscode 插件交接文档
+
+> 给新会话的 pi：本项目是一个 VS Code 扩展，为 pi coding agent 提供 Claude Code 风格的聊天面板。
+> 本文档是上一个会话的完整交接，读完后即可继续开发。最后更新：2026-09-08（v0.0.28）
+
+## 项目概览
+
+- 位置：`D:\work\docs\pi test\pi-vscode`（git 仓库根就在这里，**不是上级目录**）
+- GitHub：https://github.com/HummerBor/Pi-For-VS-code （公开，MIT LICENSE，README 已重写为正式项目说明）
+- 插件名：pi-for-vscode，publisher=HummerBor，版本 0.0.28（面板标题 Pi For VSC）
+- Marketplace 上架材料已备齐（publisher/license/repository/PNG 图标），**用户还没上传**——
+  流程：marketplace.visualstudio.com/manage → 建发布者 → Upload VSIX（或 vsce publish）
+- 用户环境：Windows，pi 已全局安装；**已切智谱中国区**（`zai-coding-cn` / `glm-5.3-flash`，
+  已写入 `~/.pi/agent/settings.json` 的 defaultProvider/defaultModel）；
+  Zai 全球站(`zai`/api.z.ai)与中国区(`zai-coding-cn`/open.bigmodel.cn)账号体系不通用，key 二选一
+- 用户不熟悉命令行，所有 pi 能力都要求做成面板可视化操作
+
+## 架构
+
+```
+src/extension.ts   - 扩展入口：注册 WebviewViewProvider（retainContextWhenHidden 保活）+ 状态栏按钮
+src/panel.ts       - 核心（~2100行）：ChatPanelProvider，RPC 事件→UI，所有功能菜单
+src/piClient.ts    - RPC 客户端：spawn pi --mode rpc，stdin/stdout JSONL（LF 分帧，勿用 readline）
+src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是字符串数组拼的 JS，改时注意转义！
+                     每行必须独立包裹引号；TS 字符串里的 \n 会变成真实换行导致语法错误，要写 \\n）
+```
+
+构建：`npm run compile` → `vsce package` → 扩展面板「从 VSIX 安装」→ 重载窗口
+调试：F5（已配 .vscode/launch.json + tasks.json）
+
+## 功能清单（全部已实现）
+
+- **会话**：⏱ 历史面板（搜索/删除/切换，项目级过滤 ~/.pi/agent/sessions）、＋新会话、
+  agent_start 时同步真实会话记录（排队清空机制）；打开面板不弹任何选择框，静默预热；
+  新会话自动补回记住的模型/思考等级（pi 的 new_session 会重置模型）；
+  **工作中点 ＋ 会弹确认**（防误终止运行中的任务）
+- **主题**：头部 ◐ 按钮，跟随 VS Code / CC 暗黑 / 午夜蓝（css() 里 body[data-theme=...] 规则，
+  加新主题就在那里加一段），piChat.theme 持久化，getHtml(theme) 启动即应用
+- **统一 SVG 图标（2026-09-04）**：webviewJs 顶部 `ICON_PATHS` + `ico(name,size)` + `esc()`，
+  全部图标（时钟/加号/齿轮/主题圆/图片/文档/芯片/箭头/叉/对勾/@/终端…）16 网格描边风、
+  currentColor 跟随主题；静态 HTML 里按钮留空壳，JS 注入（见「图标注入」块）。
+  ⚠️ **定义必须在使用之前**（脚本自上而下执行，ICON_PATHS 放注入之后会 TypeError 全面板死）
+- **菜单合并（2026-09-04）**：头部只留 4 按钮（历史/新会话/齿轮菜单/主题）；齿轮=runCommand
+  合并菜单（QuickPick 分隔线分「会话操作」「配置」两组）；settingsMenu() 保留供 / 菜单
+  「pi 设置…」单独打开；buildSettingsItems() 是条目工厂
+- **会话自动命名（2026-09-04）**：autoTitleSession()——未命名会话首条真实文字消息 →
+  前 40 字 setSessionName；readSessionMeta 预览跳过纯代码上下文/占位消息；兜底「未命名会话」
+- **历史面板打开文件（2026-09-04）**：会话行悬停有 📄(revealSessionFile→旁栏打开 .jsonl)
+  和 ✕(删除)两钮；行悬停 title 显示完整路径；点行=切换会话
+- **聊天内文件路径可点击（2026-09-04 晚补完）**：webviewJs `FILE_RE`+`cleanPath()`+`linkify()` 把文本里
+  路径包成 .fp span（绝对/相对/中文/空格路径、光文件名（扩展名白名单）、支持 `:行:列` 后缀；
+  跳过 URL 与代码块；修复 `s://` `p://` 被盘符分支误认的 bug）；
+  **点击监听器在 messages 捕获阶段**（没有它 .fp 就是死样式——曾漏写导致点击无反应）；
+  宿主 openFilePath：直接路径找不到 → findFiles 全工作区按文件名搜；二进制扩展名（vsix/zip/exe…）
+  不做成链接也不打开；打开栏位固定（第一次 Beside 分栏后记住 viewColumn，不再每次点都往右新分栏）；
+  renderRich/工具行 detail/明细块/notice 都接入；renderAll 只对最近 15 条 linkify（老消息跳过，重绘提速）
+- **模型/思考**：工具条点击切换，globalState 跨重启记忆（piChat.lastModel/lastThinking）
+- **pi 环境自助**：启动时 spawn `pi --version` 检测，没装→弹窗一键 npm 全局安装（进度/结果进面板）；
+  ⚙ 菜单可配 API key（写 ~/.pi/agent/auth.json，与 /login 同格式）、订阅登录 /login、
+  查看/删除凭证、安装/更新 pi；key 格式 `{ "zai": { "type": "api_key", "key": "..." } }`
+- **权限模式**：pi 扩展 `~/.pi/agent/extensions/modes.ts` 提供 /mode 命令（manual/edit-auto/plan/auto 四档，
+  持久化到 ~/.pi/agent/mode.json，tool_call 事件拦截）；状态栏徽标点击弹出选择（插件直接写 mode.json）
+- **消息发送**：Enter 发送；agent 工作中 → steer 插队（虚线⏳排队气泡，agent_start 时清空并以
+  getMessages 重绘转正）；agent_settled 时清残留排队并整页重绘
+- **代码上下文**：监听编辑器选区（250ms 防抖），选中→附带选中行，无选区→整个文件（>80KB 跳过）；
+  工具条胶囊可点击切换带/不带走；发送时拼 "--- 代码上下文: rel (range) ---" 代码块
+- **图片**：粘贴/拖拽/＋菜单上传，base64 走 prompt.images，缩略图胶囊可删除（最多4张）
+- **/ 菜单**：分组（上下文/会话/模型/配置/命令技能模板），内置项直接触发面板动作（builtin 字段）；
+  TUI 内置命令（/login /settings /theme /hotkeys /help）prompt case 拦截提示正确入口，
+  不再静默变成对话消息；**订阅登录**走 openTerminalLogin()（集成终端跑交互式 pi，
+  用户在里面输 /login 完成 OAuth——RPC 模式下 TUI 内置命令不可用，这是 pi 官方行为）
+- **@ 文件引用**：工作区文件索引（跳过 node_modules/out/隐藏目录，深度6，上限2000）
+- **⚡ 命令菜单**：重命名会话/compact/清空排队/导出HTML/fork/clone/bash/get_commands
+- **⚙ 设置菜单**：权限模式/插话送达/追问送达/自动压缩/自动重试/会话模式/sessionDir/打开pi配置目录
+- **工具渲染**：CC 风格——状态圆点（绿✓/红✗/蓝圈呼吸=运行中）+ 粗体工具名 + 灰色参数摘要，
+  点击展开 IN/OUT 块（tool-box）；工作中默认展开，结束/历史默认收起；
+  renderAll 把连续同名工具合并为 `● name ×N ▸` 组（展开是每次调用的明细行）
+- **流式渲染（2026-09-04 晚三轮迭代后的最终形态：事件驱动 + 行级增量）**：
+  **两严禁**：严禁每个 delta 全量重绘整条消息（O(n²) 拖死 UI）；严禁定时攒批重渲染（顿挫感）。
+  正确做法（与 pi TUI/CC 同构）：appendDelta 事件驱动，每个增量立刻 streamTick——
+  已完成的行（换行结尾且不在未闭合围栏内）调用 renderRich 定型后**永不再碰**；
+  当前未完成行只更新一个小尾巴 textContent；代码围栏内原样流进 pre，闭合时整块定型。
+  settle 后仍以会话记录重读全量纠偏。必须处理 message_start（newLive→finalizeLive+liveReset，
+  新气泡）——插话后 contentIndex 重新计数的坑不变。
+  **宿主转发 toolcall_start/toolcall_delta**（之前丢弃）：大 write/edit 光生成参数就要几十秒，
+  期间显示呼吸占位行「正在生成调用参数… N 字符」（class=prow，可点击展开看原始参数流），
+  工具真正开跑（toolStart）时按 .prow class 全局清除（曾因只置空引用不清 DOM 出现占位行与
+  真实行同框的 bug）。toolStart 仍先切断当前气泡（文本落到工具行下方）
+- **乐观气泡（2026-09-04 晚）**：prompt case 里 user 气泡/排队项在 `await client.prompt()` **之前**
+  就 post（pi 冷启动+发送要几秒，等 await 完才画会被用户当成消息丢了）
+- **renderAll 提速（2026-09-04 晚）**：整页重绘是大会话卡顿主因——老消息（非最近 15 条）跳过
+  linkify 正则；'render' 消息 setTimeout(0) 延后一拍（用户气泡先上屏再重绘）。
+  严禁在 busy/流式中途整页 renderAll 的规则不变
+- **状态行（输入框外、queuebar 下）**：左 = Working 呼吸动画（忙碌时）/临时状态（正在启动 pi…，
+  pi 就绪即清，忙碌期间 state 事件不许清空它）/⏹ 中断提示；右 = 用量（上下文 % · $，常驻）。
+  顶部 hdr 单行 = 会话名（超长省略）+ 四图标按钮；hdr 第二行 = 模型/思考/权限；
+  工具条只留 图片/发送/停止（模型/思考/权限/用量曾挤在工具条，太拥挤移出）
+- **排队反馈**：工作中发消息→输入框上方 queuebar 单行 ⏳（紧凑不占位）；
+  **steering 是插进当前运行，不会触发 agent_start**——转正信号靠 queue_update 队列变短
+  （lastQueueTotal 计数差 → 最早的 ⏳ 逐条转正为普通气泡）；agent_settled 才整页重绘
+  （syncRenderKeepQueued，未送达的排队项保留）+ 计数器归零；wasBusy 决定是否带 steer
+  （注意：乐观 busy 置位后必须用捕获的 wasBusy 调 prompt，否则空闲消息被当插话变慢）
+- **插话送达**：默认 one-at-a-time（CC 风格一条条处理，piChat.steeringMode 可配），启动时自动应用；
+  ⚙ 菜单切换会持久化到配置
+- **会话记忆（按项目）**：globalState piChat.lastSessionByWs 存「工作区路径→会话文件」映射，
+  启动/重启自动恢复对应项目的上次会话（不串项目）；webview retainContextWhenHidden 保活
+- **错误反馈**：auto_retry_start 带 errorMessage 弹 notice + 状态栏；auto_retry_end 成功→✅、
+  耗尽→❌ 带 finalError；piChat.autoRetry 默认 true，启动自动应用；
+  未知 pi 事件若携带 error/reason 字段会透传为面板 notice（避免报错无反馈）
+- **启动**：面板首次可见即预热 pi 进程（PI_SKIP_VERSION_CHECK=1），消除首条消息延迟
+
+## 活动栏图标定稿（2026-09-08，v0.0.54 终版）
+
+- **最终选型**：`media/pi-logo.svg` = pi coding agent 官方 logo（用户拍板），像素几何「π」标记，实心粗壮、缩放免疫
+- **放弃方向（全部试过并翻车）**：像素鸭侧身实心（认不出鸭）/ 1px 描边（1.5x 缩放必糊）/ Copilot 风格实心脸（认不出鸭）/ 平滑线稿（用户否）
+- 彩鸭元素保留在：面板头部 18px logo + 空状态欢迎页 96px（均为 base64 内嵌 pi-icon.png，v0.0.47+）+ Marketplace 商店图（media/pi-icon.png 即彩鸭）；历史图标稿已在 v0.0.57 清理，git 历史可考
+- 备选文件保留：`icon-bubble.svg` / `icon-pi.svg` / `duck-activity.svg`（0.0.39 实心鸭）
+- **铁律**：活动栏 16 格图标被 1.5× 非整数缩放，1px 线必糊；实心大块或官方矢量 logo 才稳
+
+- **最终选型**：`media/duck-activity.svg` = 0.0.39 实心像素鸭侧身（用户从多版中亲自选定），单色遮罩随主题
+- 彩色像素鸭 `media/duck.svg` + `media/pi-icon.png` 保留，用于 Marketplace 商店图/README（不受遮罩限制）
+- 备选已备好未启用：`icon-bubble.svg`（聊天气泡）/`icon-pi.svg`（像素π）
+- **两条铁律（反复踩坑后确认）**：
+  1. 活动栏渲染≈24px，16格图标被 1.5× 非整数缩放——**1px 描边线必然糊成剪影，只能用实心块**（描边版实验已验证失败并回滚）
+  2. 剪影里内部细节最多留 1 个（眼），嘴/翅膀缝等第二特征在单色下只会添乱
+
+## 已知问题/限制
+
+- **历史事故（2026-09-08，已修，见下「临时会话丢失事故」）**：曾默认 sessionMode=ephemeral，
+  聊天全程不落盘。现已默认 continue + webviewReady 握手 + 首开主动拉起持久客户端
+
+- 旧会话文件里存的空文字消息（bug 时期产生的）重绘时显示「📄 (代码上下文)」占位，无法追溯修复，
+  开新会话即可
+- Z.ai 免费档请求超时/过载常见（服务端行为）：auto-retry 已默认开启，失败原因和 ✅/❌ 结果面板可见
+- webview JS 是字符串数组拼接，历史上多次因「漏引号/换行」产生语法错误导致整个面板静默失效——
+  改动后务必 compile + 重装验证；面板全死时 Ctrl+Shift+I 看 Console 红色报错。
+  **另一个同类型坑（2026-09-04）：脚本是自上而下执行的，库/常量定义必须放在调用之前**——
+  图标注入代码写在 `var ICON_PATHS` 定义之前，首次 `ico()` 调用抛 TypeError 整个脚本死掉
+  （图标全消失 + 所有事件监听没绑上，症状像「面板全死」）。新增帮助函数时永远定义在最前面
+- **迷你 markdown 渲染器（renderPlain/renderInline/renderTable）**：代码块（**围栏必须行首**，
+  行内 ``` 曾把大段内容吞进原始代码框）/标题/表格（| 语法 → md-table）/列表（- * → • 圆点、
+  编号、嵌套缩进）/引用块 >/行内 code/粗体；表格之外的复杂嵌套不支持
+- **中断保留现场（abortSkipRender）**：pi 不把被中断的部分内容写进会话文件（content 为空），
+  中断后的 settled 重绘会抹掉已流出的思考/工具行——中断后跳过一次重绘，现场保留到下一轮；
+  彻底持久化需 pi 侧支持
+- **代码上下文剥离（renderAll 用户分支）**：附带文件里可能含 ```，不能非贪婪找第一个闭合围栏，
+  要 lastIndexOf 取最后一个，否则剩余原始 markdown 会灌满用户气泡
+- **pi RPC 实测事件名（2026-09-04 实测）**：assistantMessageEvent 有 text_delta/thinking_delta/
+  toolcall_start{id,toolName,contentIndex}/toolcall_delta{delta为args原始JSON片段}/toolcall_end；
+  auto 模式下 edit/write 不需要审批（modes.ts 只在 manual/edit-auto 拦）
+- **同一项目开多个 VS Code 窗口会恢复同一个会话文件（lastSessionByWs 按文件夹映射），
+  两窗口的 pi 同时写一个会话文件有冲突风险——多标签功能做掉前，同项目别开双窗口干不同的活
+- 编译后可用一行命令快速验证 webview JS 语法（不重装 VSIX）：
+  `node -e "const fs=require('fs');let src=fs.readFileSync('out/panel.js','utf8');const html=new Function(src.slice(src.indexOf('function getHtml'),src.indexOf('//# sourceMappingURL'))+';return getHtml(\"auto\")')();new Function(html.match(/<script nonce=\"[^\"]*\">([\\s\\S]*)<\\/script>/)[1]);console.log('OK')"`
+  （只能查语法，查不出运行时顺序问题——库定义务必放使用之前）
+
+## 下一个大功能：面板内多标签并行会话（用户已提出，未开工）
+
+用户想在一个面板里开多个会话让 agent 并行干不同的活。设计草案：
+- 每个标签页一个独立 PiClient 进程（clients 从单例变 Map<tabId, {client, queued, busy,...}>）
+- 所有 post 事件带 tabId，webview 加标签栏 + 每标签独立消息 DOM（或切签时重渲染）
+- 后台标签任务完成时标签上亮提示；关闭标签要 dispose 进程
+- lastSessionByWs 逻辑需同步扩展为按标签；会话自动命名后标签标题可直接用会话名；
+  注意多进程写同一会话文件的隔离
+- **架构级改动，改动后需充分测试**（多进程并行/事件路由/资源回收），建议单独排一个会话
+
+## ⚠️ 事故复盘：临时会话丢失（2026-09-08 上午，已修 v0.0.28）
+
+**经过**：用户打开插件直接聊天（把扩展图标换成像素小鸭子 + 文件点击预览等）。
+当时默认 `piChat.sessionMode=ephemeral` → pi 以 `--no-session` 启动，聊天只存在内存。
+面板重载/重开后进程被替换，**对话文字永久丢失，磁盘无任何副本**。
+
+**已修（三层保险）**：
+1. 默认 sessionMode 改为 `continue`（启动继续最近会话，历史自动落盘）；ephemeral 变为显式选项并标「慎用」
+2. webview 启动时发 `webviewReady` 握手，宿主无条件拉 getMessages 重绘（同时修掉设置 HTML 后立即 postMessage 可能被丢的竞态）
+3. 首次打开面板（客户端未启动且非 ephemeral）→ 主动 ensureClient() 拉起 pi，重开插件立刻看到上次聊天
+
+**教训（写给所有后续会话）**：任何「默认不保存用户数据」的选项都必须显式提示，不能只靠标题小字；
+代码里的 `cfg.get("sessionMode", "…")` 回退值必须与 package.json 的 default 保持一致（共两处：ensureClient / buildSettingsItems）。
+
+## 2026-09-08 上午会话（原会话记录已丢失，以下为 git/文件系统考古复原的完整成果，全部已提交）
+
+> 这就是用户要「fork/复原」的那次会话。对话原文找不回，但工作成果 100% 在磁盘上，
+> 已提交 `65e09d6`，后续开发可从这里无缝继续。
+
+**已完成的工作**：
+1. **扩展图标换像素小鸭子**：新增 `media/duck.svg`（16×16 crispEdges 像素画，黄色小鸭），
+   `package.json` 的 views.activitybar icon 从 `media/pi-icon.png` 改为 `media/duck.svg`；
+   `media/pi-icon.png` 同步更新（2954 字节）；旧 `media/pi.svg` 已删除
+2. **文件点击支持图片/PDF 预览**：`panel.ts` openFilePath 对
+   png/jpeg/gif/webp/bmp/ico/avif/svg/pdf 走 `vscode.open`（preview 模式），与 VS Code 直接点开图片一致；
+   抽出 `bestViewColumn()`（优先活动编辑器组，否则第一组）
+3. **可点击路径正则扩展**：FILE_RE 白名单加 png/jpeg/gif/webp/bmp/ico/avif/pdf
+4. displayName 当时定为「Pi For VSC」（提交 511d5d0）
+
+**验收状态**：用户已重装 0.0.27 vsix 实测；图标效果未见用户反馈确认——**下次会话可问一句鸭子图标满意否**。
+
+**环境事实（考古时确认，后续排障可用）**：
+- pi 会话文件唯一存放地：`~/.pi/agent/sessions/<cwd 编码目录>/*.jsonl`，项目目录里**绝不会**有会话文件
+- 插件面板每次 prompt 会追加一行元数据到 `~/.pi/agent/pi-chat-debug.log`（只有图片/文件数量，无正文）
+- 排查「记录丢失」先查：进程命令行有没有 `--no-session`（任务管理器/Get-Process）→ 有即是 ephemeral 模式
+
+## 2026-09-04 会话待验收清单（用户正在测）
+
+① 图标统一显示 ② 齿轮合并菜单两组 ③ 新会话首条消息自动命名
+④ 历史面板 📄 打开 .jsonl / 行点击切换 ⑤ 聊天内路径点击打开（含 :行号跳转）
+⑥ 输入框敲 /login 有提示并自动开终端 ⑦ 重载后默认模型 glm-5.3-flash（中国区）。
+全部通过后：git 提交推送（本轮改动一笔）+ 用户上传 Marketplace VSIX
+
+## 2026-09-07/08 会话：附件模型重构 + 十连修（全部已验收，v0.0.26）
+
+- **附件列表模型（addFiles）**：上传/拖拽/粘贴的非图片文件 → 顶部附件行胶囊（可多个≤5、可删），
+  发送时拼 `--- 附件: 名 ---` 块；**编辑器当前文件仍走底部 codechip**（CC 分区：顶部=附件、底部=编辑器文件）
+- **⚠ 附件线上格式铁律**：内容绝不用 ``` 包裹（文件内容含 ``` 会提前闭合围栏，气泡被撕碎），
+  用唯一结束行分界：`--- 附件: 名 ---\n内容\n--- 附件结束: 名 ---\n\n`；
+  代码上下文同理（`--- 代码上下文结束 ---`）；剥离逻辑（回填/renderAll）新格式为主+老围栏兑底
+- **⚠ 批量编辑整体回滚教训**：一次 edit 多处修改时一处锚点失败=全部不生效（且当时没发现，
+  发送端格式漏改拖了 5 个版本才被会话记录对账抓出）。**改完必须 grep 编译产物验证关键改动真的在**
+- **图片双路守卫统一**：拖拽/粘贴（FileReader+probe）与上传对话框（宿主读盘 addImages）都有
+  尺寸探测+<16px 拦截（GLM 对极端小图报 400「图片输入格式/解析错误」）+onerror 提示；空 MIME 兑底 png
+- **诊断日志**：`~/.pi/agent/pi-chat-debug.log` 记 prompt 的 images/files/busy（查丢图等诡异问题先看这个，
+  与会话 jsonl 对账）；pi 进程崩溃时 stderr 尾巴透出到面板通知（不再只显示 code 1）；
+  pi 崩溃后下一条消息前自动重启
+- 其他十连修：/undefined（Enter 传行对象应传 item）、@回填保留@、上传对话框只留「所有文件」过滤器、
+  用量右对齐、/菜单选完只剥触发片段不清空输入框、拖拽挂 window 层（Shift 拖拽是 VS Code 限制，＋菜单有提示）、
+  粘贴收所有 kind=file、assistant 气泡占满宽（user 88% 右对齐）、乐观气泡/排队项带附件数、
+  代码上下文胶囊 CC 式（底部工具条内药丸）、面板标题 Pi For VSC
+- 挂账：**Marketplace 上传 0.0.26**（vsix 在仓库根目录）、git push、多标签并行会话（单独排会话）
+
+## ⚠️ 已破案：0.0.8「装了没变化」的根因（2026-09-07 已修）
+
+**扩展目录里残留着更名前的老扩展 `local.pi-vscode-0.0.6`（publisher=local，ID 不同所以新版覆盖不掉它），
+它和新包注册了同一个视图 `piChat.view`，互相抢面板——用户怎么装 0.0.8/0.0.9 都可能被老包接管。**
+已处理：老包与重复的 0.0.8 已标 .obsolete，extensions.json 只剩 hummerbor.pi-for-vscode 一条；
+用户**完全重启 VS Code**（非 Reload）后老包被物理清除，底部显示 v0.0.9 即验证成功。
+待用户重启后确认：① v0.0.9 标记 ② 滚动条 3px ③ 上传文件支持任意类型（非图片读文本注入上下文）。
+**教训**：改扩展名时必须提醒用户卸载旧 ID 的包；排查「装了没变化」第一步先看
+`~/.vscode/extensions/` 目录里有哪些同视图扩展在抢。
+另：CSS 里不能用 // 注释（CSS 不认），会把后续规则整段弄失效——曾把滚动条规则吃掉。
+
+## 2026-09-04 晚间会话：已验收通过（用户确认「很漂亮」）
+
+流式行级增量、链接当前列打开、乐观气泡、中断保留现场+⏹提示、表格/列表/引用渲染、
+光文件名点击+findFiles 兑底、二进制不链接、通知去重/过滤、代码上下文剥离修复、
+UI 重排（状态行=Working+用量在输入框外/头部单行/工具条精简/引用项目文件清理尾部符号）。
+后续：git push（等网络）+ Marketplace 上传（最新 VSIX）+ 多标签并行会话（单独排会话）
+
+## 移植/嵌入到其他 App 的注意事项（以后嵌入时读这段）
+
+- **核心只依赖 piClient.ts + panel.ts 的事件桥**：piClient（spawn `pi --mode rpc` + JSONL 分帧 +
+  pending 配对）与宿主 UI 无任何耦合，可直接搬；真正要重写的是「panel.ts 的 post() 消息 → webviewJs
+  的 m.type 分发」这一层，把它映射到目标 UI 的事件即可
+- **事件桥语义**（宿主 UI 需要处理的消息全集）：user/delta/thinking/newLive/toolStart/toolEnd/
+  busy/render/queue/notice/status/mode/queuedAdd/queuedDelivered/queuedClear/codeCtx/addImages/
+  sessionList/slashList/fileList/state
+- **pi 侧要点**：steering 插话不触发 agent_start，转正只能靠 queue_update 队列变短；
+  contentIndex 每条消息重计，必须处理 message_start；busy/流式中途严禁整页重绘，重绘只在 settled；
+  新建会话会重置模型；JSONL 只按 \n 分帧
+- **会话文件**：~/.pi/agent/sessions 下的 jsonl 是唯一事实来源，UI 展示的文本带
+  `--- 代码上下文 ---` 前缀时可剥离还原胶囊
+
+## 插件利用了 pi 的哪些能力（原理层，2026-09-03 整理）
+
+**总原理**：pi 的 `--mode rpc` 把 agent 内核完全可编程化——stdin/stdout 跑 JSONL
+（命令进→响应出→事件流不断推），插件本质 = piClient（RPC 客户端）+ 事件→UI 的翻译桥。
+
+**面板功能 ↔ pi 能力对照**：
+- 对话 = prompt 命令（pi 自己管 LLM 调用/工具执行/循环决策）
+- 工作中插话 = prompt + streamingBehavior:"steer"（pi 把消息放入 steering 队列，
+  在下一个 LLM 调用点注入当前运行）；set_steering_mode 控制逐条/全部
+- 排队管理 = clear_queue + queue_update 事件（靠队列变短感知插话被取走）
+- 停止 = abort；模型热切 = set_model / set_thinking_level（无需重启）
+- 历史会话 = 磁盘上的 jsonl 追加日志（唯一事实来源）；switch_session/clone/fork/
+  set_session_name 都是它的衍生操作；fork = 截断到某条 entryId
+- 压缩 = compact / set_auto_compaction（摘要替换旧消息释放窗口）
+- /命令・技能 = pi 扩展系统（~/.pi/agent/extensions/ 下的 TS 注册）；
+  权限模式四档就是自写的 modes.ts 扩展拦截 tool_call 实现的（mode.json 只是持久化）
+- 导出 = export_html；直连 shell = bash（输出注入上下文）
+
+**事件流原理（渲染层）**：
+- message_start/update/end：内容块按 contentIndex 逐 delta 推送，客户端自己拼装部分消息；
+  **每条消息 contentIndex 从 0 重计，必须监听 message_start 开新气泡**
+- tool_execution_start/end：工具生命周期，驱动绿✓/红✗/蓝圈呼吸圆点
+- agent_start/agent_settled：运行边界；settled 时整页重读会话重绘纠偏
+- auto_retry_*、queue_update：重试与队列变化
+- extension_ui_request/response：pi 扩展的人机交互→插件翻译成 VS Code 原生 UI
+  （双向能力，pi 侧任何扩展的交互都能可视化）
+
+**三条设计结论**：
+1. 面板不自己存消息状态——流式只是乐观预演，纠偏一律以 pi 会话记录重读为准
+2. steering 注入不触发 agent_start，转正时机只能靠 queue_update
+3. pi 扩展系统是能力放大器——CLI 没有的功能可以给 pi 写扩展补出来
+
+## 用户偏好
+
+- 喜欢Claude Code的交互风格，持续对标 CC
+- 要求所有 pi 命令行能力可视化，不碰终端
+- 沟通用中文，简洁直接，改完直接给构建命令
