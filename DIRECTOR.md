@@ -46,40 +46,6 @@
 - **边界（不许顺手改）**：不动 CSP 生成逻辑与 nonce 机制；不改背景图功能语义
   （http(s) 与本地路径两条路都保留）；不动 webview/main.ts
 
-### 工单十一：工具命中路径锚定工作区根（用户实测 2026-09-10）—— ▶️ 已施工待实测（施工回报见 BUILDER.md）
-
-**现象**：pi 改动 gitignore 文件（DIRECTOR.md）后，变更条「查看改动」→ diff 报
-「由于找不到该文件，因此无法打开编辑器」。
-
-**根因（总监已实证，勿重查）**：pi 的 edit args.path 原样保留模型传入的相对路径
-（本会话事件流实查：`"path":"DIRECTOR.md"`）。相对路径一路进归因清单 →
-`openPrerunDiff()` → `vscode.Uri.file("DIRECTOR.md")` 不基于工作区根解析，
-落成盘符根 `/DIRECTOR.md` → 文件不存在。**与 .gitignore 无关**：被忽略只是走了
-prerun 路由的巧合；tracked 文件 + 相对路径同样会死（Uri.file/`fs.readFileSync`
-拿相对路径全链路歪）。之前实测未炸纯属当时模型传了绝对路径。
-
-**第二症状（2026-09-10 晚，工单十二施工会话实证）**：tracked 的 package.json 的
-diff 标题错走「本轮改动前 ↔ 工作区」（应为 HEAD ↔ 工作区）——ext host cwd ≠
-工作区根时 `relOf` 的 `path.relative(root, 相对路径)` 得到垃圾值 → nowStatus 查不到
-→ inHead 误判 false → 路由错进 prerun 通道（本次碰巧 patch 数据在，diff 内容侥幸
-显示正确）。同根因，随本单一并修并复验。
-
-1. **归因入口锚定**：panel.ts `handleRunSettled()` 对每个工具命中 `f.path` 先
-   `path.isAbsolute` 检查，非绝对则 `path.join(root, f.path)`（root 已在手），
-   归一化后入 changesDetail/changesFiles——单点修复，下游 diff/还原全链路收直
-2. **顺带核查 headContent 的 slice 疑点**：`prerun%3A` 分支（9 字符前缀）用
-   `slice(7)` 截会切出半编码串，decode 后带前导冒号 → changesDetail 查不到 →
-   左侧白屏。改成按实际匹配前缀的长度截（或统一先 decodeURIComponent 整个
-   query 再 startsWith("prerun:")），并把「uri.query 返回编码还是解码形态」的
-   实证结论写进注释，两种 startsWith 分支之谜就此了结
-- 验收：`npm run compile` 全绿；让 pi 用**相对路径** edit 一个未跟踪/忽略文件，
-  变更条 diff 能打开且左侧「改动前」内容非空；还原该文件内容回退
-- **边界（不许顺手改）**：piCore 归因结构不动（核心层不知道 root，锚定属
-  adapter 职责）；git 兕底路径（已绝对）不动；不动裁决 11 还原边界
-- **状态**：已施工，**代码层验收已过 9/10**（归档.md 验收记录 09-11 行：锚定/slice/
-  症状二逐一实证，compile 全绿），**待用户装包实测**——0.0.87 包已重打含修复
-  （旧包 09-10 20:39 打的不含，勿用旧包实测），实测过了本单全结
-
 ### 工单十三：会话列表异步化 + 标题提取修复 —— ▶️ 待施工（指派：小模型，用户拍板 2026-09-10）
 
 **用户实测症状**：会话选择器「读不出」标题（部分会话显示裸时间戳文件名）、
