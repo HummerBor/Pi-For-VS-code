@@ -80,10 +80,16 @@ details.think summary { cursor: pointer; user-select: none; }
 #attachbar { display: none; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
 #ctoolbar #codechip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 18px; padding: 1px 10px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 999px; background: transparent; cursor: pointer; white-space: nowrap; opacity: .85; height: auto; }
 #ctoolbar #codechip:hover { border-color: var(--vscode-focusBorder, #0078d4); opacity: 1; }
-.chip-img { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; border-radius: 7px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; }
-.chip-img img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; }
-.chip-x { cursor: pointer; opacity: .6; padding: 0 2px; }
-.chip-file { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 10px; border-radius: 999px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-img { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; border-radius: 7px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 260px; }
+.chip-img img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; flex: none; }
+/* 文件名/尺寸文本单独包一层才能出省略号（text-overflow 对 flex 容器里的裸文本节点不生效） */
+.chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* × 永不许被内容挤出 chip 可视区（overflow:hidden 会裁掉它 → 删不掉事故） */
+.chip-x { cursor: pointer; opacity: .6; padding: 0 2px; flex: none; }
+.chip-file .hint { opacity: .6; font-size: 10px; flex: 0 1 auto; }
+.chip-file { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 10px; border-radius: 999px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 240px; overflow: hidden; white-space: nowrap; }
+.chip-file .chip-label { flex: 0 1 auto; }
+.chip-file svg, .chip-img svg { flex: none; }
 .chip-x:hover { opacity: 1; }
 #suggest { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }
 .sg-item { display: flex; align-items: center; gap: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
@@ -115,6 +121,9 @@ details.think summary { cursor: pointer; user-select: none; }
 #bottombar #ver { opacity: .45; }
 #status.busy { font-weight: 600; color: var(--vscode-textLink-foreground, #4daafc); animation: wpulse 1.2s ease-in-out infinite; }
 #bottombar .tb-btn { padding: 0 6px; height: 20px; }
+/* 模型名可能很长（provider preset 名等），限宽截断，全名看 title 提示 */
+#bottombar #model { max-width: 45%; min-width: 0; }
+#bottombar #model .chip-label { flex: 0 1 auto; }
 .working-row { padding: 4px 14px; font-size: 12px; opacity: .7; }
 @keyframes wpulse { 0%, 100% { opacity: 1; text-shadow: 0 0 10px rgba(77,170,252,.9); } 50% { opacity: .4; text-shadow: none; } }
 

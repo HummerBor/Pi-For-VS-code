@@ -1,5 +1,7 @@
 # <img src="media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
+<!-- 注释性改动示例：README 文档注释，不影响渲染 -->
+
 [简体中文](./README.md) | [English](./README_EN.md)
 
 一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件，把 pi 引擎进程内直连嵌进编辑器，流式体验与终端同速；交互参考 Claude Code，轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。

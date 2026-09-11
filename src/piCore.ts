@@ -11,6 +11,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "crypto";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
@@ -89,6 +90,9 @@ export class PiCore {
    *  只有 toolCallId/toolName/result/isError），patch 归档必须靠 start 时记下的映射。
    *  注：此修复曾随 5f30a51 后的未提交态被 11:24 的 checkout 连坐丢失，本次重打 */
   private toolCallPaths = new Map<string, string>();
+  /** 字节通道附件：内容 md5 → 已落盘临时路径。同一内容复用同一路径，
+   *  路径层去重天然成立（含 webview 按名判重覆盖不到的「a(1).txt」改名场景） */
+  private byteAttachCache = new Map<string, string>();
   /** 工单七 run 边界回调：核心只产中性事件，adapter 拿它做 git 快照/比对。
    *  可为 null（宿主未接时收集照常、事件丢弃） */
   onRunStart: (() => void) | null = null;
@@ -551,11 +555,28 @@ export class PiCore {
       case "attachFile":
         // 非图片文件 → 顶部附件行胶囊（与拖拽/粘贴/上传同一模型）
         if (typeof m.data === "string" && m.data.length) {
-          // 路径兑底字节通道：OS 拖入/剪贴板拿不到绝对路径，宿主落临时文件再把路径交给 pi
+          // 路径兑底字节通道：OS 拖入/剪贴板拿不到绝对路径（新版 Electron 移除 File.path），
+          // 宿主落临时文件再把路径交给 pi。临时名带时间戳每次都不同 → webview 按路径去重
+          // 对它失效（同一文件拖三次进来三份的事故），所以按内容 hash 复用临时文件：
+          // 同样字节永远落同一路径，去重回到路径层天然成立；也顺带治好浏览器
+          // 「a(1).txt」改名的绕名重复。发重复文件时 pi 收到的是同一路径，等于零成本
+          const buf = Buffer.from(m.data, "base64");
+          const digest = createHash("md5").update(buf).digest("hex");
+          const dup = this.byteAttachCache.get(digest);
+          if (dup) {
+            this.post({ type: "addFiles", files: [{ name: String(m.name || "file"), path: dup }] });
+            break;
+          }
           const safeName = String(m.name || "file").replace(/[\\/:*?"<>|]/g, "_");
           const tmp = path.join(os.tmpdir(), "pi-attach-" + Date.now() + "-" + safeName);
           try {
-            fs.writeFileSync(tmp, Buffer.from(m.data, "base64"));
+            fs.writeFileSync(tmp, buf);
+            // 只缓存本面板生命周期内的映射；缓存上限兑底防长会话内存增长
+            this.byteAttachCache.set(digest, tmp);
+            if (this.byteAttachCache.size > 50) {
+              const first = this.byteAttachCache.keys().next().value;
+              if (first !== undefined) this.byteAttachCache.delete(first);
+            }
             this.post({ type: "addFiles", files: [{ name: safeName, path: tmp }] });
           } catch (err: any) {
             this.post({ type: "notice", text: this.L.attachTempFail + String(err?.message ?? err).slice(0, 120) });
