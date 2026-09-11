@@ -83,8 +83,6 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
 
     // ── 文件 / 附件 ──
     allFiles: "所有文件",
-    fileTooBig: "文件超过 200KB，跳过: ",
-    fileTooBigI: "ⓘ 文件超过 200KB，跳过: ",
     dragNoPath: "拖入系统文件无法获取路径，请点击“上传文件…”按钮选择",
     attachTempFail: "ⓘ 附件落盘失败: ",
     attachTooBig: "ⓘ 文件超过 20MB，拖入不支持，请用上传: ",
@@ -367,8 +365,6 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     qFilesUnit: "附件",
     qImgsUnit: "图",
     imgOrCode: "(图片/代码)",
-    maxFiles: "附件最多 5 个",
-    maxImages: "最多附 4 张图片",
     imgReadFail: "图片读取失败，已跳过: ",
     imgReadFailSuf: "（类型: {v}）",
     imgTooSmall: "图片尺寸过小 ({w}×{h})，模型无法解析，已跳过",
@@ -457,8 +453,6 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     modeSaveFail: "Failed to save mode: ",
 
     allFiles: "All files",
-    fileTooBig: "File exceeds 200KB, skipped: ",
-    fileTooBigI: "ⓘ File exceeds 200KB, skipped: ",
     dragNoPath: "Dragging a file from the OS does not provide a path; please use the \"Upload file…\" button instead.",
     attachTempFail: "ⓘ Failed to stage attachment: ",
     attachTooBig: "ⓘ File exceeds 20MB, drag-in not supported; use upload: ",
@@ -728,8 +722,6 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     qFilesUnit: " file(s)",
     qImgsUnit: " img(s)",
     imgOrCode: "(image/code)",
-    maxFiles: "At most 5 attachments",
-    maxImages: "At most 4 images",
     imgReadFail: "Failed to read image, skipped: ",
     imgReadFailSuf: " (type: {v})",
     imgTooSmall: "Image too small ({w}×{h}), the model can't parse it — skipped",

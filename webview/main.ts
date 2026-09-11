@@ -64,6 +64,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return '<svg viewBox="0 0 16 16" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
   }
   function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  // 超长名字中段省略（保头保尾）：CSS ellipsis 只能截尾，长文件名会把 chip 撑满一整行、
+  // 还把 × 挤出可视区（overflow:hidden 裁掉）导致删不掉——JS 先截短才是根治；全名看 title
+  function shorten(s: string, max: number) {
+    if (!s || s.length <= max) return s;
+    var head = Math.ceil((max - 1) * 0.6);
+    var tail = Math.floor((max - 1) * 0.4);
+    return s.slice(0, head) + '…' + s.slice(s.length - tail);
+  }
   // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──
   var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-]*\.(?:ts|tsx|js|jsx|mjs|json|md|txt|html?|css|scss|less|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验
   function cleanPath(p) {
@@ -151,6 +159,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var streaming = false;
   var pendingImages = [];
   var pendingFiles = [];
+  // 附件无感去重（重复拖入/粘贴直接跳过，不提示不报错）。图片按 base64 内容判重——
+  // 同名不同图不误伤、同图不同名也能拦住；文件按归一化绝对路径判重（Windows 大小写/
+  // 分隔符不敏感）。字节通道文件（OS 拖入拿不到路径）宿主每次落盘都生成新临时名
+  // pi-attach-<时间戳>，路径判重对它永远失效（同一文件拖三次进来三份的事故）——
+  // 这类一次性临时条目改信原始文件名判重；真路径条目只比路径，同名不同目录不误伤
+  function normPath(p) { return String(p).replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase(); }
+  function isTmpAttach(pathStr) { var b = String(pathStr).split(/[\\/]/).pop() || ''; return b.indexOf('pi-attach-') === 0; }
+  function hasImg(data) { for (var i = 0; i < pendingImages.length; i++) { if (pendingImages[i].data === data) return true; } return false; }
+  function hasFile(pathStr, name) {
+    if (!pathStr && !name) return false;
+    var k = pathStr ? normPath(pathStr) : '';
+    for (var i = 0; i < pendingFiles.length; i++) {
+      var e = pendingFiles[i];
+      if (k && e.path && normPath(e.path) === k) return true;
+      // 一方是字节通道临时文件时路径无意义，退回按原始文件名判重
+      if (name && e.name === name && ((!e.path && !pathStr) || isTmpAttach(e.path) || isTmpAttach(pathStr))) return true;
+    }
+    return false;
+  }
 
   function renderCodeChip() {
     if (!codeCtx) { codechipEl.style.display = 'none'; return; }
@@ -666,7 +693,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
     if (statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
-    modelEl.innerHTML = ico('cpu') + ' ' + esc(m.model ? (m.model.name || m.model.id) : '—');
+    // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
+    modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
     var sessName = fmtSession(m.sessionFile, m.sessionName);
@@ -697,12 +725,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 只看 type 会把图片误判成普通文件；用扩展名兑底
       var isImg = f.type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name || '');
       if (!isImg) {
-        if (pendingFiles.length >= 5) { notice(L.maxFiles); break; }
+        // 数量不设限（用户裁决 2026-09-11「不限制」；路径模式只传字符串，个数不影响开销）
         // 路径模式：只传路径，不读内容，不限大小。三级兑底：
         // ① Electron 暴露的 f.path（部分版本 OS 拖入可用）
         var p = (f as any).path;
         if (p) {
           (function(file, filePath) {
+            if (hasFile(filePath, file.name)) return; // 重复拖入同一文件：无感跳过
             pendingFiles.push({ name: file.name || 'file', path: filePath });
             renderAttach();
           })(f, p);
@@ -727,7 +756,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         })(f);
         continue;
       }
-      if (pendingImages.length >= 4) { notice(L.maxImages); break; }
+      // 图片数量同样不设限（同上裁决）
       (function(file) {
         var r = new FileReader();
         r.onload = function() {
@@ -740,6 +769,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           probe.onload = function() {
             // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
             if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight)); return; }
+            if (hasImg(data)) return; // 重复图片：无感跳过
             pendingImages.push({ data: data, mimeType: file.type || 'image/png', name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
             renderAttach();
           };
@@ -757,8 +787,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         var chip = el('span', 'chip-img');
         var img = document.createElement('img');
         img.src = 'data:' + p.mimeType + ';base64,' + p.data;
+        var name = p.name + (p.w ? ' ' + p.w + '\u00d7' + p.h : '');
+        chip.title = name;
         chip.appendChild(img);
-        chip.appendChild(document.createTextNode(p.name + (p.w ? ' ' + p.w + '\u00d7' + p.h : '')));
+        // JS 截短（保头保尾）+ .chip-label 兑底 ellipsis；全名看 title
+        chip.appendChild(el('span', 'chip-label', shorten(name, 22)));
         var x = el('span', 'chip-x', '\u00d7');
         x.addEventListener('click', function() { pendingImages.splice(idx, 1); renderAttach(); });
         chip.appendChild(x);
@@ -769,12 +802,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       (function(idx) {
         var p = pendingFiles[idx];
         var chip = el('span', 'chip-file');
-        chip.innerHTML = ico('filecode', 12) + ' ' + esc(p.name);
+        // JS 截短文件名；路径提示也走 .chip-label（可收缩），别把 × 挤出可视区
+        chip.innerHTML = ico('filecode', 12) + ' <span class="chip-label">' + esc(shorten(p.name, 18)) + '</span>';
         if (p.path) {
           chip.title = p.path;
-          var pathHint = el('span', '', ' · ' + esc(p.path.split(/[\\/]/).pop() || p.path));
-          pathHint.style.opacity = '.6';
-          pathHint.style.fontSize = '10px';
+          var base = p.path.split(/[\\/]/).pop() || p.path;
+          var pathHint = el('span', 'chip-label hint', ' · ' + esc(shorten(base, 16)));
           chip.appendChild(pathHint);
         }
         var x = el('span', 'chip-x', '\u00d7');
@@ -947,14 +980,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         var probe = new Image();
         probe.onload = function() {
           if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall2.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight).replace('{v}', p.name || '')); nextAdi(); return; }
-          p.w = probe.naturalWidth; p.h = probe.naturalHeight; pendingImages.push(p); nextAdi();
+          p.w = probe.naturalWidth; p.h = probe.naturalHeight;
+          if (!hasImg(p.data)) pendingImages.push(p); // 宿主转发同样去重（复制图片等入口）
+          nextAdi();
         };
         probe.onerror = function() { notice('ⓐ ' + L.imgReadFail + (p.name || '')); nextAdi(); };
         probe.src = 'data:' + p.mimeType + ';base64,' + p.data;
       }
       nextAdi();
     })(); }
-    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat(m.files || []); renderAttach(); }
+    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat((m.files || []).filter(function (f) { return !hasFile(f.path, f.name); })); renderAttach(); }
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
     else if (m.type === 'state') applyState(m);
