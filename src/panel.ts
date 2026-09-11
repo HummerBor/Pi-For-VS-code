@@ -1372,12 +1372,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const list: ChangesFileInfo[] = [];
     // 1) 工具命中（裁决 11②：还原只对工具清单命中文件提供；git-only 仅展示）
     for (const f of files) {
-      const r = relOf(f.path);
+      // 工单十一：pi 的 edit args.path 常为模型传给的原样相对路径，不锚定 root 会按 ext host
+      // 的 cwd 解析成盘符根/垃圾值——relOf 的 path.relative 也基于 cwd 得到乱值使 nowStatus
+      // 查不到（tracked 的 package.json 因此误判 inHead=false 错走 prerun 通道，症状二）。
+      // 这里单点锚定，归一化后入 changesDetail/changesFiles，下游 diff/还原全链路收直。
+      const abs = path.isAbsolute(f.path) ? f.path : path.join(root, f.path);
+      const r = relOf(abs);
       const xy = r && nowStatus ? nowStatus.get(r) : undefined;
       const canGit = nowStatus !== null;
       // inHead：HEAD 里有此文件（checkout 可回退）；?? 未跟踪 / A 新增不在 HEAD，只能走 patch 逆向
       const inHead = canGit && !!xy && xy !== "??" && xy[0] !== "A" && xy[1] !== "A";
-      this.changesDetail.set(norm(f.path), {
+      this.changesDetail.set(norm(abs), {
         source: "tool",
         tool: f.tool,
         patches: f.patches,
@@ -1385,7 +1390,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         inHead,
         preexisting: !!(r && startStatus?.has(r)),
       });
-      list.push({ path: norm(f.path), source: "tool" });
+      list.push({ path: norm(abs), source: "tool" });
     }
     // 2) git 兑底（裁决 11①：捕获 bash/powershell 改动）——settled 快照里新出现的路径
     if (nowStatus) {
@@ -1493,8 +1498,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     // 未跟踪文件的对比侧：query 带 prerun: 前缀 → 返回本轮改动前内容（patch 链逆向，
     // 任一步不符返回失败占位——与 revertFile 同源校验，不硬猜）
-    if (uri.query.startsWith("prerun%3A") || uri.query.startsWith("prerun:")) {
-      const abs = decodeURIComponent(uri.query.slice(7));
+    // 工单十一实证：uri.query 是编码形态（URI.parse 只拆分不解码，%3A 原样保留）。
+    // 故统一先 decodeURIComponent 整个 query 再 startsWith("prerun:") 判断——
+    // 旧代码双分支判断（%3A 与裸冒号）+ slice(7) 会把编码串 "prerun%3A..." 切出
+    // 半编码残片（"3Ad%3A…"），decode 后带前导垃圾 → changesDetail 查不到 → 左侧白屏；
+    // 且 encodeURIComponent 拼的 query 恒为编码形态，裸冒号分支实际永远走不到。
+    // 统一 decode 后判断，两种 startsWith 分支之谜就此了结。
+    const q = decodeURIComponent(uri.query);
+    if (q.startsWith("prerun:")) {
+      const abs = q.slice("prerun:".length);
       const d = this.changesDetail.get(this.hunkKey(abs));
       if (!d || !d.patches.length) return "";
       try {
@@ -1509,7 +1521,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return this.L.chgHeadFail;
       }
     }
-    const rel = decodeURIComponent(uri.query);
+    const rel = q;
     if (!root) return this.L.chgHeadFail;
     const out = await this.git(["show", "HEAD:" + rel], root);
     return out ?? this.L.chgHeadFail;
