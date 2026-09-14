@@ -1121,9 +1121,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 标签条渲染：宿主 tabs 消息是唯一事实源（id/title/busy），本地叠加 dirty 未读点 */
   function renderTabs() {
     tabbarEl.innerHTML = '';
-    // 工单十五刀4：单标签不亮标签条（不多占一行，恢复原状）；并行入口在 ⏱ 选择器
-    // 顶部「新建标签会话」，≥2 标签时标签条才出现
-    if (tabsList.length <= 1) { tabbarEl.classList.remove('has-tabs'); return; }
+    // 工单十五刀4 修订（用户骂「签呢」）：标签条常驻，＋入口永远可见；单标签时只显示
+    // 一个芯片 + ＋，不隐藏整条——隐藏过一次被用户实测打回：找不到开新标签的入口
     tabbarEl.classList.add('has-tabs');
     for (var i = 0; i < tabsList.length; i++) {
       (function (t: TabInfo) {
