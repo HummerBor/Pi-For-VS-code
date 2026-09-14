@@ -111,8 +111,16 @@
   +mtimes 哈希；指纹命中 → 直接返回缓存列表（真毫秒级），未命中才重跑 listAll（~700ms，
   占位遮盖）。使用中会话文件极少变，稳态命中率近 100%。缓存失效键：面板重开不失效
   （模块级），扩展重载失效（可接受）
-- **边界**：不动 switchSession/getMessages/删除守卫/SessionInfo；不动 piCore；预热只在
-  adapter 层；埋点只加不改既有日志行
+- **刀 5 补修（09-14 总监验收打回，待施工）**：73764f5 的指纹缓存有两个必修缺陷：
+  ① `Map<指纹, 结果>` 无限累积，而 pi listAll 返回对象携带 allMessagesText（全会话消息
+  拼接大字符串，session-manager.js 实证），单次结果约几十上百 MB——pi 每发一条消息都
+  改 mtime → 指纹必变 → 新条目，聊 50 轮 = 50 份滞留 → ext host OOM 风险；
+  ② 修法：**Map 改单槽** `{fp, result}`（指纹变即作废，永远只需最新一份）+ **只存轻量
+  投影**（path/cwd/name/firstMessage/modified 五字段，弃 allMessagesText），内存降至
+  KB 级。PiSessionEntry 类型内联 import 是对的（零运行时依赖不破），保留
+- 验收：指纹热命中仍毫秒级；连发 20 条消息（指纹连变 20 次）后进程内存无显著增长
+  （task manager/进程内存前后对比）；compile 全绿；单笔提交
+- **边界**：只动 listAllCached/fingerprintSessions/缓存声明；其余不碰
 
 ### 工单九：applyHtml 背景图输入加固 —— 🟡 代码验收通过（2026-09-14）；待用户实测背景图显示
 
