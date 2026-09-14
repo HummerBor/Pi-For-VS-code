@@ -23,6 +23,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 活动标签（webview 当前显示的标签）；webview 端由 tabs 消息同步（工单十五刀2） */
   private activeTabId = "t1";
   private tabSeq = 1;
+  /** 工单十五刀4：「＋新建标签」登记簿——ensureCore 创建核心时置 freshTab=true（新标签
+   *  必须开新持久会话，禁止 continueRecent 接别的标签正在写的文件）；核心创建后登记即销 */
+  private readonly freshTabs = new Set<string>();
   /** 工单十五刀2：标签元数据（宿主是唯一事实源）：标题随各核心 state 记账、busy 随 busy 记账 */
   private tabMeta = new Map<string, { title: string; busy: boolean }>();
   private sessionPickerShown = false;
@@ -74,6 +77,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg, tabId), this.version);
       core.lang = this.lang;
       core.tabKey = tabId; // 每标签持久化键（工单十五刀3：项目会话/模型/思考记忆按标签）
+      // 工单十五刀4：＋新建的标签 = 新会话（SessionManager.create，禁 continueRecent）
+      core.freshTab = this.freshTabs.has(tabId);
+      this.freshTabs.delete(tabId);
       // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
       core.onRunStart = () => this.snapshotGitStatus();
       core.onRunSettled = (files) => void this.handleRunSettled(files);
@@ -391,6 +397,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private handleTabNew(): void {
     const id = "t" + (++this.tabSeq);
     this.tabMeta.set(id, { title: this.L.tabUntitled, busy: false });
+    this.freshTabs.add(id); // 刀4：新标签=新持久会话（ensureCore 时置 core.freshTab）
     this.activeTabId = id;
     this.postTabs();
     // 新标签还没 pi 会话：页脚清空显示，不串显上个标签的模型/会话名
@@ -518,12 +525,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const t0 = Date.now(); // 工单十三二刀-1 计时：消息到达
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    // 工单十五刀3 边界：busy 中的标签禁止切历史会话（防会话文件写冲突，同 HANDOVER 双窗口教训）
-    if (this.core.isBusy) {
-      this.post({ type: "notice", text: this.L.tabBusySwitch });
-      return;
-    }
-
+    // 工单十五刀4（用户直令 2026-09-14）：多标签时代 busy 不再一刀切禁历史——
+    // busy 中选中的会话开进新并行标签（写冲突由跨标签占用守卫擋），「随时可看历史」
+    // （若原守卫把整个选择器摁死，用户实测吐槽：都并发多个了为啥不让看历史）
     // ephemeral 进程没挂会话文件，需要重启为持久模式才能恢复历史
     if (this.core.clientRef?.running && this.core.isNoSession) {
       this.core.disposeClient();
@@ -535,7 +539,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       label: string;
       description?: string;
       detail?: string;
-      action: "file" | "new" | "all" | "delete";
+      action: "file" | "new" | "all" | "delete" | "newTab";
       file?: string;
       busy?: boolean;
     };
@@ -553,6 +557,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
 
     const items: Item[] = [];
+    // 工单十五刀4：并行入口收进选择器（单标签时标签条隐藏，这是唯一随时可用的开新标签入口）
+    items.push({ label: "$(add) " + this.L.tabNewTitle, action: "newTab" });
     if (scope !== "all") {
       items.push({ label: this.L.startNewSession, action: "new" });
       if (scope === "auto") {
@@ -594,18 +600,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     const client = this.core.ensureClient(true);
     try {
-      if (pick.action === "new") {
+      if (pick.action === "newTab") {
+        // 工单十五刀4：随时开新并行标签（新持久会话，freshTab 链路）
+        this.handleTabNew();
+        return;
+      } else if (pick.action === "new") {
+        // busy 中点「开始新会话」：不逼中断，开进新并行标签（同 file 分支语义）
+        if (this.core.isBusy) { this.handleTabNew(); return; }
         this.post({ type: "render", messages: [] });
       } else if (pick.action === "all") {
         void this.pickSession("all");
         return;
       } else if (pick.file) {
-        // 工单十五刀3：同一会话文件禁止被两个标签同时打开（双窗口写冲突的等价场景）
+        // 工单十五刀3/4：同一会话文件禁止被两个标签同时打开（双窗口写冲突等价）。
+        // 已被别的标签持有 → 直接跳过去看（比报错更符合「随时查看历史」意图）
         for (const [tid, c] of this.cores) {
-          if (tid !== this.activeTabId && c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
-            this.post({ type: "notice", text: this.L.sessionOpenInTab });
-            return;
+          if (c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
+            if (tid !== this.activeTabId) {
+              this.handleTabSwitch(tid);
+              this.post({ type: "notice", text: this.L.sessionOpenInTab });
+              return;
+            }
+            break; // 活动标签自己持有：幂等重开无害，走正常切换
           }
+        }
+        if (this.core.isBusy) {
+          // busy 中选历史：开进新并行标签，不中断当前任务（用户直令 2026-09-14）。
+          // 新标签 freshTab=true → SessionManager.create 后立刻 switch 到目标文件
+          this.handleTabNew();
+          const nc = this.ensureCore(this.activeTabId);
+          const r2 = await nc.ensureClient(true).switchSession(pick.file);
+          if (r2?.cancelled) { this.post({ type: "notice", text: this.L.switchCancelled }); return; }
+          const d2 = await nc.ensureClient(true).getMessages();
+          this.post({ type: "render", messages: d2?.messages ?? [] });
+          const name2 = (pick.label ?? "").replace(/^\$\(history\) /, "");
+          this.post({ type: "notice", text: this.L.sessionRestored + name2 });
+          await nc.refreshState();
+          return;
         }
         const r = await client.switchSession(pick.file);
         if (r?.cancelled) {

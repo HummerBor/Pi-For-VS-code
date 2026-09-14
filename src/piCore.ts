@@ -105,6 +105,14 @@ export class PiCore {
    *  持久化键的组成（项目会话记忆/模型与思考记忆），核心不感知 UI 标签语义 */
   tabKey = "t1";
 
+  /** 新标签=新会话（工单十五刀4，用户实测打回的根因修复）：panel 对「＋新建标签」
+   *  登记的 id 置位。true 时 ensureClient 不带 -c（pi 映射到 SessionManager.create 新持久
+   *  会话，session-manager.d.ts:319），restoringSession 跳过按工作区恢复——否则新标签会
+   *  continueRecent 接上当前目录最近会话（= 另一标签正在写的文件），两个标签真写同一个
+   *  jsonl（写冲突），用户实测「临时会话/记录消失/标题同名」三现象全是它。t1 恒 false，
+   *  单标签 continue 语义不变 */
+  freshTab = false;
+
   /** 每标签的模型记忆（工单十五刀3）：key 带 tabKey；旧全局 key 只读兑底（升级迁移）。
    *  兑底语义：没有自己选过模型的标签跟随「最近一次任一标签的全局选择」（panel 侧影子写） */
   private lastModelFor(): { provider: string; id: string } | undefined {
@@ -198,7 +206,9 @@ export class PiCore {
     // 比较直接 TS2367（panel.ts 原版用 vscode get<string>() 无此问题，搬运时的类型差异）
     const mode: string = this.caps.getConfig("piChat", "sessionMode", "continue");
     const ephemeral = mode === "ephemeral" && !forceSession;
-    const args = ephemeral ? ["--no-session"] : mode === "continue" ? ["-c"] : [];
+    // 工单十五刀4：freshTab（＋新建的标签）不带 -c → piClient 映射到 SessionManager.create
+    // （新持久会话）；绝不 continueRecent——否则接上的是别的标签正在写的会话文件（写冲突）
+    const args = ephemeral ? ["--no-session"] : this.freshTab ? [] : mode === "continue" ? ["-c"] : [];
     const sessionDir = this.caps.getConfig("piChat", "sessionDir", "");
     if (sessionDir) args.push("--session-dir", sessionDir);
     this.clientNoSession = ephemeral;
@@ -257,7 +267,9 @@ export class PiCore {
     // 否则标题是 -c 恢复的会话、内容却是记住的会话，两边对不上
     this.restoringSession = (async () => {
       try {
-        const last = this.getSessionForWs(cwd);
+        // 工单十五刀4：freshTab 跳过按工作区恢复——新标签的会话记忆由它自己首次会话写入，
+        // 不能把别的标签存的会话文件抢过来当恢复目标（同根因：写冲突）
+        const last = this.freshTab ? undefined : this.getSessionForWs(cwd);
         if (last && fs.existsSync(last)) {
           try {
             await client.switchSession(last);
