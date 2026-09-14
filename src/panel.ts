@@ -1651,47 +1651,69 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
   return result.slice(0, limit);
 }
 
-/** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部）（异步，工单十三） */
+/** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部）。
+ *  按需续读（工单十三-2）：先读 16KB，已凑齐 name+preview 或文件读完即止；若末行
+ *  不完整（不以 \n 结尾）且未凑齐 → 16KB 步进续读，硬上限仍 256KB。 */
 async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: string; preview?: string }> {
   try {
     const fh = await fs.promises.open(file, "r");
     try {
-      const buf = Buffer.alloc(256 * 1024);
-      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-      let name: string | undefined;
-      let cwd: string | undefined;
-      let preview: string | undefined;
-      for (const line of buf.toString("utf8", 0, bytesRead).split("\n")) {
-        if (!line.trim()) continue;
-        let e: any;
-        try {
-          e = JSON.parse(line);
-        } catch {
-          continue;
+      const name: string | undefined = undefined;
+      const cwd: string | undefined = undefined;
+      const preview: string | undefined = undefined;
+      // 已凑齐 name+preview 即止（标题已定，预览已出；cwd 只在有值时入列）
+      const state: { name?: string; cwd?: string; preview?: string } = { name, cwd, preview };
+      const done = () => !!(state.name && state.preview);
+      const buf = Buffer.alloc(16 * 1024);
+      let acc = ""; // 未切尽的文本（可能含截断的半行）
+      let offset = 0; // 文件偏移
+      const HARD_LIMIT = 256 * 1024;
+      while (!done() && offset < HARD_LIMIT) {
+        const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+        if (bytesRead === 0) break; // 文件读完
+        offset += bytesRead;
+        acc += buf.toString("utf8", 0, bytesRead);
+        const lines = acc.split("\n");
+        acc = lines.pop() ?? ""; // 末段留作残余：不以 \n 结尾 = 可能截断的半行，等下一块
+        for (const line of lines) {
+          parseMetaLine(line, state);
+          if (done()) break;
         }
-        if (!cwd && typeof e.cwd === "string") cwd = e.cwd;
-        if (!name && (typeof e.name === "string" || typeof e.sessionName === "string")) {
-          name = (e.name ?? e.sessionName) as string;
-        }
-        const msg = e.message && e.message.role ? e.message : e.role ? e : null;
-        if (!preview && msg?.role === "user") {
-          let t = extractText(msg.content);
-          if (t) {
-            // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
-            const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
-            if (mm) t = mm[1];
-            else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
-            t = t.replace(/\s+/g, " ").trim();
-            if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) preview = t.slice(0, 60);
-          }
-        }
-        if (preview && cwd) break;
       }
-      return { name, cwd, preview };
+      // 文件读完但末尾无换行：残余到文件尾即完整 JSON，仍要解析一次
+      if (acc.trim()) parseMetaLine(acc, state);
+      return { name: state.name, cwd: state.cwd, preview: state.preview };
     } finally {
       await fh.close();
     }
   } catch {
     return {};
+  }
+}
+
+/** 解析单行 JSONL 条目，把发现的 name/cwd/preview 写进 state（只补空位，不覆盖已得值） */
+function parseMetaLine(line: string, state: { name?: string; cwd?: string; preview?: string }): void {
+  if (!line.trim()) return;
+  let e: any;
+  try {
+    e = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!state.cwd && typeof e.cwd === "string") state.cwd = e.cwd;
+  if (!state.name && (typeof e.name === "string" || typeof e.sessionName === "string")) {
+    state.name = (e.name ?? e.sessionName) as string;
+  }
+  const msg = e.message && e.message.role ? e.message : e.role ? e : null;
+  if (!state.preview && msg?.role === "user") {
+    let t = extractText(msg.content);
+    if (t) {
+      // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
+      const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
+      if (mm) t = mm[1];
+      else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
+      t = t.replace(/\s+/g, " ").trim();
+      if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) state.preview = t.slice(0, 60);
+    }
   }
 }
