@@ -878,17 +878,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "notice", text: this.L.importInvalid });
       return;
     }
+    // 大小上限：50MB（审计要求，超大文件 copyFileSync 本身会长时间阻塞 + 耗尽内存）——
+    // 收刀上移到守卫区（工单十遗留）：与 .jsonl 检查同层，不合格直接拒，不做无谓的 disposeClient/ensureClient
+    const srcStat = fs.statSync(src);
+    if (srcStat.size > 50 * 1024 * 1024) {
+      this.post({ type: "notice", text: this.L.importTooLarge });
+      return;
+    }
     if (this.core.clientRef?.running && this.core.isNoSession) {
       this.core.disposeClient();
     }
     const client = this.core.ensureClient(true);
     try {
-      // 大小上限：50MB（审计要求，超大文件 copyFileSync 本身会长时间阻塞 + 耗尽内存）
-      const srcStat = fs.statSync(src);
-      if (srcStat.size > 50 * 1024 * 1024) {
-        this.post({ type: "notice", text: this.L.importTooLarge });
-        return;
-      }
       const destDir = path.join(os.homedir(), ".pi", "agent", "sessions");
       fs.mkdirSync(destDir, { recursive: true });
       const dest = path.join(destDir, "imported-" + Date.now() + "-" + path.basename(src));
@@ -1655,24 +1656,6 @@ function samePath(a?: string, b?: string): boolean {
   return norm(a) === norm(b);
 }
 
-/** 递归收集目录下所有 .jsonl 文件（异步，工单十三）。
- *  工单十三二刀-4 后为回退备胎：主路径已改 pi SessionManager.listAll，本扫描整树保留
- *  待实测对比（若 pi 版全量读真机明显慢可经请示回退），不预删。 */
-async function collectJsonlFiles(dir: string, out: string[] = []): Promise<string[]> {
-  let entries: fs.Dirent[];
-  try {
-    entries = await fs.promises.readdir(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const ent of entries) {
-    const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) await collectJsonlFiles(full, out);
-    else if (ent.isFile() && ent.name.endsWith(".jsonl")) out.push(full);
-  }
-  return out;
-}
-
 /** panel 侧关键链路诊断日志（工单十三二刀-1）：与 piCore.dbg 共用
  *  ~/.pi/agent/pi-chat-debug.log，不新开文件；只追加不改既有日志行。 */
 function dbgLog(msg: string): void {
@@ -1701,12 +1684,27 @@ type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
 type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
 let listAllSlot: { fp: string; result: PiSessionProjection[] } | null = null;
 
-/** 会话目录文件集指纹：stat 扫描全部 .jsonl 的 mtimeMs 做 FNV-1a 哈希（复用回退备胎
- *  collectJsonlFiles；79 文件 ≈30-50ms）。任何文件新增/删除/mtime 变化 → 指纹变 → 重跑
- *  listAll；未变只重扫描盘目录，省全量解析。 */
+/** 会话目录文件集指纹（工单十三重做后唯一幸存的轻量探测，自研扫描备胎已删）：
+ *  递归收集 ~/.pi/agent/sessions 下 .jsonl 路径并 stat，路径+mtimeMs 进 FNV-1a 哈希
+ *  （79 文件 ≈10-30ms，比 listAll 全量解析便宜两个量级）。任何文件新增/删除/mtime 变化
+ *  → 指纹变 → 重跑 listAll；未变只重扫目录，省全量解析。 */
 async function fingerprintSessions(): Promise<string> {
   const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-  const files = await collectJsonlFiles(root);
+  const files: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let ents: fs.Dirent[];
+    try {
+      ents = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // 目录不存在/无权限 → 空指纹，安全
+    }
+    for (const ent of ents) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) await walk(full);
+      else if (ent.isFile() && ent.name.endsWith(".jsonl")) files.push(full);
+    }
+  };
+  await walk(root);
   let h1 = 2166136261; // FNV-1a 32 位 offset basis
   for (const file of files) {
     let mtime = 0;
@@ -1777,117 +1775,3 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
   return result.slice(0, limit);
 }
 
-/** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部）。
- *  按需续读（工单十三-2）：先读 16KB，已凑齐 name+preview 或文件读完即止；若末行
- *  不完整（不以 \n 结尾）且未凑齐 → 16KB 步进续读，硬上限仍 256KB。
- *  跨块多字节字符（工单十三补刀）：逐块 toString('utf8') 会把骑在 16K 块边界上的多字节
- *  UTF-8 烤成 \uFFFD（首字节进一块、续字节进下一块），名字变「\uFFFD\uFFFD\uFFFD文名」。
- *  旧 256KB 整块读无此问题，属步 2 引入的回归。改为先拼 Buffer + 回扫完整序列边界，
- *  只对完整部分解码，不完整尾部留 carry 给下一块。
- *  （工单十三二刀-4 后为回退备胎：主路径已改 pi listAll，本实现保留待实测对比，不预删） */
-async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: string; preview?: string }> {
-  try {
-    const fh = await fs.promises.open(file, "r");
-    try {
-      // 已凑齐 name+preview 即止（标题已定，预览已出；cwd 只在有值时入列）
-      const state: { name?: string; cwd?: string; preview?: string } = {};
-      const done = () => !!(state.name && state.preview);
-      const buf: Buffer = Buffer.alloc(16 * 1024);
-      let acc = ""; // 已确认完整的 UTF-8 解码文本（按行切后的残余）
-      let carry: Buffer = Buffer.alloc(0); // 跨块的多字节字符未完整残留（字节级）
-      let offset = 0; // 文件偏移
-      const HARD_LIMIT = 256 * 1024;
-      while (!done() && offset < HARD_LIMIT) {
-        const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
-        if (bytesRead === 0) break; // 文件读完
-        offset += bytesRead;
-        const chunk = Buffer.concat([carry, buf.subarray(0, bytesRead)]); // 拼上块残留
-        const { head, tail } = splitUtf8(chunk);
-        carry = tail; // 本块末尾不完整的多字节序列留待下一块
-        acc += head.toString("utf8");
-        const lines = acc.split("\n");
-        acc = lines.pop() ?? ""; // 末段留作残余：不以 \n 结尾 = 可能截断的半行，等下一块
-        for (const line of lines) {
-          parseMetaLine(line, state);
-          if (done()) break;
-        }
-      }
-      // 文件读完 flush：残留 carry 并入尾行解析；真损坏（非多字节截断）交给
-      // parseMetaLine 的步 3 正则兑底，行为与旧版一致
-      if (carry.length) acc += carry.toString("utf8");
-      // 文件读完但末尾无换行：残余到文件尾即完整 JSON，仍要解析一次
-      if (acc.trim()) parseMetaLine(acc, state);
-      return { name: state.name, cwd: state.cwd, preview: state.preview };
-    } finally {
-      await fh.close();
-    }
-  } catch {
-    return {};
-  }
-}
-
-/**
- * 把字节块切分为「完整 UTF-8 序列前缀」与「不完整多字节尾残留」。
- * 从末尾回扫连续续字节（10xxxxxx）定位所在多字节序列的首字节，按首字节判定期望长度
- * （110→2、1110→3、11110→4）；序列不完整则摘出尾部存 tail（待下一块拼接），完整部分
- * （head）才交给 toString 解码——避免把骑块的多字节字符烤成 \uFFFD。
- */
-function splitUtf8(buf: Buffer): { head: Buffer; tail: Buffer } {
-  // 从末尾向前跳过续字节，定位最后那个多字节序列的首字节（或 ASCII）
-  let i = buf.length - 1;
-  for (; i >= 0; i--) {
-    if ((buf[i] & 0xc0) === 0x80) continue; // 10xxxxxx 续字节
-    break; // 非续字节：ASCII 或 UTF-8 序列头
-  }
-  if (i < 0) {
-    // 整块都是续字节（无首字节可依，异常数据）——保守全留 carry，不产出半个乱码
-    return { head: Buffer.alloc(0), tail: Buffer.from(buf) };
-  }
-  const b = buf[i];
-  let len = 1;
-  if ((b & 0xe0) === 0xc0) len = 2; // 110xxxxx
-  else if ((b & 0xf0) === 0xe0) len = 3; // 1110xxxx
-  else if ((b & 0xf8) === 0xf0) len = 4; // 11110xxx
-  const avail = buf.length - i;
-  if (avail >= len) {
-    // i 起凑齐了期望长度 → 序列完整，head 含全部字节
-    return { head: buf.subarray(0, buf.length), tail: Buffer.alloc(0) };
-  }
-  // 序列不完整：head 不含首字节起之后的部分，tail 从首字节起整段留 carry
-  return { head: buf.subarray(0, i), tail: Buffer.from(buf.subarray(i)) };
-}
-
-/** 解析单行 JSONL 条目，把发现的 name/cwd/preview 写进 state（只补空位，不覆盖已得值） */
-function parseMetaLine(line: string, state: { name?: string; cwd?: string; preview?: string }): void {
-  if (!line.trim()) return;
-  let e: any;
-  try {
-    e = JSON.parse(line);
-  } catch {
-    // 截断行兑底（工单十三-3）：JSON 不完整（盲读/续读切到半路，或大附件行被
-    // 拦腰截断）时 parse 必炸，历史直接 continue 导致标题永远找不到。会话名通常
-    // 在文件头部条目里，用正则抓 name/sessionName 字符串值（值内 \" 转义注意
-    // 还原）后继续，不再放弃整条。
-    if (!state.name) {
-      const m = line.match(/"(?:name|sessionName)"\s*:\s*"((?:\\.|[^"\\])*)"/);
-      if (m) state.name = m[1].replace(/\\"/g, '"');
-    }
-    return;
-  }
-  if (!state.cwd && typeof e.cwd === "string") state.cwd = e.cwd;
-  if (!state.name && (typeof e.name === "string" || typeof e.sessionName === "string")) {
-    state.name = (e.name ?? e.sessionName) as string;
-  }
-  const msg = e.message && e.message.role ? e.message : e.role ? e : null;
-  if (!state.preview && msg?.role === "user") {
-    let t = extractText(msg.content);
-    if (t) {
-      // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
-      const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
-      if (mm) t = mm[1];
-      else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
-      t = t.replace(/\s+/g, " ").trim();
-      if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) state.preview = t.slice(0, 60);
-    }
-  }
-}

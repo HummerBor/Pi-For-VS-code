@@ -1,6 +1,5 @@
 # <img src="media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
-<!-- 注释性改动示例：README 文档注释，不影响渲染 -->
 
 [简体中文](./README.md) | [English](./README_EN.md)
 

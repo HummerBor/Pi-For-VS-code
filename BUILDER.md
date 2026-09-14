@@ -28,6 +28,20 @@
 **待实测**（需真 vsix）：①点历史立即有占位响应 ②预热后首次点击毫秒级出全列表
 ③debug.log 三段计时可见（定位剩余延迟归属）。
 
+**刀 5（73764f5，listAll 结果指纹缓存）**：总监实测 listAll 真机 700-917ms/次，原口径
+「预热后毫秒级」不成立（mtime 缓存省不了 listAll 自身）——签刀5：模块级 Map<指纹,
+上次 listAll 结果>。指纹=复用自研备胎 collectJsonlFiles 做 stat 扫描（79 文件 7-21ms），
+路径+mtime 进 FNV-1a 哈希，文件数并入；命中直接复用免 700ms，未命中才 listAll（占位遮盖）。
+节点实测：冷缓存 21+574=595ms；热缓存 7-9ms+0ms=**真毫秒级**。稳态命中率近 100%。
+compile 全绿，单笔提交只改 panel.ts。
+
+**刀 5 补修（c36054e）**：总监验收打回 73764f5 两个必修缺陷——①Map<指纹,结果> 无限累积
+（pi 每发消息必换指纹 → 聊 50 轮滞留 50 份）②listAll 携带 allMessagesText 重串（单次
+几十上百 MB）→ OOM 风险。补修：Map→**单槽** {fp,result}（指纹变即作废恒 1 份）+ 只存
+**轻量投影**（path/cwd/name/firstMessage/modified 五字段，Pick 标注，弃重串，KB 级）。
+node 实测 100 轮指纹变化+2MB 重串/会话：单槽恒 1 份 vs Map 滞留 100 份；热命中仍毫秒级。
+compile 全绿，只改缓存声明+listAllCached。
+
 **边界遵守**：switchSession/getMessages/删除守卫/SessionInfo/piCore 全未动；自研备胎未删。
 
 ## 请示（待总监裁决，记于回报区）
@@ -138,3 +152,10 @@ join(root, r) 已绝对，没动；裁决 11 还原边界没动；协议三处�
 
 - 下一版 **0.0.87** 发版即 ship 闸门全流程终验（hunk→commit→push→publish + PI_CONFIRM_SHIP=1 快车道）
 - 最新验证包：pi-for-vscode-0.0.87.vsix（根目录）；若需手测先跑 `npm run package` 重新打包
+## 工单十三重做施工记录（总监亲施，用户直令越队列 2026-09-14）
+
+用户直令「推翻十三全部修改按原则重做」→ 总监按 ✅活 6 执行并在此留痕。一笔改动（含
+补修 c36054e 之后的收尾）：自研扫描整树删除（collectJsonlFiles/readSessionMeta/
+splitUtf8/parseMetaLine，grep 零残留）；fingerprintSessions 独立实现（readdir+stat+
+FNV-1a，不再依赖备胎）；README 残留行删除；importSession 50MB 检查上移到 .jsonl 守卫区。
+compile 全绿；listAll 真目录实测 504-515ms（80 会话）。0.0.90 测试包已打。

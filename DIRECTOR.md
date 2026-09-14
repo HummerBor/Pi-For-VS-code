@@ -117,16 +117,26 @@
   +mtimes 哈希；指纹命中 → 直接返回缓存列表（真毫秒级），未命中才重跑 listAll（~700ms，
   占位遮盖）。使用中会话文件极少变，稳态命中率近 100%。缓存失效键：面板重开不失效
   （模块级），扩展重载失效（可接受）
-- **刀 5 补修（09-14 总监验收打回，待施工）**：73764f5 的指纹缓存有两个必修缺陷：
-  ① `Map<指纹, 结果>` 无限累积，而 pi listAll 返回对象携带 allMessagesText（全会话消息
-  拼接大字符串，session-manager.js 实证），单次结果约几十上百 MB——pi 每发一条消息都
-  改 mtime → 指纹必变 → 新条目，聊 50 轮 = 50 份滞留 → ext host OOM 风险；
-  ② 修法：**Map 改单槽** `{fp, result}`（指纹变即作废，永远只需最新一份）+ **只存轻量
-  投影**（path/cwd/name/firstMessage/modified 五字段，弃 allMessagesText），内存降至
-  KB 级。PiSessionEntry 类型内联 import 是对的（零运行时依赖不破），保留
-- 验收：指纹热命中仍毫秒级；连发 20 条消息（指纹连变 20 次）后进程内存无显著增长
-  （task manager/进程内存前后对比）；compile 全绿；单笔提交
-- **边界**：只动 listAllCached/fingerprintSessions/缓存声明；其余不碰
+### 工单十三重做（推翻式重写，按壳引擎原则）—— 🟡 已施工（总监亲施，用户直令越队列 ✅活 6）；待用户实测
+
+**用户拍板：十三所有修改推翻，按「插件就是壳」原则重新处理。** 不在旧代码上打补丁，
+直接重写为原则终态。**一笔提交做完以下全部**（compile 全绿 + grep 零残留即交）：
+
+1. **删除自研扫描整树**：collectJsonlFiles / readSessionMeta / splitUtf8 /
+   parseMetaLine 及仅被它们使用的辅助函数全部删掉（git 历史即备胎，不留死代码）
+2. **listSessions 重写为原则终态**（约 30 行）：
+   - 指纹探测独立实现：fs.promises.readdir + stat 拼路径+mtime 进 FNV-1a（不依赖已删函数）
+   - 单槽缓存 `{fp, rows}`：命中直接返回；未命中调 `SessionManager.listAll()`，
+     **只存轻量投影**（path/cwd/name/firstMessage 截 60/modified.getTime()，弃重串）
+   - samePath 项目过滤 + mtime 展示缓存照旧（SessionInfo 结构不变）
+3. **保留三样薄壳**（已验收，非自研重复）：占位 busy QuickPick、webviewReady 预热、
+   dbgLog 三段计时——这是「体感工程」，pi 是终端应用自带渐进渲染，壳必须自己补
+4. **攒包小刀两项**：README.md 删残留行；importSession 大小检查上移到 .jsonl 检查旁
+
+- 验收：compile 全绿；grep collectJsonlFiles/readSessionMeta/splitUtf8 零残留；
+  热指纹命中毫秒级；点历史立即有占位响应
+- **边界**：不动 switchSession/getMessages/删除守卫/SessionInfo/piCore；
+  占位/预热/埋点不许重构（刚验收过）
 
 ### 工单九：applyHtml 背景图输入加固 —— 🟡 代码验收通过（2026-09-14）；待用户实测背景图显示
 
@@ -175,6 +185,8 @@
   还原边界；单标签行为必须与现状等价（不借机改现有交互）
 
 ## 攒包小刀（随 0.0.89，可与任意工单顺带，不许混笔）
+
+> **两项均已随重做单落地（2026-09-14 总监亲施），本节销账**
 
 - README.md 删 `<!-- 注释性改动示例 -->` 残留（0.0.88 发版混入的测试行，随市场已出，改后需 push 才在市场生效）
 - importSession 大小检查上移到 .jsonl 检查旁（工单十遗留）
