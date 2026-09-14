@@ -48,6 +48,8 @@
 
 **分三刀，每刀独立提交+验收**（判断型工单，指派主力会话；小模型勿接）：
 
+   **设计输入（2026-09-14 pi 更新 0.85.x）**：pi 新增 `SessionManager.inMemory()`（官方 SDK，已确认可用）——临时标签可挂不落盘会话，替代旧 ephemeral 进程级 hack；开工时评估采用。
+
 1. **核心多实例 + tabId 路由**：panel adapter 持 `Map<tabId, PiCore>`；HostToWebview
    全消息带 tabId（协议三处同步，tabId 以附加字段进——✅活 2 TS 约定照守）；
    webview 按 tabId 分发。**开工前先冒烟**：同进程建两个 AgentSession 各 prompt 一次，
