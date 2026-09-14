@@ -7,7 +7,7 @@ import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
 import { loadPiSdk } from "./piSdk";
-import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, ToolChangedFile, WebviewToHostTagged } from "./protocol";
+import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
 import { extractText, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
@@ -20,9 +20,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  panel 持 Map<tabId, PiCore>；活动标签 id 见 activeTabId。刀2 落标签栏 UI，
    *  刀3 落会话语义（lastSessionByWs 按标签、模型/思考记忆按标签等）；本刀只铺路由，UI 仍单标签。 */
   private readonly cores = new Map<string, PiCore>();
-  /** 活动标签（webview 当前显示的标签）；刀1 恒为初始标签，行为与单实例等价 */
+  /** 活动标签（webview 当前显示的标签）；webview 端由 tabs 消息同步（工单十五刀2） */
   private activeTabId = "t1";
   private tabSeq = 1;
+  /** 工单十五刀2：标签元数据（宿主是唯一事实源）：标题随各核心 state 记账、busy 随 busy 记账 */
+  private tabMeta = new Map<string, { title: string; busy: boolean }>();
   private sessionPickerShown = false;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
   private piCheckDone = false;
@@ -258,10 +260,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
       if (m.type === "webviewReady") {
         if (this.changesFiles.length) this.postChangesList();
+        // 工单十五刀2：标签清单随握手下发（webview 启动即渲染标签条）
+        this.postTabs();
         // 工单十三二刀-3：后台预热 listSessions → 填 mtime 缓存，首次点击也毫秒级出列。
         // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
         void listSessions().catch(() => {});
       }
+      // 工单十五刀2：标签栏控制消息是 panel 级（不过核心），先于核心路由拦截
+      if (m.type === "tabNew") { this.handleTabNew(); return; }
+      if (m.type === "tabSwitch") { this.handleTabSwitch(m.tabId); return; }
+      if (m.type === "tabClose") { void this.handleTabClose(m.tabId); return; }
       // 工单十五刀1：webview→宿主按 tabId 路由——消息带已知标签 id 走对应核心；
       // 未标（启动握手期）或带已关闭标签 id 的兑底落活动标签
       const core = (m.tabId && this.cores.get(m.tabId)) || this.ensureCore(this.activeTabId);
@@ -335,6 +343,99 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (tabId !== undefined) msg.tabId = tabId;
     else if (msg.tabId === undefined) msg.tabId = this.activeTabId;
     void this.view?.webview.postMessage(msg);
+  }
+
+  // ════════ 工单十五刀2：标签栏宿主侧 ════════
+
+  /** 会话标题格式化（webview fmtSession 同款口径：名字 > 文件名内的时间戳 > 裸文件名） */
+  private fmtSessionTitle(file: string | null): string {
+    if (!file) return this.L.tabUntitled;
+    const mm = file.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})/);
+    if (mm) return mm[2] + "-" + mm[3] + " " + mm[4] + ":" + mm[5];
+    return path.basename(file) || this.L.tabUntitled;
+  }
+
+  /** 下发标签栏全量状态（唯一事实源）：webview 只渲染，本地只叠 dirty 未读点 */
+  private postTabs(): void {
+    // 活动标签元数据兑底：核心懒创建时（新标签未发消息）syncTabMeta 尚未跑过，也要出现在清单里
+    if (!this.tabMeta.has(this.activeTabId)) {
+      this.tabMeta.set(this.activeTabId, { title: this.L.tabUntitled, busy: false });
+    }
+    const tabs: TabInfo[] = [];
+    for (const [id, m] of this.tabMeta) tabs.push({ id, title: m.title, busy: m.busy });
+    this.post({ type: "tabs", tabs, activeTabId: this.activeTabId });
+  }
+
+  /** 标签元数据记账：标题随核心 state（sessionName/sessionFile）、busy 随核心 busy；
+   *  变化即重发 tabs（高频 delta 不经过这里，只 busy/state 两类低频消息触发） */
+  private syncTabMeta(msg: HostToWebview, tabId: string): void {
+    let meta = this.tabMeta.get(tabId);
+    if (!meta) {
+      meta = { title: this.L.tabUntitled, busy: false };
+      this.tabMeta.set(tabId, meta);
+    }
+    let changed = false;
+    if (msg.type === "busy") {
+      if (meta.busy !== msg.value) { meta.busy = msg.value; changed = true; }
+    } else if (msg.type === "state") {
+      const t = msg.sessionName || this.fmtSessionTitle(msg.sessionFile ?? null);
+      if (t && meta.title !== t) { meta.title = t; changed = true; }
+    }
+    if (changed) this.postTabs();
+  }
+
+  // ════════ 工单十五刀2：标签生命周期（panel 级，不过核心） ════════
+
+  /** 新标签 = 新空会话：只登记元数据，PiCore 懒创建（首条消息/切历史时 ensureCore 才建） */
+  private handleTabNew(): void {
+    const id = "t" + (++this.tabSeq);
+    this.tabMeta.set(id, { title: this.L.tabUntitled, busy: false });
+    this.activeTabId = id;
+    this.postTabs();
+    // 新标签还没 pi 会话：页脚清空显示，不串显上个标签的模型/会话名
+    this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
+  }
+
+  /** 切换活动标签：busy 中的标签允许切走（并行是本单的存在意义） */
+  private handleTabSwitch(tabId: string): void {
+    if (!this.tabMeta.has(tabId) || tabId === this.activeTabId) return;
+    this.activeTabId = tabId;
+    this.postTabs();
+    const core = this.cores.get(tabId);
+    if (core?.clientRef?.running) {
+      void core.refreshState(); // 页脚同步该标签的会话/模型态
+    } else {
+      // 没启动过 pi 的标签（含新标签）：页脚清空，防串显上个标签的状态
+      this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
+    }
+  }
+
+  /** 关标签：进程在跑时必须确认（中断任务属破坏性动作，同 newSession 口径）；
+   *  关活动标签时转移到剩余最后一个（无剩余则补一个空标签），并 dispose 回收 pi 会话资源 */
+  private async handleTabClose(tabId: string): Promise<void> {
+    const core = this.cores.get(tabId);
+    if (core?.isBusy) {
+      const yes = await vscode.window.showWarningMessage(this.L.tabCloseBusyAsk, { modal: true }, this.L.tabCloseYes);
+      if (yes !== this.L.tabCloseYes) return;
+      try { await core.clientRef?.abort(); } catch { /* ignore */ }
+    }
+    core?.dispose();
+    this.cores.delete(tabId);
+    this.tabMeta.delete(tabId);
+    if (tabId === this.activeTabId) {
+      const rest = [...this.tabMeta.keys()];
+      if (rest.length) {
+        this.activeTabId = rest[rest.length - 1];
+      } else {
+        const nid = "t" + (++this.tabSeq);
+        this.tabMeta.set(nid, { title: this.L.tabUntitled, busy: false });
+        this.activeTabId = nid;
+      }
+      const next = this.cores.get(this.activeTabId);
+      if (next?.clientRef?.running) void next.refreshState();
+      else this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
+    }
+    this.postTabs();
   }
 
   /** 计算当前编辑器的代码上下文（选区 → 选中行；无选区 → 整个文件）并推给 webview；
@@ -1370,10 +1471,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   // ════════ 工单七：pi 变更 Git diff 可视化（混合方案，裁决 11） ════════
 
-  /** 核心消息桥（工单十五刀1）：①给消息打所属标签的 tabId 标（webview 按 tabId 分发）；
-   *  ②活动标签的 state 会话切换时清变更条（变更条是活动标签的 UI 态，后台标签切会话不清；
-   *  刀3 变更清单按会话域持有后再扩展）。核心侧消息其余原样转发 webview */
+  /** 核心消息桥（工单十五刀1/2）：①给消息打所属标签的 tabId 标；②记账标签元数据
+   *  （busy/state → tabs 清单）；③活动标签的 state 会话切换时清变更条（变更条是活动
+   *  标签的 UI 态，后台标签切会话不清；刀3 变更清单按会话域持有后再扩展） */
   private pipeFromCore(msg: HostToWebview, tabId: string): void {
+    this.syncTabMeta(msg, tabId);
     if (msg.type === "state" && tabId === this.activeTabId) {
       const f = msg.sessionFile ?? null;
       if (f !== this.lastStateFile) {

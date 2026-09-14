@@ -5,7 +5,7 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo } from "../src/protocol";
+import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/protocol";
 import { toolDetail } from "../src/toolDetail";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -14,17 +14,50 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState
 const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh") as Lang];
 (function(){
   var vscodeApi = acquireVsCodeApi();
-  // ── 工单十五刀1：tabId 收发桥（协议见 src/protocol.ts TabTag）──
-  // webview 归属首次见到的宿主消息 tabId（宿主每条消息都带标）；归属不符的消息丢弃，
-  // 不进本标签画面。刀1 单标签恒等于宿主唯一标签，刀2 标签栏落地后按活动标签切换。
-  // 采纳时机注释：首条宿主消息到时定归属——宿主在刀2 会先发明确的标签清单，
-  // 这里的「首见即归」只是刀1 的兑底，不会猜错（单核心单标签）
+  // ── 工单十五：tabId 收发桥（协议见 src/protocol.ts TabTag）──
+  // webview→宿主的消息统一带活动标签的 tabId（tabNew/tabSwitch/tabClose 自带目标标）；
+  // tabId 跟随活动标签变化（activateTab 更新），宿主 tabs 回包是最终事实源
   var tabId: string | null = null;
   var vscode = {
-    postMessage: function (m: any) { if (tabId !== null) m.tabId = tabId; vscodeApi.postMessage(m); },
+    postMessage: function (m: any) { if (tabId !== null && m.tabId === undefined) m.tabId = tabId; vscodeApi.postMessage(m); },
     getState: function () { return vscodeApi.getState(); },
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
+
+  // ── 工单十五刀2：标签机制 ──
+  // 每标签一份渲染记录：消息 DOM 根（.msg-root，整棵换入换出）、流式/工具/排队/附件状态。
+  // R = 当前渲染上下文的记录（活动标签，或 withInactive 临时换入的后台标签）；
+  // 全部渲染函数读 R，换 R 即换上下文——原有渲染链路零改动。
+  // 共享 DOM（状态栏/排队条/附件栏/标签条）只有活动标签可写：applyingInactive 期间
+  // 相关函数只记账不动 UI；后台标签的流式事件因此能持续吃进各自的隐藏 DOM 树，
+  // 切回去时现场完整（滚动位置天然保留——每标签自己的滚动根）。
+  var tabRenders: Record<string, any> = {};
+  var activeTabId: string | null = null;
+  var R: any = null;
+  var applyingInactive = false;
+  var tabsList: TabInfo[] = [];
+  var tabbarEl = document.getElementById('tabbar') as HTMLElement;
+
+  function newTabRender(id: string) {
+    var root = document.createElement('div');
+    root.className = 'msg-root';
+    if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); } // 每个新标签独立欢迎页
+    return {
+      id: id, root: root,
+      toolEls: {}, queuedItems: [],
+      liveMsg: null, liveDiv: null, pdet: null, liveParts: null, liveRTimer: null,
+      streaming: false, busyTimer: null, busyStart: 0, queueN: 0,
+      lastElapsed: null as number | null,
+      dirty: false, // 后台标签完成亮提示（webview 本地记账，激活即清）
+      banner: null as BannerPayload | null, changes: null as ChangesFileInfo[] | null,
+      pendingImages: [], pendingFiles: []
+    };
+  }
+  function ensureRender(id: string) {
+    var rec = tabRenders[id];
+    if (!rec) rec = tabRenders[id] = newTabRender(id);
+    return rec;
+  }
   var messages = document.getElementById('messages') as HTMLElement;
   var input = document.getElementById('input') as HTMLTextAreaElement;
   var stopBtn = document.getElementById('stop') as HTMLButtonElement;
@@ -156,20 +189,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   // ── 历史会话：点 ⏱ 直接打开原生会话菜单（QuickPick）──
   historyEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
-  var liveMsg = null; var liveDiv = null;
   // ── 欢迎页：存快照 + 随机小贴士（新建会话时重新出现，每次换一条）──
   var welcomeEl = document.getElementById('welcome');
   var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';
   var TIPS = L.tips;
   function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }
   pickTip(welcomeEl);
-  var toolEls = {};
   var sgList = []; var sgSel = 0; var sgKind = null;
   var slashCmds = null;
   var workspaceFiles = null;
-  var streaming = false;
-  var pendingImages = [];
-  var pendingFiles = [];
   // 附件无感去重（重复拖入/粘贴直接跳过，不提示不报错）。图片按 base64 内容判重——
   // 同名不同图不误伤、同图不同名也能拦住；文件按归一化绝对路径判重（Windows 大小写/
   // 分隔符不敏感）。字节通道文件（OS 拖入拿不到路径）宿主每次落盘都生成新临时名
@@ -177,12 +205,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 这类一次性临时条目改信原始文件名判重；真路径条目只比路径，同名不同目录不误伤
   function normPath(p) { return String(p).replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase(); }
   function isTmpAttach(pathStr) { var b = String(pathStr).split(/[\\/]/).pop() || ''; return b.indexOf('pi-attach-') === 0; }
-  function hasImg(data) { for (var i = 0; i < pendingImages.length; i++) { if (pendingImages[i].data === data) return true; } return false; }
+  function hasImg(data) { return hasImgIn(R, data); }
+  /** 指定标签记录内判重（异步探测回调用——回调时 R 可能已切到别的标签） */
+  function hasImgIn(rec, data) { for (var i = 0; i < rec.pendingImages.length; i++) { if (rec.pendingImages[i].data === data) return true; } return false; }
   function hasFile(pathStr, name) {
     if (!pathStr && !name) return false;
     var k = pathStr ? normPath(pathStr) : '';
-    for (var i = 0; i < pendingFiles.length; i++) {
-      var e = pendingFiles[i];
+    for (var i = 0; i < R.pendingFiles.length; i++) {
+      var e = R.pendingFiles[i];
       if (k && e.path && normPath(e.path) === k) return true;
       // 一方是字节通道临时文件时路径无意义，退回按原始文件名判重
       if (name && e.name === name && ((!e.path && !pathStr) || isTmpAttach(e.path) || isTmpAttach(pathStr))) return true;
@@ -197,8 +227,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     codechipEl.className = 'tb-btn' + (codeOn ? '' : ' off');
     codechipEl.title = (codeOn ? L.chipOff : L.chipOn) + '\n' + codeCtx.rel + ' (' + codeCtx.range + ')';
   }
-  var liveLast = null;
-  var toolEls = {};
 
   function el(tag: string, cls: string, text?: string) {
     var e = document.createElement(tag);
@@ -206,11 +234,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (text !== undefined && text !== '') e.textContent = text;
     return e;
   }
-  function scroll() { messages.scrollTop = messages.scrollHeight; }
-  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
-  var queueN = 0;
+  function scroll() { R.root.scrollTop = R.root.scrollHeight; }
+  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!R.streaming) { statusEl.textContent = ''; } }
   var modeText = 'Auto';
-  var busyTimer = null; var busyStart = 0;
   function renderStatus() { modeBadge.textContent = modeText; }
 
   /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
@@ -257,27 +283,39 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return h + 'h' + (m ? m + 'm' : '');
   }
   function setBusy(v, elapsedMs) {
-    streaming = v;
-    stopBtn.style.display = v ? 'inline-flex' : 'none';
-    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+    R.streaming = v;
     if (v) {
       // 计时起点对齐宿主真相：对账/纠回时 elapsedMs 是真实已过时长，回拨起点。
-      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
-      busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
+      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）。
+      // 后台标签也要记 busyStart（切回去时 restoreRender 靠它恢复计时现场）
+      R.busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
+      R.lastElapsed = null;
+    }
+    if (applyingInactive) {
+      // 后台标签：不碰共享 DOM/计时器，只记账；完成时亮未读提示，并把流式尾巴收进该标签自己的
+      // 隐藏根（不 flush 的话切回去时最后一段文本缺尾，要等下次 run 的 newLive 才补上）
+      if (!v) { R.lastElapsed = elapsedMs != null ? elapsedMs : null; R.dirty = true; renderTabs(); finalizeLive(); liveReset(); }
+      return;
+    }
+    stopBtn.style.display = v ? 'inline-flex' : 'none';
+    if (R.busyTimer) { clearInterval(R.busyTimer); R.busyTimer = null; }
+    if (v) {
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
       statusEl.textContent = frames[0] + ' Working… 0s';
-      busyTimer = setInterval(function () {
+      R.busyTimer = setInterval(function () {
         fi = (fi + 1) % frames.length;
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = frames[fi] + ' Working… ' + fmtDur(Date.now() - busyStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : '');
+        statusEl.textContent = frames[fi] + ' Working… ' + fmtDur(Date.now() - R.busyStart) + (R.queueN > 0 ? L.queuedCount.replace('{n}', R.queueN) : '');
       }, 120);
     } else {
       statusEl.classList.remove('busy');
       statusEl.textContent = '';
-      // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化
+      // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
+      // 同时入记录，切走再切回来能恢复 ⏱ 现场
       if (elapsedMs != null) {
+        R.lastElapsed = elapsedMs;
         statusEl.textContent = '⏱ ' + fmtDur(elapsedMs);
         statusEl.title = L.turnDuration;
       }
@@ -361,10 +399,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     linkify(parent);
   }
 
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } messages.appendChild(b); scroll(); }
-  var queuedItems = [];
-  function addQueued(q) {
-    queuedItems.push(q);
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } R.root.appendChild(b); scroll(); }
+  function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
     var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);
@@ -373,23 +409,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流
     document.getElementById('queuebar').appendChild(b);
   }
+  function addQueued(q) {
+    R.queuedItems.push(q);
+    if (!applyingInactive) addQueuedDom(q); // 后台标签只记账，切回去时 restoreRender 重画排队条
+  }
   function removeQueued(qid) {
-    queuedItems = queuedItems.filter(function(x) { return x.qid !== qid; });
+    R.queuedItems = R.queuedItems.filter(function(x) { return x.qid !== qid; });
+    if (applyingInactive) return; // 同上：后台标签只记账
     var els = document.getElementById('queuebar').querySelectorAll('[data-qid="' + qid + '"]');
     for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);
   }
-  var liveMsg = null; var liveDiv = null; var pdet = null;
   // 增量渲染（照 pi TUI 的思路：只往已有节点追加，不整气泡重绘；文本块结束时才做一次 markdown 渲染，settled 再全量纠偏）
-  var liveParts = null;
   function liveEnsure() {
-    if (!liveDiv) { liveDiv = el('div', 'bubble assistant'); messages.appendChild(liveDiv); }
-    if (!liveMsg) liveMsg = { content: [] };
-    if (!liveParts) liveParts = {};
+    if (!R.liveDiv) { R.liveDiv = el('div', 'bubble assistant'); R.root.appendChild(R.liveDiv); }
+    if (!R.liveMsg) R.liveMsg = { content: [] };
+    if (!R.liveParts) R.liveParts = {};
   }
   function liveBlock(ci: number, kind: string, name?: string) {
     liveEnsure();
-    while (liveMsg.content.length <= ci) liveMsg.content.push(null);
-    var p = liveParts[ci];
+    while (R.liveMsg.content.length <= ci) R.liveMsg.content.push(null);
+    var p = R.liveParts[ci];
     if (p && p.kind !== kind) { finalizeLive(); p = null; }
     if (!p) {
       var wrap = document.createElement('div'); var body;
@@ -399,24 +438,24 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         body = el('div', 'think-body', ''); d.appendChild(sm); d.appendChild(body); wrap.appendChild(d);
       } else if (kind === 'toolCall') {
         var tl = el('div', 'tool run'); tl.appendChild(el('span', 't-dot')); tl.appendChild(el('span', 't-name', name || 'tool'));
-        body = el('span', 't-detail', L.genArgs.replace('{n}', 0)); tl.appendChild(body); wrap.appendChild(tl); pdet = body;
+        body = el('span', 't-detail', L.genArgs.replace('{n}', 0)); tl.appendChild(body); wrap.appendChild(tl); R.pdet = body;
         wrap.className = 'prow'; // 占位行标记：工具真正开跑时按 class 全局清除
         var abox = el('pre', 'code'); abox.style.display = 'none'; wrap.appendChild(abox);
         tl.addEventListener('click', function () { abox.style.display = abox.style.display === 'none' ? 'block' : 'none'; });
       } else {
         body = el('div', 'md-p', ''); wrap.appendChild(body);
       }
-      liveDiv.appendChild(wrap);
+      R.liveDiv.appendChild(wrap);
       p = { kind: kind, wrap: wrap, body: body, buf: '', doneLen: 0, tail: null, tailCode: false };
       if (kind === 'toolCall') { p.raw = ''; p.box = abox; }
-      liveParts[ci] = p;
+      R.liveParts[ci] = p;
     }
     return p;
   }
   function finalizeLive() {
-    if (!liveParts) return;
-    for (var k in liveParts) {
-      var p = liveParts[k];
+    if (!R.liveParts) return;
+    for (var k in R.liveParts) {
+      var p = R.liveParts[k];
       if (p && p.kind === 'text' && !p.done) {
         p.done = true;
         appendFinal(p, p.buf.slice(p.doneLen));
@@ -424,10 +463,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
     }
   }
-  function liveReset() { liveMsg = null; liveDiv = null; pdet = null; liveParts = null; }
+  function liveReset() { R.liveMsg = null; R.liveDiv = null; R.pdet = null; R.liveParts = null; }
   // 流式 markdown：已完成的行一次性定型不再动，只有当前行/未闭合代码块作为小尾巴更新
   // （整块重渲染有顿挫感；行级增量才是 CC 那种连贯流式）
-  var liveRTimer = null;
   function appendFinal(p, chunk) {
     if (!chunk) return;
     if (p.tail && p.tail.parentNode) p.tail.parentNode.removeChild(p.tail);
@@ -473,7 +511,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     p.doneLen += complete.length;
     setMdTail(p, rest.slice(nl + 1));
   }
-  function scheduleStream() { if (!liveRTimer) liveRTimer = setTimeout(function () { liveRTimer = null; if (liveParts) for (var k in liveParts) { var p = liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); } scroll(); }, 100); }
+  function scheduleStream() {
+    if (!R.liveRTimer) {
+      var rec = R; // 闭包捕获本标签：切标签后定时器回调仍写回原标签（跨标签流式竞态）
+      R.liveRTimer = setTimeout(function () {
+        rec.liveRTimer = null;
+        if (rec.liveParts) for (var k in rec.liveParts) { var p = rec.liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); }
+        if (rec === R) scroll();
+      }, 100);
+    }
+  }
   function appendDelta(t, ci) {
     var p = liveBlock(ci, 'text');
     p.buf += t;
@@ -505,19 +552,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       box.style.display = box.style.display === 'none' ? 'block' : 'none';
       t.classList.toggle('open');
     });
-    toolEls[id] = { row: t, box: box };
-    messages.appendChild(t);
-    messages.appendChild(box);
+    R.toolEls[id] = { row: t, box: box };
+    R.root.appendChild(t);
+    R.root.appendChild(box);
     scroll();
   }
   function toolEnd(id, name, isError, text, detail) {
-    var ref = toolEls[id];
+    var ref = R.toolEls[id];
     if (!ref) {
       var b2 = el('div', 'tool-box'); b2.style.display = 'none';
       ref = { row: el('div', 'tool'), box: b2 };
-      toolEls[id] = ref;
-      messages.appendChild(ref.row);
-      messages.appendChild(ref.box);
+      R.toolEls[id] = ref;
+      R.root.appendChild(ref.row);
+      R.root.appendChild(ref.box);
     }
     var t = ref.row;
     var wasOpen = ref.box.style.display !== 'none';
@@ -546,7 +593,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');
     scroll();
   }
-  function notice(text) { if (/扩展已加载/.test(text)) return; var last = messages.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); messages.appendChild(n); scroll(); }
+  function notice(text) { if (/扩展已加载/.test(text)) return; var last = R.root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); R.root.appendChild(n); scroll(); }
   function textOf(content) {
     if (typeof content === 'string') return content;
     var out = '';
@@ -567,11 +614,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return d;
   }
   function renderAll(list) {
-    messages.innerHTML = '';
+    R.root.innerHTML = '';
     liveReset();
-    toolEls = {};
+    R.toolEls = {};
     if (!list || !list.length) {
-      if (welcomeHTML) { messages.innerHTML = welcomeHTML; pickTip(messages.querySelector('#welcome')); }
+      if (welcomeHTML) { R.root.innerHTML = welcomeHTML; pickTip(R.root.querySelector('#welcome')); }
       return;
     }
     linkifyEnabled = false; // 老消息不 linkify，循环到最近 15 条时再打开
@@ -626,8 +673,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         box.style.display = box.style.display === 'none' ? 'block' : 'none';
         t.classList.toggle('open');
       });
-      messages.appendChild(t);
-      messages.appendChild(box);
+      R.root.appendChild(t);
+      R.root.appendChild(box);
     }
     for (var i = 0; i < list.length; i++) {
       if (i >= list.length - 15) linkifyEnabled = true;
@@ -654,7 +701,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
       else if (m.role === 'assistant') {
         var b = el('div', 'bubble assistant');
-        var flushB = function () { if (b.childNodes.length) { messages.appendChild(b); b = el('div', 'bubble assistant'); } };
+        var flushB = function () { if (b.childNodes.length) { R.root.appendChild(b); b = el('div', 'bubble assistant'); } };
         if (Array.isArray(m.content)) {
           for (var j = 0; j < m.content.length; j++) {
             var c = m.content[j];
@@ -685,12 +732,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           rb.addEventListener('click', function () { vscode.postMessage({ type: 'retryFromLast' }); });
           eb.appendChild(document.createElement('br'));
           eb.appendChild(rb);
-          messages.appendChild(eb);
+          R.root.appendChild(eb);
         }
       }
-      else if (m.role === 'bashExecution') { messages.appendChild(el('div', 'tool ok', '! ' + m.command)); }
+      else if (m.role === 'bashExecution') { R.root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
     }
-    for (var rq = 0; rq < queuedItems.length; rq++) addQueued(queuedItems[rq]);
+    for (var rq = 0; rq < R.queuedItems.length; rq++) addQueued(R.queuedItems[rq]);
     scroll();
   }
   function fmtSession(file, name) {
@@ -743,7 +790,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (p) {
           (function(file, filePath) {
             if (hasFile(filePath, file.name)) return; // 重复拖入同一文件：无感跳过
-            pendingFiles.push({ name: file.name || 'file', path: filePath });
+            R.pendingFiles.push({ name: file.name || 'file', path: filePath });
             renderAttach();
           })(f, p);
           continue;
@@ -775,14 +822,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           var data = url.split(',')[1] || '';
           if (!data) return;
           var probe = new Image();
+          var rec = R; // 捕获标签记录：探测是异步的，回来时可能已切标签，必须写回原标签（工单十五刀2）
           probe.onerror = function() { notice('ⓐ ' + L.imgReadFail + (file.name || '') + L.imgReadFailSuf.replace('{v}', file.type || L.unknown)); };
           if (!file.type) { url = 'data:image/png;base64,' + data; }
           probe.onload = function() {
             // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
             if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight)); return; }
-            if (hasImg(data)) return; // 重复图片：无感跳过
-            pendingImages.push({ data: data, mimeType: file.type || 'image/png', name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
-            renderAttach();
+            if (hasImgIn(rec, data)) return; // 重复图片：无感跳过
+            rec.pendingImages.push({ data: data, mimeType: file.type || 'image/png', name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
+            if (rec === R) renderAttach();
           };
           probe.src = url;
         };
@@ -792,9 +840,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function renderAttach() {
     attachbarEl.innerHTML = '';
-    for (var i = 0; i < pendingImages.length; i++) {
+    for (var i = 0; i < R.pendingImages.length; i++) {
       (function(idx) {
-        var p = pendingImages[idx];
+        var p = R.pendingImages[idx];
         var chip = el('span', 'chip-img');
         var img = document.createElement('img');
         img.src = 'data:' + p.mimeType + ';base64,' + p.data;
@@ -804,14 +852,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         // JS 截短（保头保尾）+ .chip-label 兑底 ellipsis；全名看 title
         chip.appendChild(el('span', 'chip-label', shorten(name, 22)));
         var x = el('span', 'chip-x', '\u00d7');
-        x.addEventListener('click', function() { pendingImages.splice(idx, 1); renderAttach(); });
+        x.addEventListener('click', function() { R.pendingImages.splice(idx, 1); renderAttach(); });
         chip.appendChild(x);
         attachbarEl.appendChild(chip);
       })(i);
     }
-    for (var j = 0; j < pendingFiles.length; j++) {
+    for (var j = 0; j < R.pendingFiles.length; j++) {
       (function(idx) {
-        var p = pendingFiles[idx];
+        var p = R.pendingFiles[idx];
         var chip = el('span', 'chip-file');
         // JS 截短文件名；路径提示也走 .chip-label（可收缩），别把 × 挤出可视区
         chip.innerHTML = ico('filecode', 12) + ' <span class="chip-label">' + esc(shorten(p.name, 18)) + '</span>';
@@ -822,12 +870,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           chip.appendChild(pathHint);
         }
         var x = el('span', 'chip-x', '\u00d7');
-        x.addEventListener('click', function() { pendingFiles.splice(idx, 1); renderAttach(); });
+        x.addEventListener('click', function() { R.pendingFiles.splice(idx, 1); renderAttach(); });
         chip.appendChild(x);
         attachbarEl.appendChild(chip);
       })(j);
     }
-    attachbarEl.style.display = (pendingImages.length + pendingFiles.length) ? 'flex' : 'none';
+    attachbarEl.style.display = (R.pendingImages.length + R.pendingFiles.length) ? 'flex' : 'none';
   }
   function hideSuggest() { suggestEl.style.display = 'none'; }
   function updateSuggest() {
@@ -901,13 +949,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function send() {
     var t = input.value.trim();
-    if (!t && !pendingImages.length && !pendingFiles.length) return;
-    var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
-    var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
+    if (!t && !R.pendingImages.length && !R.pendingFiles.length) return;
+    var imgs = R.pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
+    var fs2 = R.pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
     var attachCode = codeCtx && codeOn;
     input.value = '';
     autoSize();
-    pendingImages = []; pendingFiles = []; renderAttach();
+    R.pendingImages = []; R.pendingFiles = []; renderAttach();
     vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
   }
   sendBtn.addEventListener('click', send);
@@ -954,48 +1002,47 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files, dt); });
-  window.addEventListener('message', function (ev: MessageEvent) {
-    var m = ev.data as HostToWebviewTagged;
-    // tabId 分发（工单十五刀1）：首次见到的 tabId 定为本 webview 归属，此后不属本标签的消息丢弃；
-    // 无标消息（宿主旧版本/兑底路径）放行
-    if (m.tabId !== undefined) { if (tabId === null) tabId = m.tabId; else if (m.tabId !== tabId) return; }
+  /** 单条宿主消息的渲染处理（刀2 前身为 window message 监听内联体；现由监听按标签路由后调用。
+   *  后台标签调用时 R 已被 withInactive 换入，全部 R.* 读写自然落到目标标签的记录里） */
+  function handleMsg(m: HostToWebviewTagged) {
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     else if (m.type === 'delta') appendDelta(m.text, m.ci);
     else if (m.type === 'thinking') appendThink(m.text, m.ci);
     else if (m.type === 'toolStart') {
       finalizeLive();
-      var olds = messages.querySelectorAll('.prow'); for (var oi = 0; oi < olds.length; oi++) olds[oi].parentNode.removeChild(olds[oi]);
+      var olds = R.root.querySelectorAll('.prow'); for (var oi = 0; oi < olds.length; oi++) olds[oi].parentNode.removeChild(olds[oi]);
       liveReset(); toolStart(m.id, m.name, m.detail);
     }
     else if (m.type === 'toolCallStart') {
       var tp = liveBlock(m.ci, 'toolCall', m.name);
       tp._len = 0; tp.raw = '';
-      liveMsg.content[m.ci] = tp; scroll();
+      R.liveMsg.content[m.ci] = tp; scroll();
     }
-    else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
+    else if (m.type === 'toolCallDelta') { var tb = R.liveMsg && R.liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (R.pdet) R.pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
-    else if (m.type === 'render') { var rm = m; setTimeout(function () { renderAll(rm.messages); }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
-    else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
+    else if (m.type === 'render') { var rm = m; var recR = R; setTimeout(function () { var savedR = R; R = recR; renderAll(rm.messages); R = savedR; }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页；捕获标签记录防跨标签竞态
+    else if (m.type === 'queue') { R.queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }
     else if (m.type === 'status') setStatus(m.text);
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
-    else if (m.type === 'queuedClear') { queuedItems = []; document.getElementById('queuebar').innerHTML = ''; }
+    else if (m.type === 'queuedClear') { R.queuedItems = []; if (!applyingInactive) document.getElementById('queuebar').innerHTML = ''; }
     else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChip(); }
     else if (m.type === 'addImages') { (function() {
+      var rec = R; // 捕获标签记录：链式探测跨多个异步回调，防切标签后写错标签（工单十五刀2）
       var list = m.images || []; var k = 0;
       function nextAdi() {
-        if (k >= list.length || pendingImages.length >= 4) { renderAttach(); return; }
+        if (k >= list.length || rec.pendingImages.length >= 4) { if (rec === R) renderAttach(); return; }
         var p = list[k++]; if (!p.mimeType) p.mimeType = 'image/png';
         var probe = new Image();
         probe.onload = function() {
           if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall2.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight).replace('{v}', p.name || '')); nextAdi(); return; }
           p.w = probe.naturalWidth; p.h = probe.naturalHeight;
-          if (!hasImg(p.data)) pendingImages.push(p); // 宿主转发同样去重（复制图片等入口）
+          if (!hasImgIn(rec, p.data)) rec.pendingImages.push(p); // 宿主转发同样去重（复制图片等入口）
           nextAdi();
         };
         probe.onerror = function() { notice('ⓐ ' + L.imgReadFail + (p.name || '')); nextAdi(); };
@@ -1003,13 +1050,131 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
       nextAdi();
     })(); }
-    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat((m.files || []).filter(function (f) { return !hasFile(f.path, f.name); })); renderAttach(); }
+    else if (m.type === 'addFiles') { R.pendingFiles = R.pendingFiles.concat((m.files || []).filter(function (f) { return !hasFile(f.path, f.name); })); renderAttach(); }
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
     else if (m.type === 'state') applyState(m);
-    else if (m.type === 'banner') renderBanner(m.banner);
-    else if (m.type === 'changesList') renderChanges(m.files);
+    else if (m.type === 'banner') { R.banner = m.banner; renderBanner(m.banner); }
+    else if (m.type === 'changesList') { R.changes = m.files; renderChanges(m.files); }
     else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }
+    else if (m.type === 'tabs') handleTabs(m);
+  }
+
+  /** 页脚/横幅/输入框类共享 UI 只认活动标签（后台核心的这类消息不进画面，
+   *  横幅/变更条已按标签寄存，切回时 restoreRender 恢复） */
+  function isChromeMsg(m: HostToWebviewTagged): boolean {
+    return m.type === 'state' || m.type === 'mode' || m.type === 'theme' || m.type === 'status'
+      || m.type === 'fillInput' || m.type === 'addImages' || m.type === 'addFiles' || m.type === 'codeCtx';
+  }
+
+  /** 后台标签消息应用：把 R 换入目标标签的记录跑同一套渲染代码，跑完换回。
+   *  全部每标签状态住记录对象里，换 R 即换上下文；共享 DOM 写入由 applyingInactive 守卫 */
+  function withInactive(tid: string, fn: () => void) {
+    var saved = R;
+    R = tabRenders[tid];
+    applyingInactive = true;
+    try { fn(); }
+    finally { applyingInactive = false; R = saved; }
+  }
+
+  /** 切回标签：恢复计时/停止钮/排队/附件/横幅/变更条现场（消息 DOM 已整棵换入，无需重建） */
+  function restoreRender() {
+    stopBtn.style.display = R.streaming ? 'inline-flex' : 'none';
+    if (R.streaming) {
+      setBusy(true, Date.now() - R.busyStart);
+    } else if (R.lastElapsed != null) {
+      statusEl.classList.remove('busy');
+      statusEl.textContent = '⏱ ' + fmtDur(R.lastElapsed);
+      statusEl.title = L.turnDuration;
+    } else {
+      statusEl.classList.remove('busy');
+      statusEl.textContent = '';
+    }
+    var qb = document.getElementById('queuebar');
+    qb.innerHTML = '';
+    for (var i = 0; i < R.queuedItems.length; i++) addQueuedDom(R.queuedItems[i]);
+    renderBanner(R.banner);
+    renderChanges(R.changes || []);
+    renderAttach();
+    renderTabs();
+  }
+
+  /** 切换活动标签（webview 本地立即生效，宿主 tabs 回包校正 busy/标题） */
+  function activateTab(tid: string) {
+    if (R && R.id === tid) { renderTabs(); return; }
+    if (R) {
+      finalizeLive(); // 收尾当前标签的流式小尾巴（写进它自己的记录/隐藏根）
+      if (R.busyTimer) { clearInterval(R.busyTimer); R.busyTimer = null; }
+      if (R.root.parentNode) R.root.parentNode.removeChild(R.root);
+    }
+    activeTabId = tid; tabId = tid;
+    R = ensureRender(tid);
+    R.dirty = false;
+    if (!R.root.parentNode) {
+      messages.innerHTML = ''; // 清容器：吞掉 index.html 的静态欢迎页（每个标签根自带自己的欢迎页拷贝）
+      messages.appendChild(R.root);
+    }
+    restoreRender();
+  }
+
+  /** 标签条渲染：宿主 tabs 消息是唯一事实源（id/title/busy），本地叠加 dirty 未读点 */
+  function renderTabs() {
+    tabbarEl.innerHTML = '';
+    if (!tabsList.length) { tabbarEl.classList.remove('has-tabs'); return; }
+    tabbarEl.classList.add('has-tabs');
+    for (var i = 0; i < tabsList.length; i++) {
+      (function (t: TabInfo) {
+        var rec = tabRenders[t.id];
+        var chip = el('span', 'tab-chip' + (t.id === activeTabId ? ' active' : '') + (t.busy ? ' busy' : '') + (rec && rec.dirty && t.id !== activeTabId ? ' unread' : ''));
+        chip.title = t.title;
+        chip.appendChild(el('span', 'tab-dot'));
+        chip.appendChild(el('span', 'tab-title', shorten(t.title, 14)));
+        var x = el('span', 'tab-x', '\u00d7');
+        x.title = L.tabCloseTitle;
+        if (t.busy) x.className = 'tab-x always'; // busy 中关标签宿主会弹确认，× 常显提醒
+        x.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'tabClose', tabId: t.id }); });
+        chip.appendChild(x);
+        chip.addEventListener('click', function () {
+          if (t.id === activeTabId) return;
+          activateTab(t.id); // 本地先切（零延迟），宿主 tabs 回包校正 busy/标题
+          vscode.postMessage({ type: 'tabSwitch', tabId: t.id });
+        });
+        tabbarEl.appendChild(chip);
+      })(tabsList[i]);
+    }
+    var add = el('span', 'tab-add');
+    add.innerHTML = ico('plus', 12);
+    add.title = L.tabNewTitle;
+    add.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
+    tabbarEl.appendChild(add);
+  }
+
+  /** 宿主标签清单（唯一事实源）：更新清单 + 跟随宿主指定的活动标签（如关标签后的转移） */
+  function handleTabs(m: TabsMsg) {
+    tabsList = m.tabs || [];
+    if (activeTabId === null) activateTab(m.activeTabId);
+    else if (m.activeTabId !== activeTabId) activateTab(m.activeTabId);
+    else renderTabs();
+  }
+
+  window.addEventListener('message', function (ev: MessageEvent) {
+    var m = ev.data as HostToWebviewTagged;
+    // 工单十五刀2：标签清单是 chrome 消息，先于 tabId 过滤处理（宿主是事实源）
+    if (m.type === 'tabs') { handleTabs(m); return; }
+    // tabId 路由：首条带标消息定初始标签（宿主 post() 会给全消息打活动标签标）；
+    // 后台标签的会话消息换上下文吃进隐藏 DOM；页脚/横幅类只认活动标签
+    if (m.tabId !== undefined) {
+      var rec = ensureRender(m.tabId);
+      if (activeTabId === null) { activeTabId = m.tabId; tabId = m.tabId; R = rec; messages.innerHTML = ''; messages.appendChild(rec.root); }
+      else if (m.tabId !== activeTabId) {
+        if (isChromeMsg(m)) return;
+        if (m.type === 'banner') { rec.banner = (m as any).banner; return; }
+        if (m.type === 'changesList') { rec.changes = (m as any).files; return; }
+        withInactive(m.tabId, function () { handleMsg(m); });
+        return;
+      }
+    }
+    handleMsg(m);
   });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）
   vscode.postMessage({ type: 'webviewReady' });

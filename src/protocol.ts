@@ -145,7 +145,23 @@ export type WebviewToHost =
   | WvBannerCloseMsg
   | WvCompactSessionMsg
   | WvShowChangesMsg
-  | WvChangesDismissMsg;
+  | WvChangesDismissMsg
+  | WvTabSwitchMsg
+  | WvTabNewMsg
+  | WvTabCloseMsg;
+
+/* 工单十五刀2：标签栏控制消息（panel 级，不过核心——panel.ts onDidReceiveMessage 在路由核心前拦截） */
+export interface WvTabSwitchMsg {
+  type: "tabSwitch";
+  tabId: string;
+}
+export interface WvTabNewMsg {
+  type: "tabNew";
+}
+export interface WvTabCloseMsg {
+  type: "tabClose";
+  tabId: string;
+}
 
 /* ══════════════ 宿主 → webview ══════════════ */
 
@@ -316,6 +332,18 @@ export interface ThemeMsg {
   type: "theme";
   name: string;
 }
+/** 工单十五刀2：标签栏全量状态（宿主是唯一事实源，webview 只渲染；标题/busy 由宿主从
+ *  各核心的 state/busy 消息记账）。webview 本地另叠 dirty 未读点（后台标签完成亮提示） */
+export interface TabInfo {
+  id: string;
+  title: string;
+  busy: boolean;
+}
+export interface TabsMsg {
+  type: "tabs";
+  tabs: TabInfo[];
+  activeTabId: string;
+}
 /** 面板顶部横幅（工单六：压缩显性化/阈值预警）。文案由宿主组装（含时间戳/占比，
  *  随宿主 i18n 走），webview 只负责渲染；actionLabel 有值时带操作按钮 */
 export interface BannerPayload {
@@ -390,7 +418,8 @@ export type HostToWebview =
   | StateMsg
   | ThemeMsg
   | BannerMsg
-  | ChangesListMsg;
+  | ChangesListMsg
+  | TabsMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 

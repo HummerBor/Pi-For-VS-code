@@ -24,7 +24,28 @@ body > :not(#bg-layer) { position: relative; z-index: 1; }
 .hdr-btn:hover { opacity: 1; text-decoration: underline; }
 
 /* ── 消息区 ── */
-#messages { flex: 1; overflow-y: auto; padding: 10px 10px 4px; }
+/* 工单十五刀2：#messages 退化为纯容器（换标签时整棵 DOM 树换入换出），
+ * 滚动职责移交给每标签的 .msg-root——滚动位置天然按标签保留 */
+#messages { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.msg-root { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 10px 4px; }
+/* ── 标签条（工单十五刀2）── */
+#tabbar { display: none; align-items: stretch; gap: 2px; padding: 4px 8px 0; overflow-x: auto; flex: none; }
+#tabbar.has-tabs { display: flex; }
+.tab-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; font-size: 11.5px; line-height: 1.2;
+  border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0;
+  color: inherit; opacity: .65; cursor: pointer; white-space: nowrap; max-width: 160px; position: relative; }
+.tab-chip .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-chip:hover { background: rgba(128,128,128,.12); }
+.tab-chip.active { background: rgba(128,128,128,.18); opacity: 1; border-color: rgba(128,128,128,.25); }
+.tab-chip .tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; display: none; }
+.tab-chip.busy .tab-dot { display: inline-block; background: #e8a33d; animation: tabblink 1.1s ease-in-out infinite; }
+.tab-chip.unread .tab-dot { display: inline-block; background: #4ec96e; }
+@keyframes tabblink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+.tab-chip .tab-x { display: none; flex: none; opacity: .5; font-size: 11px; padding: 0 1px; border-radius: 3px; }
+.tab-chip:hover .tab-x, .tab-chip .tab-x.always { display: inline; }
+.tab-chip .tab-x:hover { opacity: 1; background: rgba(128,128,128,.25); }
+.tab-add { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; border-radius: 6px 6px 0 0; opacity: .6; cursor: pointer; }
+.tab-add:hover { opacity: 1; background: rgba(128,128,128,.12); }
 * { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.5) transparent; } /* 标准属性兑底：部分 Chromium 环境里 webkit 伪元素滚动条不生效 */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 1.5px; }

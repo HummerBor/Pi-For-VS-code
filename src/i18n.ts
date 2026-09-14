@@ -41,6 +41,13 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     nsAbortAndNew: "终止并新建",
     cancel: "取消",
     confirm: "确认",
+    // ── 标签栏（工单十五刀2）──
+    tabUntitled: "新会话",
+    tabNewTitle: "新建标签会话",
+    tabCloseTitle: "关闭标签",
+    tabCloseBusyAsk: "该标签的会话正在运行，关闭会中断当前任务。",
+    tabCloseYes: "关闭标签",
+    tabSwitchFail: "切换标签失败: ",
     nsCancelled: "新建会话被扩展取消",
     nsFail: "新建会话失败: ",
     startNewSession: "$(add) 开始新会话",
@@ -416,6 +423,13 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     nsAbortAndNew: "Abort & new session",
     cancel: "Cancel",
     confirm: "Confirm",
+    // ── Tabs (ticket 15 knife 2) ──
+    tabUntitled: "New chat",
+    tabNewTitle: "New tab session",
+    tabCloseTitle: "Close tab",
+    tabCloseBusyAsk: "This tab's session is still running. Closing it will abort the current task.",
+    tabCloseYes: "Close tab",
+    tabSwitchFail: "Failed to switch tab: ",
     nsCancelled: "New session was cancelled by an extension",
     nsFail: "Failed to start new session: ",
     startNewSession: "$(add) New session",
@@ -790,6 +804,8 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "delSessionEntry", "delSessionAsk", "delSessionCur",
   // 新建会话确认
   "nsConfirm", "nsAbortAndNew", "cancel",
+  // 标签栏（工单十五刀2）：关标签确认弹窗双语（同 nsConfirm 口径）
+  "tabCloseBusyAsk", "tabCloseYes",
   // 文件对话框
   "allFiles",
   // ⚡ 菜单
