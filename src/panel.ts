@@ -407,6 +407,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.post({ type: "render", messages: [] });
     this.post({ type: "queuedClear" });
     this.post({ type: "banner", banner: null });
+    // 立即起会话（刀4 freshTab→SessionManager.create）：模型/思考记忆当场恢复上屏，
+    // 页脚不再显示「—」/「临时(未保存)」——与 t1 面板打开即 prewarm 同口径。
+    // forceSession=true：新标签=新持久会话是本单铁语义，不受 sessionMode=ephemeral 影响
+    this.ensureCore(id).ensureClient(true);
   }
 
   /** 切换活动标签（刀5：切回即拉真相——postUiState 全量重发消息/busy/排队/模式/横幅） */
@@ -445,7 +449,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       } else {
         const nid = "t" + (++this.tabSeq);
         this.tabMeta.set(nid, { title: this.L.tabUntitled, busy: false });
+        this.freshTabs.add(nid);
         this.activeTabId = nid;
+        this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
+        this.post({ type: "render", messages: [] });
+        this.post({ type: "queuedClear" });
+        this.post({ type: "banner", banner: null });
+        this.ensureCore(nid).ensureClient(true); // 同 handleTabNew：立即起会话恢复模型记忆
       }
       const next = this.cores.get(this.activeTabId);
       if (next?.clientRef?.running) {
