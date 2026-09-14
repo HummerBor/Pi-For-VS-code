@@ -56,7 +56,15 @@ export class PiCore {
 
   private client?: PiClient;
   private clientNoSession = false;
-  private busy = false;
+  /** busy 已从镜像退化为派生真相（工单十五刀6，用户问「busy 还有存在的必要吗」）：
+   *  RPC 时代靠镜像+三层对账去猜（piClient 头注释原话），直连后 pi 的 isStreaming
+   *  （agent-session.d.ts:295）同步可读——8 处 setter/对账纠偏/观察断言全是给漂移擦屁股，
+   *  整树回收。剩两个合成项：①isStreaming 真相；②pendingPrompt 乐观窗口（prompt 已发
+   *  尚未翻转的空窗 + /llama 类命令式应答——4s 兑底红线保留，职责收窄为此）。busy 事件
+   *  （推 webview）不废：webview 无法轮询，spinner/stop 按钮事件驱动 */
+  private get busy(): boolean {
+    return this.pendingPrompt || (this.client?.isStreaming ?? false);
+  }
   /** 当前编辑器的代码上下文（adapter 监听选区后经 setCodeContext 注入，prompt 组装消费） */
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
   /** 中断后跳过一次 settled 重绘（会话里被中断的消息是空的，重绘会抹掉现场） */
@@ -218,7 +226,7 @@ export class PiCore {
 
     client.onUiRequest = (req) => void this.handleUiRequest(req);
     client.onExit = (code, detail) => {
-      this.busy = false;
+      // 刀6：进程没了 isStreaming 必为 false，busy 派生即假，无需清镜像；事件照发（webview 收尾）
       this.post({ type: "busy", value: false });
       this.dbg("busy=false (pi_exit)");
       this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
@@ -443,7 +451,7 @@ export class PiCore {
         }
         // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
         const wasBusy = this.busy;
-        this.busy = true;
+        // 刀6：乐观置位由下方 pendingPrompt 承担（isStreaming 尚未翻转的空窗），不再写镜像
         // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
         // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
         this.post({
@@ -476,9 +484,10 @@ export class PiCore {
         if (!wasBusy) {
           this.pendingPrompt = true;
           setTimeout(() => {
-            if (!steered && this.busy && this.pendingPrompt) {
+            // 刀6：agent_start 已清 pendingPrompt 的话本条件不成立；isStreaming 真跑起来时
+            // busy 恒真——4s 兜底只清乐观窗口，不再有镜像可清
+            if (!steered && this.pendingPrompt) {
               this.pendingPrompt = false;
-              this.busy = false;
               this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
               this.post({ type: "busy", value: false });
             }
@@ -490,26 +499,24 @@ export class PiCore {
           } catch (e: any) {
             // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
             // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
-            // 工单五-3 可达性结论（直连）：自愈保留。panel 读 wasBusy 与调 client.prompt 之间
-            // 无异步间隙（同一线程同步块），正常永不触发拒收；唯一可达场景是镜像已漂移
-            // （4s 兜底误清 busy 后用户再发消息 → steer=false 撞上运行中的 session.prompt）。
-            // 它是对账/兜底两层全失效时的最后一层，撤掉后漂移会以「发送失败」报错形式砸给用户
+            // 工单五-3 可达性结论（直连）：自愈保留。刀6 后镜像已死（busy=isStreaming 派生），
+            // 「镜像漂移撞运行中 session.prompt」的场景在架构上不存在，自愈纯兜底
             const msg = String(e?.message ?? e);
             if (!/already processing|streamingBehavior/i.test(msg)) throw e;
             this.post({ type: "notice", text: this.L.autoQueued });
             steered = true;
-            // pi 拒收 = 它一定正在跑上一个 run：busy 必须纠回 true 并同步给 webview。
-            // 若不纠回：steer 不触发 agent_start，4s 兜底会把 busy 清掉 → 整个 run 期间
-            // 宿主自认空闲，后续消息全部误判（Working 消失/排队气泡丢失的根源）
-            this.busy = true;
+            // pi 拒收 = 它一定正在跑上一个 run：isStreaming 必为 true，busy（派生，刀6）恒真，
+            // 无镜像可纠；busy:true 事件重发是给 webview 的——4s 兜底可能刚发过 busy:false，
+            // 若不重发：steer 不触发 agent_start，webview 的 Working 会消失（排队气泡丢失的根源）
             this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
-            this.dbg("busy=true (steer_resend: pi rejected prompt as already processing)");
+            this.dbg("busy event (steer_resend: pi rejected prompt as already processing)");
             await client.prompt(text, true, m.images);
           }
           // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
           if (!wasBusy && m.text) void this.autoTitleSession(m.text);
         } catch (err: any) {
-          this.busy = false;
+          // 刀6：清乐观窗口（isStreaming 本就 false——发送失败不会有 run 在跑）
+          this.pendingPrompt = false;
           this.post({ type: "busy", value: false });
           this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
           this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
@@ -523,7 +530,6 @@ export class PiCore {
             if (this.busy && this.pendingPrompt) {
               // 命令式应答（如 /llama，无 agent 运行）：没有可中断的东西，直接清掉乐观 busy，不弹中断提示
               this.pendingPrompt = false;
-              this.busy = false;
               this.post({ type: "busy", value: false });
               this.dbg("busy=false (abort_while_pendingPrompt)");
               break;
@@ -954,21 +960,8 @@ export class PiCore {
       } catch {
         // ignore
       }
-      // 真相对账：get_state.isStreaming 是 pi 的权威状态。只纠「镜像说空闲、真相在跑」方向——
-      // 反向不纠：prompt 乐观置位窗口内 isStreaming 尚为 false，纠了会打断正常反馈（那是 4s 兜底的职责）
-      if (st.isStreaming === true && !this.busy) {
-        this.busy = true;
-        this.pendingPrompt = false;
-        if (!this.runStartTs) this.runStartTs = Date.now();
-        this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
-        this.dbg("busy=true (reconcile: get_state.isStreaming)");
-      }
-      // 工单五-1 观察期断言（直连后镜像应与真相零漂移）：反向不一致只记日志不纠——
-      // busy=true 且已过 pendingPrompt 窗口时 pi 却空闲，意味着某个 busy setter 误清/漏清。
-      // 零触发观察期满后，本处与 onPiEvent 顶部的对账纠偏逻辑一并删除（DIRECTOR.md 工单五-1）
-      if (this.busy && !this.pendingPrompt && st.isStreaming === false) {
-        this.dbg("MISMATCH(reverse, observe-only): mirror busy but pi idle, pendingPrompt=false");
-      }
+      // 刀6：原「get_state 真相对账 + 工单五-1 观察断言」整块删除——busy=isStreaming 派生后
+      // 镜像不存在，对账无从谈起（工单五-1 的观察期到此期满结案）
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
       if (st?.sessionFile) this.setSessionForWs(st.sessionFile);
       // 换会话（切换/新会话/分叉都会换 sessionFile）：阈值预警 re-arm + 清会话域横幅（工单六）
@@ -1072,22 +1065,11 @@ export class PiCore {
   }
 
   private async onPiEvent(e: PiEvent): Promise<void> {
-    // 事件流即真相：这四类事件只在 agent 运行中产生。若 busy 镜像为 false 时收到，
-    // 说明镜像已漂移（如 4s 兜底误清），立即纠回——脱同步不再能存活到 run 结束
-    if (
-      !this.busy &&
-      (e.type === "message_start" || e.type === "message_update" ||
-       e.type === "tool_execution_start" || e.type === "tool_execution_end")
-    ) {
-      this.busy = true;
-      this.pendingPrompt = false;
-      if (!this.runStartTs) this.runStartTs = Date.now();
-      this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
-      this.dbg("busy=true (reconcile: " + e.type + " while mirror idle)");
-    }
+    // 刀6：原「事件流对账纠偏」块整块删除——busy=isStreaming 派生后漂移在架构上不可能，
+    // 「镜像空闲却收到运行中事件」不存在（isStreaming 为真则 busy 恒真）
     switch (e.type) {
       case "agent_start":
-        this.busy = true;
+        // 刀6：busy=isStreaming 派生，无需置位；pendingPrompt 清掉（乐观窗口结束）
         this.pendingPrompt = false;
         this.runStartTs = Date.now();
         // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
@@ -1260,7 +1242,7 @@ export class PiCore {
         break;
 
       case "agent_settled": {
-        this.busy = false;
+        // 刀6：isStreaming 已翻 false，busy 派生即假，无需清镜像
         // 本轮实测耗时随 busy:false 下发（中断也算一轮，时长到中断为止）；
         // 无 agent 运行（命令式应答）不带字段，webview 不显示耗时
         this.post({

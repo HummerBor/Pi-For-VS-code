@@ -37,6 +37,11 @@ export class PiClient {
 
   private runtime: any = null; // AgentSessionRuntime（会话替换：new/switch/fork/clone/import）
   private session: any = null; // 当前 AgentSession
+  /** pi 真相同步读（工单十五刀6）：RPC 时代镜像+三层对账去猜，直连后 isStreaming 随手可读
+   *  （agent-session.d.ts:295）——piCore.busy 的派生源之一 */
+  get isStreaming(): boolean {
+    return this.session?.isStreaming ?? false;
+  }
   private unsubscribe: (() => void) | null = null;
   private initPromise: Promise<void> | null = null;
   private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string } | null = null;
