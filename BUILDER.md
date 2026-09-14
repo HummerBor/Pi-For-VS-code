@@ -6,6 +6,37 @@
 
 最后更新：2026-09-11 归档精简（已完结回报迁 归档.md 第九节，本文件只留活动项）
 
+## 工单十三二刀施工回报（选择器零反馈治理，四刀一次提交 ead904d）
+
+**工单十三主体被用户实测打回（点历史长无反馈）后的二刀**：总监基准已证 IO 非瓶颈，
+按签工单四刀一次提交落地（panel.ts + i18n.ts，piCore 零改动）：
+
+1. **计时埋点**：panel 新增 dbgLog（与 piCore 共用 ~/.pi/agent/pi-chat-debug.log，不新开
+   文件、轮转同策略），pickSession 三段计时可见（占位弹出/列表就绪/内容就绪项数）。若复测
+   显示消息到达前已耗秒级 = pi 预热伸延阻塞事件循环，另立账
+2. **busy 占位**：showQuickPick → createQuickPick，弹起即放「正在加载会话…」busy 项，
+   listSessions 完成后原地替换；选中/取消语义等价；渲染链（switchSession/getMessages/
+   refreshState）逐行未动；i18n 新增 loadingSessions（中/英+NATIVE_KEYS）
+3. **后台预热**：webviewReady 时 fire-and-forget listSessions()（错误静默）——pi 包提前
+   加载 + 页缓存预热，首次点击也毫秒级
+4. **换 pi SessionManager.listAll**（用户提出升级）：废弃自研扫描整树主路径，
+   collectJsonlFiles/readSessionMeta/splitUtf8 加注释留作回退备胎不预删。薄映射
+   （file=path、preview=firstMessage 截 60、mtime=modified.getTime()），samePath 项目过滤，
+   mtime 缓存 key=file 外包照旧
+
+**冒烟**：本地真目录 79 会话 listAll 字段/映射全吻合、msgCount=177 白拿。compile 全绿。
+**待实测**（需真 vsix）：①点历史立即有占位响应 ②预热后首次点击毫秒级出全列表
+③debug.log 三段计时可见（定位剩余延迟归属）。
+
+**边界遵守**：switchSession/getMessages/删除守卫/SessionInfo/piCore 全未动；自研备胎未删。
+
+## 请示（待总监裁决，记于回报区）
+
+**工单十五（面板内多标签并行会话）标注「判断型工单，指派主力会话；小模型勿接」**——
+当前施工方为小模型，不接。工单区按序轮到的下一张大单即是工单十五，请总监裁决：①由用户先
+发 `1` review 完二刀，另指派主力会话施工工单十五；②或本会话仅做工单十三二刀+攒包小刀，
+工单十五继续排队。
+
 ## 工单九施工回报（后台图输入加固，安全审计机械改动，待用户实测）
 
 **一次改动提交 074ab0c，全在 panel.ts applyHtml，webview/main.ts/CSP/nonce 全未动**：
@@ -83,6 +114,8 @@ join(root, r) 已绝对，没动；裁决 11 还原边界没动；协议三处�
 - **工单十三**：①冷启动后首次打开选择器顺滑不卡 ②此前裸文件名会话标题能出
   ③带大附件会话（智谱费用明细 xlsx）标题正常 ④标题恰好跨 16K 块边界的中文会话名
   完整不花屏（补刀验证点：真实会话骑线 UTF-8 无 \uFFFD）
+- **工单十三二刀**：①点历史**立即**有占位响应（加载态不黑屏）②预热后首次点击毫秒级出
+  全列表 ③debug.log 三段计时可见（占位弹出/listSessions/内容就绪）
 - **工单九**：面板背景图正常显示——合法 http(s) URL + 合法本地路径两条路都通，
   恶意配置（</style> 注入 / 非 http 协议 / opacity 字符串）不带崩或带异常
 - **工单六**：①长对话触发自动压缩看横幅 ②阈值预警（contextWarnPercent 调低如 5 验证）+ 一键压缩
