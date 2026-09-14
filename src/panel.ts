@@ -539,7 +539,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       label: string;
       description?: string;
       detail?: string;
-      action: "file" | "new" | "all" | "delete" | "newTab";
+      action: "file" | "newTab" | "all" | "delete";
       file?: string;
       busy?: boolean;
     };
@@ -557,13 +557,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
 
     const items: Item[] = [];
-    // 工单十五刀4：并行入口收进选择器（单标签时标签条隐藏，这是唯一随时可用的开新标签入口）
+    // 工单十五入口收敛（2026-09-14 拍板）：「开始新会话」项已删——开新会话=开新标签，
+    // 全插件只剩头部＋与本项两个入口，行为一致；busy 中选中会话自动开进新标签
     items.push({ label: "$(add) " + this.L.tabNewTitle, action: "newTab" });
     if (scope !== "all") {
-      items.push({ label: this.L.startNewSession, action: "new" });
-      if (scope === "auto") {
-        items.push({ label: this.L.browseAllSessions, action: "all" });
-      }
+      items.push({ label: this.L.browseAllSessions, action: "all" });
     }
     // 删除入口独立于会话条目：避免误触（条目点击=切换，删除走二级选择+确认）
     items.push({ label: this.L.delSessionEntry, action: "delete" });
@@ -601,13 +599,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const client = this.core.ensureClient(true);
     try {
       if (pick.action === "newTab") {
-        // 工单十五刀4：随时开新并行标签（新持久会话，freshTab 链路）
+        // 入口收敛后唯一的「开新标签」选择器项（头部＋同款语义）
         this.handleTabNew();
         return;
-      } else if (pick.action === "new") {
-        // busy 中点「开始新会话」：不逼中断，开进新并行标签（同 file 分支语义）
-        if (this.core.isBusy) { this.handleTabNew(); return; }
-        this.post({ type: "render", messages: [] });
       } else if (pick.action === "all") {
         void this.pickSession("all");
         return;

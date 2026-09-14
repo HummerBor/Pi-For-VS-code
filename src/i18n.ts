@@ -51,12 +51,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionOpenInTab: "该会话已在其他标签中打开，已为你切换过去",
     nsCancelled: "新建会话被扩展取消",
     nsFail: "新建会话失败: ",
-    startNewSession: "$(add) 开始新会话",
     browseAllSessions: "$(folder) 浏览所有项目的会话…",
     loadingSessions: "正在加载会话…",
     noSessions: "没有找到历史会话（~/.pi/agent/sessions 为空）",
     pickSessionAll: "选择要恢复的历史会话（全部项目，按最近使用排序）",
-    pickSessionProj: "选择当前项目的历史会话继续工作，或开始新会话",
+    pickSessionProj: "选择当前项目的历史会话继续工作，或新建标签会话",
     // 会话删除（流程入口/确认弹窗走 NATIVE_KEYS 双语；结果通知跟面板语言）
     delSessionEntry: "$(trash) 删除会话…",
     delSessionAsk: "删除这个会话？文件将从磁盘永久移除，不可恢复",
@@ -335,7 +334,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionBtnTitle: "点击查看 / 切换历史会话",
     sessionLabel: "会话: ",
     historyTitle: "历史会话",
-    newChatTitle: "新建会话",
+    newChatTitle: "新建标签会话",
     moreTitle: "菜单：会话操作 / 配置",
     themeTitle: "主题 / 背景",
 
@@ -434,12 +433,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionOpenInTab: "This session is already open in another tab; switched to it",
     nsCancelled: "New session was cancelled by an extension",
     nsFail: "Failed to start new session: ",
-    startNewSession: "$(add) New session",
     browseAllSessions: "$(folder) Browse sessions of all projects…",
     loadingSessions: "Loading sessions…",
     noSessions: "No past sessions found (~/.pi/agent/sessions is empty)",
     pickSessionAll: "Pick a session to resume (all projects, most recent first)",
-    pickSessionProj: "Pick a session of this project to continue, or start a new one",
+    pickSessionProj: "Pick a session of this project to continue, or start a new tab",
     delSessionEntry: "$(trash) Delete session…",
     delSessionAsk: "Delete this session? The file will be permanently removed from disk, this cannot be undone",
     delSessionCur: "This is the currently open session — create or switch to another one before deleting",
@@ -704,7 +702,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionBtnTitle: "Click to view / switch sessions",
     sessionLabel: "Session: ",
     historyTitle: "Past sessions",
-    newChatTitle: "New session",
+    newChatTitle: "New tab session",
     moreTitle: "Menu: session ops / config",
     themeTitle: "Theme / background",
 
@@ -801,7 +799,7 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "themeMidnight", "themeAuto", "themeCcDark", "themeCurrent", "themePicker",
   "modeManual", "modeManualDetail", "modeEditAuto", "modeEditAutoDetail", "modePlan", "modePlanDetail", "modeAuto", "modeAutoDetail", "modePicker",
   // 会话选择
-  "startNewSession", "browseAllSessions", "pickSessionAll", "pickSessionProj", "loadingSessions",
+  "browseAllSessions", "pickSessionAll", "pickSessionProj", "loadingSessions",
   // 会话删除（入口/确认弹窗双语；同删凭证一致）
   "delSessionEntry", "delSessionAsk", "delSessionCur",
   // 新建会话确认

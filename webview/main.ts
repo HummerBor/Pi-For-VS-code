@@ -965,7 +965,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
   themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });
   langEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickLang' }); });
-  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'newSession' }); });
+  // 头部 ＋ → 开新标签会话（工单十五入口收敛，用户拍板 2026-09-14）：多标签时代
+  // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
+  // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
+  newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
   modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });
   thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });
   modeBadge.addEventListener('click', function () { vscode.postMessage({ type: 'pickMode' }); });
@@ -1144,11 +1147,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         tabbarEl.appendChild(chip);
       })(tabsList[i]);
     }
-    var add = el('span', 'tab-add');
-    add.innerHTML = ico('plus', 12);
-    add.title = L.tabNewTitle;
-    add.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
-    tabbarEl.appendChild(add);
+    // ＋入口已收敛到头部（与标签条＋撞脸是用户实测吐槽点，2026-09-14 拍板去掉）：
+    // 标签条只承载芯片（切换/关闭/状态点），开新标签走头部＋或 ⏱ 选择器顶部项
   }
 
   /** 宿主标签清单（唯一事实源）：更新清单 + 跟随宿主指定的活动标签（如关标签后的转移） */
