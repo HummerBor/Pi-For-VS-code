@@ -92,10 +92,15 @@
    填充，switchSession/getMessages 渲染链照旧不许碰**
 3. **后台预热缓存**：面板 webviewReady 时 fire-and-forget 跑一次 listSessions()（不 await、
    错误静默），填 mtime 缓存——首次点击也能毫秒级出列。这是十三缓存价值的兑现点
-4. **并发化（抄 pi 作业，09-14 总监考古 pi 源码后加）**：pi 的 list 是 10 路并发
-   （MAX_CONCURRENT_SESSION_INFO_LOADS=10）且读得比我们多（全量 vs 256KB）却体感秒出，
-   快在并发+渐进渲染。listSessions 改并发拉取（并发度 10，stat+读元数据一批批发），
-   缓存 Map.set 线程安全无需加锁（单线程）
+4. **换 pi 原生 SessionManager.list（09-14 用户提出，总监升级原刀 4）**：实证 SessionManager
+   是 pi 公开导出（index.d.ts + sdk.md 官方示例），就是 pi -r 的同款实现（10 路并发、
+   全量解析、messageCount/modified-by-activity 字段白拿，格式变更 pi 自己扛）。
+   panel.ts 的 listSessions 改为薄映射：调 `SessionManager.list()` → 按 wsPath 过滤
+   （samePath 保留，pi 的 list 不做项目过滤）→ 填 SessionInfo（结构不变：file=path、
+   preview=firstMessage 截 60、mtime=modified.getTime()）。**自研扫描实现整树删除**
+   （collectJsonlFiles/readSessionMeta/splitUtf8/正则兑底）；mtime 缓存包在外面照旧
+   （key=file，mtime 取 modified.getTime()）。若实测 pi 版全量读在真机明显慢于自研版，
+   保留自研版作回退并请示裁决后再删（不预删备胎）
 
 - 验收：点历史**立即**有响应（占位项/加载态）；预热后点击毫秒级出全列表；debug.log 三段
   计时可见；compile 全绿
