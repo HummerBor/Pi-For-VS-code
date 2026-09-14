@@ -1689,14 +1689,54 @@ function dbgLog(msg: string): void {
  *  删除会话后残留条无害：缓存按 key=file 惰性覆盖，文件不在列表即不被引用。 */
 const sessionMetaCache = new Map<string, { mtimeMs: number; meta: SessionInfo }>();
 
-/** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
- *  工单十三二刀-4：主路径改用 pi 公开 API SessionManager.listAll()（pi -r 同款，10 路
- *  并发全量解析，messageCount/modified-by-activity 字段白拿，格式变更 pi 自己扛），
- *  按 cwd 的 samePath 过滤（pi 的 list 不做项目过滤）。mtime 缓存包在外面（key=file，
- *  mtime 取 modified.getTime()），预热/复用免重建展示对象。 */
-async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
+/** 指纹缓存（工单十三二刀-5）：指纹 → 上次 SessionManager.listAll 原样结果。
+ *  命中即免 ~700ms 全量解析，稳态命中率近 100%（使用中会话极少变）；
+ *  面板重开不失效（模块级），扩展重载失效（可接受）。 */
+type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
+const listAllFingerprintCache = new Map<string, PiSessionEntry[]>();
+
+/** 会话目录文件集指纹：stat 扫描全部 .jsonl 的 mtimeMs 做 FNV-1a 哈希（复用回退备胎
+ *  collectJsonlFiles；79 文件 ≈30-50ms）。任何文件新增/删除/mtime 变化 → 指纹变 → 重跑
+ *  listAll；未变只重扫描盘目录，省全量解析。 */
+async function fingerprintSessions(): Promise<string> {
+  const root = path.join(os.homedir(), ".pi", "agent", "sessions");
+  const files = await collectJsonlFiles(root);
+  let h1 = 2166136261; // FNV-1a 32 位 offset basis
+  for (const file of files) {
+    let mtime = 0;
+    try {
+      mtime = (await fs.promises.stat(file)).mtimeMs;
+    } catch {
+      // stat 失败（文件刚被删/无权限）→ mtime 记 0，指纹必变 → 强制重算，安全
+    }
+    const tag = file + ":" + mtime + ";";
+    for (let i = 0; i < tag.length; i++) {
+      h1 ^= tag.charCodeAt(i);
+      h1 = (h1 * 16777619) & 0xffffffff; // FNV 素数，& 保持 32 位
+    }
+  }
+  return files.length + ":" + h1; // 文件数也进指纹，防碰撞
+}
+
+/** listAll 指纹缓存入口：指纹命中直接返回上次结果（真毫秒级），未命中才跑 pi 全量解析
+ *  并填缓存。调用方无需关心缓存细节。 */
+async function listAllCached(): Promise<PiSessionEntry[]> {
+  const fp = await fingerprintSessions();
+  const hit = listAllFingerprintCache.get(fp);
+  if (hit) return hit;
   const sdk = await loadPiSdk();
-  const entries = await sdk.SessionManager.listAll();
+  const fresh = await sdk.SessionManager.listAll();
+  listAllFingerprintCache.set(fp, fresh);
+  return fresh;
+}
+
+/** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
+ *  工单十三二刀-4/5：主路径改用 pi 公开 API SessionManager.listAll()（pi -r 同款，10 路
+ *  并发全量解析，字段白拿，格式变更 pi 自己扛），按 cwd 的 samePath 过滤（pi 的 list 不做
+ *  项目过滤）；刀 5 指纹缓存包在外——指纹命中直接复用上次 listAll 结果（免 700ms 全量解析），
+ *  未命中才 listAll 并填缓存。展示层 mtime 缓存（key=file）照旧免重建。 */
+async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
+  const entries = await listAllCached();
   const result: SessionInfo[] = [];
   for (const e of entries) {
     if (cwd && !samePath(e.cwd, cwd)) continue; // 只保留属于该项目的会话（pi 的 list 不做项目过滤）
@@ -1705,7 +1745,7 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
     const hit = sessionMetaCache.get(file);
     let info: SessionInfo;
     if (hit && hit.mtimeMs === mtime) {
-      info = hit.meta; // mtime 未变 → 复用缓存（免重建展示对象；pi 解析已由 listAll 并发扛）
+      info = hit.meta; // mtime 未变 → 复用缓存（免重建展示对象；解析已由 listAll 扛）
     } else {
       info = {
         file,
