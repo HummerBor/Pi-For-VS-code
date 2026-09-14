@@ -362,7 +362,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "status", text: this.L.restartingPi });
     }
 
-    const sessions = scope === "all" ? listSessions() : listSessions(wsPath);
+    const sessions = scope === "all" ? await listSessions() : await listSessions(wsPath);
 
     // 注意：不能用 kind 作字段名，会和 QuickPickItem 内置的 QuickPickItemKind 枚举冲突
     type Item = {
@@ -436,7 +436,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  死链曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上） */
   private async deleteSessionPick(scope: "project" | "all" | "auto"): Promise<void> {
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const sessions = scope === "all" ? listSessions() : listSessions(wsPath);
+    const sessions = scope === "all" ? await listSessions() : await listSessions(wsPath);
     if (!sessions.length) {
       this.post({ type: "notice", text: this.L.noSessions });
       return;
@@ -1608,35 +1608,35 @@ function samePath(a?: string, b?: string): boolean {
   return norm(a) === norm(b);
 }
 
-/** 递归收集目录下所有 .jsonl 文件 */
-function collectJsonlFiles(dir: string, out: string[] = []): string[] {
+/** 递归收集目录下所有 .jsonl 文件（异步，工单十三） */
+async function collectJsonlFiles(dir: string, out: string[] = []): Promise<string[]> {
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return out;
   }
   for (const ent of entries) {
     const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) collectJsonlFiles(full, out);
+    if (ent.isDirectory()) await collectJsonlFiles(full, out);
     else if (ent.isFile() && ent.name.endsWith(".jsonl")) out.push(full);
   }
   return out;
 }
 
-/** 列出 ~/.pi/agent/sessions 下的历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话 */
-function listSessions(cwd?: string, limit = 50): SessionInfo[] {
+/** 列出 ~/.pi/agent/sessions 下的历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三） */
+async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
   const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-  const files = collectJsonlFiles(root);
+  const files = await collectJsonlFiles(root);
   const result: SessionInfo[] = [];
   for (const file of files) {
     let mtime = 0;
     try {
-      mtime = fs.statSync(file).mtimeMs;
+      mtime = (await fs.promises.stat(file)).mtimeMs;
     } catch {
       continue;
     }
-    const meta = readSessionMeta(file);
+    const meta = await readSessionMeta(file);
     if (cwd && !samePath(meta.cwd, cwd)) continue;
     result.push({
       file,
@@ -1651,43 +1651,46 @@ function listSessions(cwd?: string, limit = 50): SessionInfo[] {
   return result.slice(0, limit);
 }
 
-/** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部） */
-function readSessionMeta(file: string): { name?: string; cwd?: string; preview?: string } {
+/** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部）（异步，工单十三） */
+async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: string; preview?: string }> {
   try {
-    const fd = fs.openSync(file, "r");
-    const buf = Buffer.alloc(256 * 1024);
-    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    let name: string | undefined;
-    let cwd: string | undefined;
-    let preview: string | undefined;
-    for (const line of buf.toString("utf8", 0, bytes).split("\n")) {
-      if (!line.trim()) continue;
-      let e: any;
-      try {
-        e = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!cwd && typeof e.cwd === "string") cwd = e.cwd;
-      if (!name && (typeof e.name === "string" || typeof e.sessionName === "string")) {
-        name = (e.name ?? e.sessionName) as string;
-      }
-      const msg = e.message && e.message.role ? e.message : e.role ? e : null;
-      if (!preview && msg?.role === "user") {
-        let t = extractText(msg.content);
-        if (t) {
-          // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
-          const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
-          if (mm) t = mm[1];
-          else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
-          t = t.replace(/\s+/g, " ").trim();
-          if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) preview = t.slice(0, 60);
+    const fh = await fs.promises.open(file, "r");
+    try {
+      const buf = Buffer.alloc(256 * 1024);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      let name: string | undefined;
+      let cwd: string | undefined;
+      let preview: string | undefined;
+      for (const line of buf.toString("utf8", 0, bytesRead).split("\n")) {
+        if (!line.trim()) continue;
+        let e: any;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
         }
+        if (!cwd && typeof e.cwd === "string") cwd = e.cwd;
+        if (!name && (typeof e.name === "string" || typeof e.sessionName === "string")) {
+          name = (e.name ?? e.sessionName) as string;
+        }
+        const msg = e.message && e.message.role ? e.message : e.role ? e : null;
+        if (!preview && msg?.role === "user") {
+          let t = extractText(msg.content);
+          if (t) {
+            // 纯代码上下文消息（历史 bug 时期写入）：剥离前缀和代码围栏，只留真实文字
+            const mm = t.match(/^---\s*代码上下文[^\n]*\n```[\s\S]*?```\n\n?([\s\S]*)$/);
+            if (mm) t = mm[1];
+            else if (t.trimStart().startsWith("---")) t = ""; // 纯上下文无正文，不合适当标题
+            t = t.replace(/\s+/g, " ").trim();
+            if (t && !["请看这段代码", "请看这张图片", "Please look at this code", "Please look at this image"].includes(t)) preview = t.slice(0, 60);
+          }
+        }
+        if (preview && cwd) break;
       }
-      if (preview && cwd) break;
+      return { name, cwd, preview };
+    } finally {
+      await fh.close();
     }
-    return { name, cwd, preview };
   } catch {
     return {};
   }
