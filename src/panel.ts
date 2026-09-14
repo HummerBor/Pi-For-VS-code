@@ -159,11 +159,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 面板自带壁纸：本地路径转 data URI（避开 CSP 资源限制），http(s) 直接用
     const c = vscode.workspace.getConfiguration("piChat");
     const img = c.get<string>("backgroundImage", "").trim();
-    const op = c.get<number>("backgroundOpacity", 0.35);
+    let op = c.get<number>("backgroundOpacity", 0.35);
+    // opacity 钳位 [0,1]（工单九-3）：配置可为任意字符串，裸注入会污染 style 属性
+    if (typeof op !== "number" || Number.isNaN(op)) op = 0.35;
+    op = Math.min(1, Math.max(0, op));
     let url = "";
     if (img) {
-      if (/^https?:/i.test(img)) {
-        url = img;
+      // http(s) 分支：new URL() 解析 + 协议白名单，替代裸正则前缀匹配（工单九-1）。
+      // 恶意串如 https://x</style><script> 在 URL 解析层即被拒（<> 非法 → throw）；
+      // 用规范化后的 u.href（危险字符被百分号编码）而非原串，注入面再收窄一道。
+      // javascript:/data:/ftp: 等均可被 new URL 解析，故必须协议白名单而非“解析成功即放行”。
+      if (/^https?:\/\//i.test(img)) {
+        try {
+          const u = new URL(img);
+          url = u.protocol === "http:" || u.protocol === "https:" ? u.href : "";
+        } catch {
+          url = ""; // new URL 解析失败（含 <> 等非法字符）→ 不启用
+        }
       } else {
         try {
           const p = img.startsWith("~") ? path.join(os.homedir(), img.slice(1)) : img;
@@ -175,7 +187,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
       }
     }
-    view.webview.html = getHtml(theme, this.duckUri, floorColor, url.replace(/'/g, "%27"), op, this.lang);
+    // 背景图注入前 HTML/CSS 值消毒（工单九-2）：注入点是 url('${bgImage}')，单引号已转 %27，
+    // 补 < > & " 实体转义。这是第一道防线，CSP nonce 是最后防线（挡无 nonce 的 script 与
+    // 内联事件），两者不重复依赖，别删任一道。先转 & 防 < > 转出的实体里的 & 被二次转义；
+    // base64 data URI 无这些字符，转义无副作用。
+    const sanitized = url
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "%27");
+    view.webview.html = getHtml(theme, this.duckUri, floorColor, sanitized, op, this.lang);
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
