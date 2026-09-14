@@ -45,6 +45,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     nsFail: "新建会话失败: ",
     startNewSession: "$(add) 开始新会话",
     browseAllSessions: "$(folder) 浏览所有项目的会话…",
+    loadingSessions: "正在加载会话…",
     noSessions: "没有找到历史会话（~/.pi/agent/sessions 为空）",
     pickSessionAll: "选择要恢复的历史会话（全部项目，按最近使用排序）",
     pickSessionProj: "选择当前项目的历史会话继续工作，或开始新会话",
@@ -419,6 +420,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     nsFail: "Failed to start new session: ",
     startNewSession: "$(add) New session",
     browseAllSessions: "$(folder) Browse sessions of all projects…",
+    loadingSessions: "Loading sessions…",
     noSessions: "No past sessions found (~/.pi/agent/sessions is empty)",
     pickSessionAll: "Pick a session to resume (all projects, most recent first)",
     pickSessionProj: "Pick a session of this project to continue, or start a new one",
@@ -783,7 +785,7 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "themeMidnight", "themeAuto", "themeCcDark", "themeCurrent", "themePicker",
   "modeManual", "modeManualDetail", "modeEditAuto", "modeEditAutoDetail", "modePlan", "modePlanDetail", "modeAuto", "modeAutoDetail", "modePicker",
   // 会话选择
-  "startNewSession", "browseAllSessions", "pickSessionAll", "pickSessionProj",
+  "startNewSession", "browseAllSessions", "pickSessionAll", "pickSessionProj", "loadingSessions",
   // 会话删除（入口/确认弹窗双语；同删凭证一致）
   "delSessionEntry", "delSessionAsk", "delSessionCur",
   // 新建会话确认

@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
+import { loadPiSdk } from "./piSdk";
 import type { ChangesFileInfo, HostToWebview, ToolChangedFile, WebviewToHost } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
 import { extractText, PiCore, UiActions } from "./piCore";
@@ -233,7 +234,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     view.webview.onDidReceiveMessage((m: WebviewToHost) => {
       // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
-      if (m.type === "webviewReady" && this.changesFiles.length) this.postChangesList();
+      if (m.type === "webviewReady") {
+        if (this.changesFiles.length) this.postChangesList();
+        // 工单十三二刀-3：后台预热 listSessions → 填 mtime 缓存，首次点击也毫秒级出列。
+        // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
+        void listSessions().catch(() => {});
+      }
       void this.core.onWebviewMessage(m);
     });
 
@@ -376,6 +382,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    * scope="project" 只显示当前工作空间的会话；"all" 显示全部；"auto"=项目会话+浏览全部入口（面板打开时用）。
    */
   private async pickSession(scope: "project" | "all" | "auto" = "project"): Promise<void> {
+    const t0 = Date.now(); // 工单十三二刀-1 计时：消息到达
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     // ephemeral 进程没挂会话文件，需要重启为持久模式才能恢复历史
@@ -384,8 +391,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "status", text: this.L.restartingPi });
     }
 
-    const sessions = scope === "all" ? await listSessions() : await listSessions(wsPath);
-
     // 注意：不能用 kind 作字段名，会和 QuickPickItem 内置的 QuickPickItemKind 枚举冲突
     type Item = {
       label: string;
@@ -393,7 +398,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       detail?: string;
       action: "file" | "new" | "all" | "delete";
       file?: string;
+      busy?: boolean;
     };
+    // 工单十三二刀-2：先弹占位 busy 项，立即反馈（不等 listSessions），完成后原地填充。
+    // 「点历史零反馈」的直接治理：原来 showQuickPick 等 listSessions 完才弹，等待期只看到
+    // 命令触发、无任何 UI 反应。占位 busy:true 在 VS Code 17+ 显示加载动画。
+    const picker = vscode.window.createQuickPick<Item>();
+    picker.placeholder =
+      scope === "all" ? this.L.pickSessionAll : this.L.pickSessionProj;
+    picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
+    picker.show();
+    dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
+
+    const sessions = await listSessions(scope === "all" ? undefined : wsPath).catch(() => []);
+    dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
+
     const items: Item[] = [];
     if (scope !== "all") {
       items.push({ label: this.L.startNewSession, action: "new" });
@@ -412,17 +431,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         file: s.file,
       });
     }
-    if (!items.length) {
-      this.post({ type: "notice", text: this.L.noSessions });
-      return;
-    }
-    const pick = await vscode.window.showQuickPick(items, {
-      placeHolder:
-        scope === "all"
-          ? this.L.pickSessionAll
-          : this.L.pickSessionProj,
+    // 占位 busy 项已被完整 items 替换；无会话时仍留有操作入口（开始新会话/删除），不走 notice
+    picker.items = items;
+    dbgLog(`pickSession 内容就绪 ${items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
+
+    // —— showQuickPick 语义平移为 createQuickPick：选中/取消等价，渲染链（switch/
+    //    getMessages/refreshState）照旧，不许借本单顺手改 ——
+    const pick = await new Promise<Item | undefined>((resolve) => {
+      picker.onDidAccept(() => {
+        const s = picker.selectedItems[0];
+        picker.hide();
+        resolve(s);
+      });
+      picker.onDidHide(() => resolve(undefined)); // 用户取消
     });
+    picker.dispose();
     if (!pick) return; // 用户取消 → 保持现状，首次输入消息时再启动 pi
+    if (pick.busy) return; // 占位/空态项不可交互，兑底不落渲染链
     if (pick.action === "delete") {
       await this.deleteSessionPick(scope);
       return;
@@ -1630,7 +1655,9 @@ function samePath(a?: string, b?: string): boolean {
   return norm(a) === norm(b);
 }
 
-/** 递归收集目录下所有 .jsonl 文件（异步，工单十三） */
+/** 递归收集目录下所有 .jsonl 文件（异步，工单十三）。
+ *  工单十三二刀-4 后为回退备胎：主路径已改 pi SessionManager.listAll，本扫描整树保留
+ *  待实测对比（若 pi 版全量读真机明显慢可经请示回退），不预删。 */
 async function collectJsonlFiles(dir: string, out: string[] = []): Promise<string[]> {
   let entries: fs.Dirent[];
   try {
@@ -1646,41 +1673,51 @@ async function collectJsonlFiles(dir: string, out: string[] = []): Promise<strin
   return out;
 }
 
-/** 模块级会话元数据缓存（工单十三-4，UI 层职责放 panel 模块级，不进 PiCore）：
- *  stat 后 mtime 未变视为内容未改动，直接复用缓存，省重复读盘+解析。
- *  删除会话后残留条无害：listSessions 每次基于当前目录文件列表，文件不在列表即不被引用。 */
-const sessionMetaCache = new Map<string, { mtimeMs: number; meta: { name?: string; cwd?: string; preview?: string } }>();
+/** panel 侧关键链路诊断日志（工单十三二刀-1）：与 piCore.dbg 共用
+ *  ~/.pi/agent/pi-chat-debug.log，不新开文件；只追加不改既有日志行。 */
+function dbgLog(msg: string): void {
+  try {
+    const fpath = path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
+    // 日志轮转：超过 5MB 时改名保留一代（与 piCore.dbg 同策略，rename 比截断简单）
+    try { const s = fs.statSync(fpath); if (s.size > 5 * 1024 * 1024) { fs.renameSync(fpath, fpath + ".1"); } } catch { /* 不存在/无权限则跳过 */ }
+    fs.appendFileSync(fpath, new Date().toISOString() + " " + msg + String.fromCharCode(10));
+  } catch { /* ignore */ }
+}
 
-/** 列出 ~/.pi/agent/sessions 下的历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三） */
+/** 模块级会话展示缓存（工单十三-4，UI 层职责放 panel 模块级，不进 PiCore）：
+ *  mtime 未变视为内容未改动，直接复用缓存的 SessionInfo，免重建展示对象。
+ *  删除会话后残留条无害：缓存按 key=file 惰性覆盖，文件不在列表即不被引用。 */
+const sessionMetaCache = new Map<string, { mtimeMs: number; meta: SessionInfo }>();
+
+/** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
+ *  工单十三二刀-4：主路径改用 pi 公开 API SessionManager.listAll()（pi -r 同款，10 路
+ *  并发全量解析，messageCount/modified-by-activity 字段白拿，格式变更 pi 自己扛），
+ *  按 cwd 的 samePath 过滤（pi 的 list 不做项目过滤）。mtime 缓存包在外面（key=file，
+ *  mtime 取 modified.getTime()），预热/复用免重建展示对象。 */
 async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
-  const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-  const files = await collectJsonlFiles(root);
+  const sdk = await loadPiSdk();
+  const entries = await sdk.SessionManager.listAll();
   const result: SessionInfo[] = [];
-  for (const file of files) {
-    let mtime = 0;
-    try {
-      mtime = (await fs.promises.stat(file)).mtimeMs;
-    } catch {
-      continue;
-    }
+  for (const e of entries) {
+    if (cwd && !samePath(e.cwd, cwd)) continue; // 只保留属于该项目的会话（pi 的 list 不做项目过滤）
+    const file = e.path;
+    const mtime = e.modified.getTime();
     const hit = sessionMetaCache.get(file);
-    let meta: { name?: string; cwd?: string; preview?: string };
+    let info: SessionInfo;
     if (hit && hit.mtimeMs === mtime) {
-      // mtime 未变 → 复用缓存，不再读盘
-      meta = hit.meta;
+      info = hit.meta; // mtime 未变 → 复用缓存（免重建展示对象；pi 解析已由 listAll 并发扛）
     } else {
-      meta = await readSessionMeta(file);
-      sessionMetaCache.set(file, { mtimeMs: mtime, meta });
+      info = {
+        file,
+        mtime,
+        time: new Date(mtime).toLocaleString(),
+        cwd: e.cwd ?? "",
+        preview: (e.firstMessage || "").slice(0, 60),
+        name: e.name,
+      };
+      sessionMetaCache.set(file, { mtimeMs: mtime, meta: info });
     }
-    if (cwd && !samePath(meta.cwd, cwd)) continue;
-    result.push({
-      file,
-      mtime,
-      time: new Date(mtime).toLocaleString(),
-      cwd: meta.cwd ?? "",
-      preview: meta.preview ?? "",
-      name: meta.name,
-    });
+    result.push(info);
   }
   result.sort((a, b) => b.mtime - a.mtime);
   return result.slice(0, limit);
@@ -1692,7 +1729,8 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
  *  跨块多字节字符（工单十三补刀）：逐块 toString('utf8') 会把骑在 16K 块边界上的多字节
  *  UTF-8 烤成 \uFFFD（首字节进一块、续字节进下一块），名字变「\uFFFD\uFFFD\uFFFD文名」。
  *  旧 256KB 整块读无此问题，属步 2 引入的回归。改为先拼 Buffer + 回扫完整序列边界，
- *  只对完整部分解码，不完整尾部留 carry 给下一块。 */
+ *  只对完整部分解码，不完整尾部留 carry 给下一块。
+ *  （工单十三二刀-4 后为回退备胎：主路径已改 pi listAll，本实现保留待实测对比，不预删） */
 async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: string; preview?: string }> {
   try {
     const fh = await fs.promises.open(file, "r");
