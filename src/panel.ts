@@ -401,8 +401,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.freshTabs.add(id); // 刀4：新标签=新持久会话（ensureCore 时置 core.freshTab）
     this.activeTabId = id;
     this.postTabs();
-    // 新标签还没 pi 会话：页脚清空显示，不串显上个标签的模型/会话名
+    // 刀5：单一渲染上下文，新页签的一切旧现场都得显式清（刀2 时代每页签自带欢迎页 DOM，
+    // 这项真空是刀5 引入的——用户实测「新建了会话但内容还是上一个的」）
     this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
+    this.post({ type: "render", messages: [] });
+    this.post({ type: "queuedClear" });
+    this.post({ type: "banner", banner: null });
   }
 
   /** 切换活动标签（刀5：切回即拉真相——postUiState 全量重发消息/busy/排队/模式/横幅） */
