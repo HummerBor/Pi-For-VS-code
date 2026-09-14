@@ -92,6 +92,10 @@
    填充，switchSession/getMessages 渲染链照旧不许碰**
 3. **后台预热缓存**：面板 webviewReady 时 fire-and-forget 跑一次 listSessions()（不 await、
    错误静默），填 mtime 缓存——首次点击也能毫秒级出列。这是十三缓存价值的兑现点
+4. **并发化（抄 pi 作业，09-14 总监考古 pi 源码后加）**：pi 的 list 是 10 路并发
+   （MAX_CONCURRENT_SESSION_INFO_LOADS=10）且读得比我们多（全量 vs 256KB）却体感秒出，
+   快在并发+渐进渲染。listSessions 改并发拉取（并发度 10，stat+读元数据一批批发），
+   缓存 Map.set 线程安全无需加锁（单线程）
 
 - 验收：点历史**立即**有响应（占位项/加载态）；预热后点击毫秒级出全列表；debug.log 三段
   计时可见；compile 全绿
