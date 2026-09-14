@@ -16,10 +16,11 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 
 - **零运行时依赖**：`dependencies` 必须保持为空，工具链只进 devDependencies（含
   @earendil-works/pi-coding-agent——仅为类型参考，**不进 vsix**，运行时加载用户已装的 pi 包）。
-- **壳引擎边界（2026-09-14 用户拍板，工单十三七连改教训）**：pi 公开导出的能力
-  （SessionManager、官方 SDK API 等），壳只消费接口、不自研不二次实现；pi 拥有的知识
-  （会话格式、事件语义），壳不复制第二份。签工单前先 grep pi 公开导出，能调 API 的
-  不写解析。自研实现一旦失去存在前提（如直连后 pi 可 import），随工单清点回收。
+- **插件就是壳（2026-09-14 用户拍板，原话）：能用 pi 原生能力的就用 pi；任何新功能都要
+  先查清楚 pi 原本有没有这个能力（公开 API / TUI 行为 / 扩展生态三处都查），而不是自己
+  造。工单签发前必过此查；壳自研与 pi 原生重复 = 浪费 + 双份维护 + 行为分裂。自研实现
+  一旦发现 pi 有原生能力或失去存在前提，随工单清点回收（先例：会话列表换
+  SessionManager.listAll，工单十三）
 - **进程内直连架构（2026-09-09 用户拍板）**：piClient 不再 spawn `pi --mode rpc`，改为经
   src/piSdk.ts 定位并 import 用户已装的 pi 包（前置条件不变：机器上必须有 pi）。RPC 版整树
   保留在分支 `rpc-subprocess`。改 piClient 前先读其头注释的「RPC 语义保留对照」——
