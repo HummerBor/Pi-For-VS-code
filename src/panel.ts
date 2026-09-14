@@ -1688,26 +1688,31 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
 
 /** 读取会话 JSONL 开头：会话名、工作目录、首条用户消息预览（只读文件头部，不解析全部）。
  *  按需续读（工单十三-2）：先读 16KB，已凑齐 name+preview 或文件读完即止；若末行
- *  不完整（不以 \n 结尾）且未凑齐 → 16KB 步进续读，硬上限仍 256KB。 */
+ *  不完整（不以 \n 结尾）且未凑齐 → 16KB 步进续读，硬上限仍 256KB。
+ *  跨块多字节字符（工单十三补刀）：逐块 toString('utf8') 会把骑在 16K 块边界上的多字节
+ *  UTF-8 烤成 \uFFFD（首字节进一块、续字节进下一块），名字变「\uFFFD\uFFFD\uFFFD文名」。
+ *  旧 256KB 整块读无此问题，属步 2 引入的回归。改为先拼 Buffer + 回扫完整序列边界，
+ *  只对完整部分解码，不完整尾部留 carry 给下一块。 */
 async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: string; preview?: string }> {
   try {
     const fh = await fs.promises.open(file, "r");
     try {
-      const name: string | undefined = undefined;
-      const cwd: string | undefined = undefined;
-      const preview: string | undefined = undefined;
       // 已凑齐 name+preview 即止（标题已定，预览已出；cwd 只在有值时入列）
-      const state: { name?: string; cwd?: string; preview?: string } = { name, cwd, preview };
+      const state: { name?: string; cwd?: string; preview?: string } = {};
       const done = () => !!(state.name && state.preview);
-      const buf = Buffer.alloc(16 * 1024);
-      let acc = ""; // 未切尽的文本（可能含截断的半行）
+      const buf: Buffer = Buffer.alloc(16 * 1024);
+      let acc = ""; // 已确认完整的 UTF-8 解码文本（按行切后的残余）
+      let carry: Buffer = Buffer.alloc(0); // 跨块的多字节字符未完整残留（字节级）
       let offset = 0; // 文件偏移
       const HARD_LIMIT = 256 * 1024;
       while (!done() && offset < HARD_LIMIT) {
         const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
         if (bytesRead === 0) break; // 文件读完
         offset += bytesRead;
-        acc += buf.toString("utf8", 0, bytesRead);
+        const chunk = Buffer.concat([carry, buf.subarray(0, bytesRead)]); // 拼上块残留
+        const { head, tail } = splitUtf8(chunk);
+        carry = tail; // 本块末尾不完整的多字节序列留待下一块
+        acc += head.toString("utf8");
         const lines = acc.split("\n");
         acc = lines.pop() ?? ""; // 末段留作残余：不以 \n 结尾 = 可能截断的半行，等下一块
         for (const line of lines) {
@@ -1715,6 +1720,9 @@ async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: str
           if (done()) break;
         }
       }
+      // 文件读完 flush：残留 carry 并入尾行解析；真损坏（非多字节截断）交给
+      // parseMetaLine 的步 3 正则兑底，行为与旧版一致
+      if (carry.length) acc += carry.toString("utf8");
       // 文件读完但末尾无换行：残余到文件尾即完整 JSON，仍要解析一次
       if (acc.trim()) parseMetaLine(acc, state);
       return { name: state.name, cwd: state.cwd, preview: state.preview };
@@ -1724,6 +1732,37 @@ async function readSessionMeta(file: string): Promise<{ name?: string; cwd?: str
   } catch {
     return {};
   }
+}
+
+/**
+ * 把字节块切分为「完整 UTF-8 序列前缀」与「不完整多字节尾残留」。
+ * 从末尾回扫连续续字节（10xxxxxx）定位所在多字节序列的首字节，按首字节判定期望长度
+ * （110→2、1110→3、11110→4）；序列不完整则摘出尾部存 tail（待下一块拼接），完整部分
+ * （head）才交给 toString 解码——避免把骑块的多字节字符烤成 \uFFFD。
+ */
+function splitUtf8(buf: Buffer): { head: Buffer; tail: Buffer } {
+  // 从末尾向前跳过续字节，定位最后那个多字节序列的首字节（或 ASCII）
+  let i = buf.length - 1;
+  for (; i >= 0; i--) {
+    if ((buf[i] & 0xc0) === 0x80) continue; // 10xxxxxx 续字节
+    break; // 非续字节：ASCII 或 UTF-8 序列头
+  }
+  if (i < 0) {
+    // 整块都是续字节（无首字节可依，异常数据）——保守全留 carry，不产出半个乱码
+    return { head: Buffer.alloc(0), tail: Buffer.from(buf) };
+  }
+  const b = buf[i];
+  let len = 1;
+  if ((b & 0xe0) === 0xc0) len = 2; // 110xxxxx
+  else if ((b & 0xf0) === 0xe0) len = 3; // 1110xxxx
+  else if ((b & 0xf8) === 0xf0) len = 4; // 11110xxx
+  const avail = buf.length - i;
+  if (avail >= len) {
+    // i 起凑齐了期望长度 → 序列完整，head 含全部字节
+    return { head: buf.subarray(0, buf.length), tail: Buffer.alloc(0) };
+  }
+  // 序列不完整：head 不含首字节起之后的部分，tail 从首字节起整段留 carry
+  return { head: buf.subarray(0, i), tail: Buffer.from(buf.subarray(i)) };
 }
 
 /** 解析单行 JSONL 条目，把发现的 name/cwd/preview 写进 state（只补空位，不覆盖已得值） */
