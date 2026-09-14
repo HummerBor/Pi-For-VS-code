@@ -4,7 +4,18 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-14 工单十五刀2 施工回报（webview 标签栏，待用户实测）
+最后更新：2026-09-14 工单十五 2b 补修 + 刀3 施工中
+
+## 工单十五刀2b施工回报（总监验收两处必修，一笔提交，纯 webview/main.ts）
+
+1. **mode 徽章串显修复**：modeText 迁入每标签记录（R.modeText，newTabRender 兑底
+   'Auto'），handleMsg 'mode' 分支写 R，restoreRender 从 R 恢复——A 标签切 Plan
+   切到 B 仍显 Plan 的串显根治；无宿主参与，新标签天然兑底
+2. **'render' 延迟回调漏守卫修复**：setTimeout 回调内触发时按现状补
+   applyingInactive = recR.id !== activeTabId（触发时已切回活动则正常渲染；
+   已切后台则排队项不写共享 queuebar）；保存/恢复外层 applyingInactive 不踩嵌套
+
+边界遵守：只动 webview/main.ts（总监工单边界），piCore/panel/steering 未动。
 
 ## 工单十五刀2施工回报（webview 标签栏，一笔提交，待用户实测）
 

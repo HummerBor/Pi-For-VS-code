@@ -48,6 +48,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       liveMsg: null, liveDiv: null, pdet: null, liveParts: null, liveRTimer: null,
       streaming: false, busyTimer: null, busyStart: 0, queueN: 0,
       lastElapsed: null as number | null,
+      modeText: 'Auto', // 权限模式徽标按标签（刀2b-①：mode 是 chrome 消息，后台不收，切回时 restoreRender 恢复）
       dirty: false, // 后台标签完成亮提示（webview 本地记账，激活即清）
       banner: null as BannerPayload | null, changes: null as ChangesFileInfo[] | null,
       pendingImages: [], pendingFiles: []
@@ -236,8 +237,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function scroll() { R.root.scrollTop = R.root.scrollHeight; }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!R.streaming) { statusEl.textContent = ''; } }
-  var modeText = 'Auto';
-  function renderStatus() { modeBadge.textContent = modeText; }
+  function renderStatus() { modeBadge.textContent = R.modeText; }
 
   /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
    *  关闭/一键压缩都上报宿主，横幅状态机在 piCore（webview 重建不丢状态） */
@@ -1022,12 +1022,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'toolCallDelta') { var tb = R.liveMsg && R.liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (R.pdet) R.pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
-    else if (m.type === 'render') { var rm = m; var recR = R; setTimeout(function () { var savedR = R; R = recR; renderAll(rm.messages); R = savedR; }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页；捕获标签记录防跨标签竞态
+    else if (m.type === 'render') { var rm = m; var recR = R; setTimeout(function () { var savedR = R; var savedIa = applyingInactive; R = recR; applyingInactive = recR.id !== activeTabId; renderAll(rm.messages); applyingInactive = savedIa; R = savedR; }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页；捕获标签记录 + 触发时按现状补守卫（刀2b-②：触发时已切后台的话 addQueuedDom 不能写共享 queuebar）
     else if (m.type === 'queue') { R.queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }
     else if (m.type === 'status') setStatus(m.text);
-    else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
+    else if (m.type === 'mode') { R.modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
     else if (m.type === 'queuedClear') { R.queuedItems = []; if (!applyingInactive) document.getElementById('queuebar').innerHTML = ''; }
@@ -1096,6 +1096,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     renderBanner(R.banner);
     renderChanges(R.changes || []);
     renderAttach();
+    modeBadge.textContent = R.modeText || 'Auto'; // 刀2b-①：权限模式徽标按标签恢复（切标签串显 Plan 的根源）
     renderTabs();
   }
 
