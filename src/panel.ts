@@ -1698,6 +1698,14 @@ function parseMetaLine(line: string, state: { name?: string; cwd?: string; previ
   try {
     e = JSON.parse(line);
   } catch {
+    // 截断行兑底（工单十三-3）：JSON 不完整（盲读/续读切到半路，或大附件行被
+    // 拦腰截断）时 parse 必炸，历史直接 continue 导致标题永远找不到。会话名通常
+    // 在文件头部条目里，用正则抓 name/sessionName 字符串值（值内 \" 转义注意
+    // 还原）后继续，不再放弃整条。
+    if (!state.name) {
+      const m = line.match(/"(?:name|sessionName)"\s*:\s*"((?:\\.|[^"\\])*)"/);
+      if (m) state.name = m[1].replace(/\\"/g, '"');
+    }
     return;
   }
   if (!state.cwd && typeof e.cwd === "string") state.cwd = e.cwd;
