@@ -1624,6 +1624,11 @@ async function collectJsonlFiles(dir: string, out: string[] = []): Promise<strin
   return out;
 }
 
+/** 模块级会话元数据缓存（工单十三-4，UI 层职责放 panel 模块级，不进 PiCore）：
+ *  stat 后 mtime 未变视为内容未改动，直接复用缓存，省重复读盘+解析。
+ *  删除会话后残留条无害：listSessions 每次基于当前目录文件列表，文件不在列表即不被引用。 */
+const sessionMetaCache = new Map<string, { mtimeMs: number; meta: { name?: string; cwd?: string; preview?: string } }>();
+
 /** 列出 ~/.pi/agent/sessions 下的历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三） */
 async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
   const root = path.join(os.homedir(), ".pi", "agent", "sessions");
@@ -1636,7 +1641,15 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
     } catch {
       continue;
     }
-    const meta = await readSessionMeta(file);
+    const hit = sessionMetaCache.get(file);
+    let meta: { name?: string; cwd?: string; preview?: string };
+    if (hit && hit.mtimeMs === mtime) {
+      // mtime 未变 → 复用缓存，不再读盘
+      meta = hit.meta;
+    } else {
+      meta = await readSessionMeta(file);
+      sessionMetaCache.set(file, { mtimeMs: mtime, meta });
+    }
     if (cwd && !samePath(meta.cwd, cwd)) continue;
     result.push({
       file,
