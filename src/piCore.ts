@@ -101,6 +101,26 @@ export class PiCore {
   /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换；持久化由 adapter 完成 */
   lang: Lang = "zh";
 
+  /** 本核心所属标签（工单十五刀3）：panel 的 ensureCore 在创建时赋值；只作为每标签
+   *  持久化键的组成（项目会话记忆/模型与思考记忆），核心不感知 UI 标签语义 */
+  tabKey = "t1";
+
+  /** 每标签的模型记忆（工单十五刀3）：key 带 tabKey；旧全局 key 只读兑底（升级迁移）。
+   *  兑底语义：没有自己选过模型的标签跟随「最近一次任一标签的全局选择」（panel 侧影子写） */
+  private lastModelFor(): { provider: string; id: string } | undefined {
+    return (
+      this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel." + this.tabKey, undefined) ??
+      this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel", undefined)
+    );
+  }
+  /** 每标签的思考等级记忆（同上） */
+  private lastThinkingFor(): string | undefined {
+    return (
+      this.caps.getPersist<string | undefined>("piChat.lastThinking." + this.tabKey, undefined) ??
+      this.caps.getPersist<string | undefined>("piChat.lastThinking", undefined)
+    );
+  }
+
   constructor(
     private readonly caps: HostCapabilities,
     private readonly ui: UiActions,
@@ -217,11 +237,9 @@ export class PiCore {
       }
     })();
 
-    // 恢复上次使用的模型 / 思考等级（跨窗口、跨重启记忆）
-    const lastModel = this.caps.getPersist<{ provider: string; id: string } | undefined>(
-      "piChat.lastModel", undefined
-    );
-    const lastThinking = this.caps.getPersist<string | undefined>("piChat.lastThinking", undefined);
+    // 恢复上次使用的模型 / 思考等级（每标签记忆，工单十五刀3；旧全局 key 兑底见 lastModelFor）
+    const lastModel = this.lastModelFor();
+    const lastThinking = this.lastThinkingFor();
     if (lastModel || lastThinking) {
       void (async () => {
         try {
@@ -273,20 +291,27 @@ export class PiCore {
     this.client = undefined;
   }
 
-  /** 读取当前项目对应的“上次会话”（全局 Map：工作区路径 → 会话文件） */
+  /** 读取当前项目对应的“上次会话”——每标签一份（工单十五刀3）：
+   *  新 key value 形状 {工作区: {tabKey: 会话文件}}；旧 key（{工作区: 文件} 单值）
+   *  只读迁移不回写——t1 兑底沿用存量记忆（首条 switchSession 后 setSessionForWs
+   *  自然写入新 key），其余标签不抢旧值（避免多标签启动互相踩同一恢复目标） */
   private getSessionForWs(cwd: string): string | undefined {
-    const map = this.caps.getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
     const key = cwd.replace(/\\+$/, "").toLowerCase();
-    return map[key];
+    const tabMap = this.caps.getPersist<Record<string, Record<string, string>>>("piChat.lastSessionByWs2", {});
+    const hit = tabMap[key]?.[this.tabKey];
+    if (hit) return hit;
+    const legacy = this.caps.getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
+    return this.tabKey === "t1" ? legacy[key] : undefined;
   }
 
-  /** 写入当前项目对应的“上次会话” */
+  /** 写入当前项目对应的“上次会话”（每标签一份，工单十五刀3；旧 key 不再写，可回滚） */
   private setSessionForWs(file: string): void {
     const cwd = this.caps.getCwd();
     if (!cwd) return;
-    const map = this.caps.getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
-    map[cwd.replace(/\\+$/, "").toLowerCase()] = file;
-    this.caps.setPersist("piChat.lastSessionByWs", map);
+    const key = cwd.replace(/\\+$/, "").toLowerCase();
+    const tabMap = this.caps.getPersist<Record<string, Record<string, string>>>("piChat.lastSessionByWs2", {});
+    (tabMap[key] ??= {})[this.tabKey] = file;
+    this.caps.setPersist("piChat.lastSessionByWs2", tabMap);
   }
 
   /** pickModeMenu（adapter）写入新徽标文本；webview 重建补发用（modeBadgeText 兑底） */
@@ -697,11 +722,9 @@ export class PiCore {
       this.queued = [];
       this.post({ type: "queuedClear" });
       // 不再发「已开始新会话」通知：欢迎页本身就是反馈，多余通知会挂在欢迎页下面
-      // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去
-      const lastModel = this.caps.getPersist<{ provider: string; id: string } | undefined>(
-        "piChat.lastModel", undefined
-      );
-      const lastThinking = this.caps.getPersist<string | undefined>("piChat.lastThinking", undefined);
+      // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去（每标签，刀3）
+      const lastModel = this.lastModelFor();
+      const lastThinking = this.lastThinkingFor();
       try {
         if (lastModel) await client.setModel(lastModel.provider, lastModel.id);
         if (lastThinking) await client.setThinkingLevel(lastThinking);

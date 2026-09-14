@@ -48,6 +48,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     tabCloseBusyAsk: "该标签的会话正在运行，关闭会中断当前任务。",
     tabCloseYes: "关闭标签",
     tabSwitchFail: "切换标签失败: ",
+    // 会话语义守卫（工单十五刀3）：busy 禁切 / 跨标签占用
+    tabBusySwitch: "该标签的会话正在运行，等它完成或中断后再切换会话",
+    sessionOpenInTab: "该会话已在其他标签中打开，为避免写冲突不再重复打开",
     nsCancelled: "新建会话被扩展取消",
     nsFail: "新建会话失败: ",
     startNewSession: "$(add) 开始新会话",
@@ -430,6 +433,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     tabCloseBusyAsk: "This tab's session is still running. Closing it will abort the current task.",
     tabCloseYes: "Close tab",
     tabSwitchFail: "Failed to switch tab: ",
+    // Session semantics guards (ticket 15 knife 3)
+    tabBusySwitch: "This tab's session is still running. Wait for it to finish or abort it before switching sessions",
+    sessionOpenInTab: "This session is already open in another tab; not opening it again to avoid write conflicts",
     nsCancelled: "New session was cancelled by an extension",
     nsFail: "Failed to start new session: ",
     startNewSession: "$(add) New session",

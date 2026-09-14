@@ -73,6 +73,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!core) {
       core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg, tabId), this.version);
       core.lang = this.lang;
+      core.tabKey = tabId; // 每标签持久化键（工单十五刀3：项目会话/模型/思考记忆按标签）
       // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
       core.onRunStart = () => this.snapshotGitStatus();
       core.onRunSettled = (files) => void this.handleRunSettled(files);
@@ -517,6 +518,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const t0 = Date.now(); // 工单十三二刀-1 计时：消息到达
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
+    // 工单十五刀3 边界：busy 中的标签禁止切历史会话（防会话文件写冲突，同 HANDOVER 双窗口教训）
+    if (this.core.isBusy) {
+      this.post({ type: "notice", text: this.L.tabBusySwitch });
+      return;
+    }
+
     // ephemeral 进程没挂会话文件，需要重启为持久模式才能恢复历史
     if (this.core.clientRef?.running && this.core.isNoSession) {
       this.core.disposeClient();
@@ -593,6 +600,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         void this.pickSession("all");
         return;
       } else if (pick.file) {
+        // 工单十五刀3：同一会话文件禁止被两个标签同时打开（双窗口写冲突的等价场景）
+        for (const [tid, c] of this.cores) {
+          if (tid !== this.activeTabId && c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
+            this.post({ type: "notice", text: this.L.sessionOpenInTab });
+            return;
+          }
+        }
         const r = await client.switchSession(pick.file);
         if (r?.cancelled) {
           this.post({ type: "notice", text: this.L.switchCancelled });
@@ -630,9 +644,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { placeHolder: this.L.delSessionEntry }
     );
     if (!pick) return;
-    if (this.core.currentSessionFile && samePath(pick.file, this.core.currentSessionFile)) {
-      this.post({ type: "notice", text: this.L.delSessionCur });
-      return;
+    // 工单十五刀3：被任意标签打开的会话都不可删（原守卫只看活动标签；多标签后任何
+    // 持有该文件的 pi 会话都在追加写入，删了数据丢失）
+    for (const c of this.cores.values()) {
+      if (c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
+        this.post({ type: "notice", text: this.L.delSessionCur });
+        return;
+      }
     }
     const root = path.join(os.homedir(), ".pi", "agent", "sessions");
     let real: string;
@@ -1413,6 +1431,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!pick) return;
     try {
       await client.setModel(pick.model.provider, pick.model.id);
+      // 每标签记忆（工单十五刀3）+ 全局影子写（未自选模型的标签兑底跟随最近一次全局选择）
+      void this.globalState.update("piChat.lastModel." + this.activeTabId, {
+        provider: pick.model.provider,
+        id: pick.model.id,
+      });
       void this.globalState.update("piChat.lastModel", {
         provider: pick.model.provider,
         id: pick.model.id,
@@ -1442,6 +1465,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!pick) return;
     try {
       await client.setThinkingLevel(pick);
+      // 每标签记忆（工单十五刀3）+ 全局影子写（同 pickModel）
+      void this.globalState.update("piChat.lastThinking." + this.activeTabId, pick);
       void this.globalState.update("piChat.lastThinking", pick);
       await this.core.refreshState();
     } catch (err: any) {

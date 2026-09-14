@@ -4,7 +4,36 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-14 工单十五 2b 补修 + 刀3 施工中
+最后更新：2026-09-14 工单十五刀3 施工回报（会话语义按标签，待用户实测）
+
+## 工单十五刀3施工回报（会话语义，一笔提交，待用户实测）
+
+**piCore 新增公共字段 tabKey**（panel ensureCore 创建时赋值，默认 t1）：核心只把它当
+持久化键，不感知 UI 标签语义——分层铁律不破（不 import vscode，无 VS Code 类型）。
+
+1. **lastSessionByWs 按标签**：新键 `piChat.lastSessionByWs2`，value
+   `{工作区: {tabKey: 会话文件}}`；旧键只读迁移——t1 兑底沿用存量（首条
+   switchSession 后 setSessionForWs 自然写入新键），其余标签不抢旧值（避免多标签
+   启动互踩同一恢复目标）；旧键不再写，可回滚
+2. **模型/思考记忆按标签**：`piChat.lastModel.<tabKey>` / `.lastThinking.<tabKey>`；
+   旧全局键只读兑底（没自选过的标签跟随最近一次全局选择）——panel 侧选择时
+   每标签键 + 全局影子写双落，helper 收口（lastModelFor/lastThinkingFor），
+   ensureClient 恢复与 newSession 补回两处共用
+3. **picker/删除守卫（工单边界落地）**：pickSession 头部 busy 守卫（busy 标签禁切
+   历史，同 HANDOVER 双窗口教训）；同一会话文件禁止被两个标签同时打开（跨标签
+   占用检查，双窗口写冲突等价场景）；deleteSessionPick 守卫从「活动标签」扩到
+   「任意标签持有」
+4. **sessionMode 回退铁律不变**：piCore ensureClient 与 panel resolveWebviewView
+   两处 default 仍同为 "continue"（grep 验证）；其余语义（steering/queue_update、
+   patchRevert）未动
+5. i18n 新增 tabBusySwitch/sessionOpenInTab（中英）
+
+**边界遵守**：busy 禁删/禁切已落地；单标签行为等价（t1 键值迁移后语义一致）；
+新标签未自选模型时跟随全局最近选择（兑底语义明确记录）。
+
+**待实测（需真 vsix）**：①两标签各自切不同历史会话，重启面板各恢复各的 ②t2 换模型
+不影响 t1 的模型 ③A 标签 busy 时切历史被拒并有提示 ④B 标签已开的会话在 A 标签
+picker 里被拒 ⑤删除被任意标签持有的会话被拒 ⑥单标签回归与刀2 一致。
 
 ## 工单十五刀2b施工回报（总监验收两处必修，一笔提交，纯 webview/main.ts）
 
