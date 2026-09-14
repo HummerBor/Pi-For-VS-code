@@ -6,6 +6,28 @@
 
 最后更新：2026-09-11 归档精简（已完结回报迁 归档.md 第九节，本文件只留活动项）
 
+## 工单十三施工回报（会话列表异步化，四小步各独立提交，待用户实测）
+
+**四小步**（全部落在 panel.ts，piCore 零改动；npm run compile 全绿）：
+
+1. **dcab540 全链路异步化**：collectJsonlFiles/listSessions/readSessionMeta 由
+   readdirSync/statSync/openSync/readSync 改为 fs.promises，pickSession/deleteSessionPick
+   调用点 await。纯同步→异步机械转换，盲读 256KB/parse continue 原样保留，行为等价。
+2. **cb6642d 按需续读替代盲读 256KB**：首块 16KB，已凑齐 name+preview 或文件读完即止；
+   末段不以 \n 结尾（截断半行）才 16KB 步进续读，硬上限仍 256KB。停止条件按工单定为
+   name+preview（原代码 preview+cwd，补标题优先语义）。解析逻辑抽成 parseMetaLine 复用于多块。
+3. **423ec89 parse 失败兑底**：JSON.parse 失败行（大附件行被拦腰截断）不再 continue，
+   改用正则抓 name/sessionName 字符串值（注意 \\\" 转义还原）写进 state——修标题永远找不到。
+   node 实测截断行/转义引号/无 name 字段三况正确。
+4. **174fbf8 mtime 缓存**：模块级 Map<file,{mtimeMs,meta}>，stat 后 mtime 未变直接复用，
+   省重复读盘+解析。缓存放 panel.ts 模块级（UI 层职责，不进 PiCore）。
+
+**边界遵守**：只动了本单列出的三函数 + 两调用点；pickSession 的 QuickPick 交互结构与
+switchSession/getMessages 渲染链未动；会话删除守卫未动；SessionInfo 结构（展示字段）未变。
+
+**待实测**（需真 vsix 环境）：①冷启动后首次打开选择器也要顺滑不卡 ②此前显示裸文件名的
+会话标题能出 ③带大附件的会话（如智谱费用明细 xlsx）标题出得来。
+
 ## 〇、工单十一施工回报（路径锚定工作区根，待用户实测）
 
 **实现（单点 + 一处 slice，均在 panel.ts，piCore 零改动）**：
@@ -35,6 +57,8 @@ join(root, r) 已绝对，没动；裁决 11 还原边界没动；协议三处�
 
 ## 一、待实测尾巴（合并清单，全部实测通过才可全结）
 
+- **工单十三**：①冷启动后首次打开选择器顺滑不卡 ②此前裸文件名会话标题能出
+  ③带大附件会话（智谱费用明细 xlsx）标题正常
 - **工单六**：①长对话触发自动压缩看横幅 ②阈值预警（contextWarnPercent 调低如 5 验证）+ 一键压缩
   ③横幅手动关闭 + webview 重建后不重发
 - **工单七**：pi 改多文件 → diff 列表 → 单文件还原 → 内容确实回滚（建议场景：2-3 文件正常编辑
