@@ -346,6 +346,14 @@ export interface TabsMsg {
   tabs: TabInfo[];
   activeTabId: string;
 }
+/** 工单十五刀5b：流式续接重定基（pi 原生姿势——TUI 的 message_update 就是拿全量在途
+ *  消息 updateContent，从不攒增量）。切回 busy 页签时，快照剥掉在途消息后由本消息
+ *  携带全量在途消息重建 live 气泡，后续 delta 在正确基础上续接——
+ *  「切回去一直重新开始思考/内容重复」的根治 */
+export interface LiveSyncMsg {
+  type: "liveSync";
+  message: SessionMessage;
+}
 /** 面板顶部横幅（工单六：压缩显性化/阈值预警）。文案由宿主组装（含时间戳/占比，
  *  随宿主 i18n 走），webview 只负责渲染；actionLabel 有值时带操作按钮 */
 export interface BannerPayload {
@@ -421,7 +429,8 @@ export type HostToWebview =
   | ThemeMsg
   | BannerMsg
   | ChangesListMsg
-  | TabsMsg;
+  | TabsMsg
+  | LiveSyncMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 
@@ -471,6 +480,9 @@ export interface PiMessageStartEvent {
 export interface PiMessageUpdateEvent {
   type: "message_update";
   assistantMessageEvent?: AssistantMessageEvent;
+  /** 全量在途消息（pi 源码验证：agent-session.js:501 _emit 携带 event.message，
+   *  同一对象 in-place 更新）——续接重定基（刀5b liveSync）的真相源 */
+  message?: { role: string; content?: unknown[] };
 }
 export interface PiToolExecutionStartEvent {
   type: "tool_execution_start";

@@ -973,6 +973,44 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files, dt); });
+  /** 重绘/续接排队（刀5b）：render 与 liveSync 同拍顺序执行（快照重绘 → 在途消息重定基），
+   *  防止 renderAll 的 liveReset 抹掉先到的重定基状态 */
+  var renderPending: SessionMessage[] | null = null;
+  var liveSyncPending: SessionMessage | null = null;
+  var renderTimer: number | null = null;
+  function scheduleRender() { if (!renderTimer) renderTimer = setTimeout(flushRender, 0); }
+  function flushRender() {
+    renderTimer = null;
+    if (renderPending) { var list = renderPending; renderPending = null; renderAll(list); }
+    if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
+  }
+  /** 续接重定基（刀5b，pi 原生姿势——TUI 的 message_update 拿全量在途消息 updateContent）：
+   *  快照剥掉在途消息后，用它重建 live 气泡并把 buf/doneLen 对齐到已生成内容，
+   *  后续 delta 在正确基础上增量续接——重复/重启思考消失，头部不丢 */
+  function applyLiveSync(msg: SessionMessage) {
+    finalizeLive(); liveReset();
+    liveMsg = { content: [] };
+    var parts = ((msg && msg.content) || []) as any[];
+    for (var li = 0; li < parts.length; li++) {
+      var pc = parts[li];
+      if (pc && pc.type === 'thinking') {
+        var tp2 = liveBlock(li, 'thinking');
+        tp2.buf = pc.thinking || ''; tp2.doneLen = tp2.buf.length;
+        tp2.body.textContent = tp2.buf;
+      } else if (pc && pc.type === 'text') {
+        var xp2 = liveBlock(li, 'text');
+        xp2.buf = pc.text || ''; xp2.doneLen = xp2.buf.length;
+        appendFinal(xp2, xp2.buf);
+      } else if (pc && pc.type === 'toolCall') {
+        var cp2 = liveBlock(li, 'toolCall', pc.name);
+        cp2.raw = JSON.stringify(pc.arguments ?? null) || '';
+        cp2._len = cp2.raw.length;
+        cp2.box.textContent = cp2.raw.slice(-20000);
+      }
+    }
+    scroll();
+  }
+
   /** 单条宿主消息的渲染处理（刀5：宿主已不喂后台页签消息，这里只处理活动标签的流） */
   function handleMsg(m: HostToWebviewTagged) {
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
@@ -992,7 +1030,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
-    else if (m.type === 'render') { var rm = m; setTimeout(function () { renderAll(rm.messages); }, 0); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'render') { renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }

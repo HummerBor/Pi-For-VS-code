@@ -56,6 +56,10 @@ export class PiCore {
 
   private client?: PiClient;
   private clientNoSession = false;
+  /** 在途 assistant 消息的全量对象（刀5b）：pi 的 message_start/update 事件自带完整消息
+   *  （同一对象 in-place 更新，agent-session.js:501），供切回 busy 页签时 liveSync 重定基；
+   *  agent_start 清空（新 run 无在途）、message_start 覆写（新消息开始） */
+  private liveMessage: any = null;
   /** busy 已从镜像退化为派生真相（工单十五刀6，用户问「busy 还有存在的必要吗」）：
    *  RPC 时代靠镜像+三层对账去猜（piClient 头注释原话），直连后 pi 的 isStreaming
    *  （agent-session.d.ts:295）同步可读——8 处 setter/对账纠偏/观察断言全是给漂移擦屁股，
@@ -189,10 +193,11 @@ export class PiCore {
     this.codeCtx = ctx;
   }
 
-  /** 权限模式徽标文本：优先用 pi 推送过的值，没有则读 mode.json 兑底；
-   *  文件也缺失时回退 pi 默认 auto——返回空串会把徽标清空（用户实测徽标消失，fc134df） */
+  /** 权限模式徽标文本：mode.json 是磁盘全局态（pi 每次 tool_call 重读，用户实测跨页签
+   *  立即生效）——刀5b 起一律磁盘优先，lastModeText 仅作文件缺失兑底；否则 A 页签切
+   *  模式后切回 B 会用 B 的陈旧缓存回退徽标（显示与执行分裂）。返回空串会把徽标清空
+   *  （用户实测徽标消失，fc134df） */
   modeBadgeText(): string {
-    if (this.lastModeText) return this.lastModeText;
     try {
       const m = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "mode.json"), "utf8")).mode;
       const labels: Record<string, string> = { manual: "Manual", "edit-auto": "Edit automatically", plan: "Plan", auto: "Auto" };
@@ -200,6 +205,7 @@ export class PiCore {
     } catch {
       // ignore
     }
+    if (this.lastModeText) return this.lastModeText;
     return "⚡ Auto";
   }
 
@@ -369,8 +375,18 @@ export class PiCore {
     try {
       // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
       if (this.restoringSession) await this.restoringSession.catch(() => {});
-      const d = await this.client?.getMessages();
-      this.post({ type: "render", messages: d?.messages ?? [] });
+      const all = (await this.client?.getMessages())?.messages ?? [];
+      // 刀5b：在途 assistant 消息（message_start 起就在 agent.state.messages 里，事件携带
+      // 全量对象 in-place 更新）从重绘中剥掉——显示由 liveSync 重定基 + 后续 delta 增量续接。
+      // 不剥的话快照画一遍、delta 再画一遍（用户实测「切回去一直重新开始思考/内容重复」）。
+      // 保守条件：busy + 尾部是 assistant 才剥；误剥（刚好完成的消息）由 settled 真相重绘自愈
+      const msgs = this.busy && this.liveMessage && all.length > 0 && all[all.length - 1].role === "assistant"
+        ? all.slice(0, -1)
+        : all;
+      this.post({ type: "render", messages: msgs });
+      if (this.busy && this.liveMessage) {
+        this.post({ type: "liveSync", message: JSON.parse(JSON.stringify(this.liveMessage)) });
+      }
       this.post({ type: "busy", value: this.busy, ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}) });
       // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建/切页签后不会重发，
       // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
@@ -1071,6 +1087,7 @@ export class PiCore {
       case "agent_start":
         // 刀6：busy=isStreaming 派生，无需置位；pendingPrompt 清掉（乐观窗口结束）
         this.pendingPrompt = false;
+        this.liveMessage = null; // 刀5b：新 run 无在途消息，防陈旧 liveSync
         this.runStartTs = Date.now();
         // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
         this.runChangedFiles.clear();
@@ -1086,12 +1103,14 @@ export class PiCore {
       case "message_start": {
         // 每条新的助手消息（含插话后继续生成的下一条）都开新气泡，避免增量拼进上一条导致错位
         if ((e.message?.role ?? "assistant") === "assistant") {
+          this.liveMessage = e.message; // 刀5b：新在途消息开始
           this.post({ type: "newLive" });
         }
         break;
       }
 
       case "message_update": {
+        if (e.message) this.liveMessage = e.message; // 刀5b：全量在途消息（同一对象 in-place 更新）
         const d = e.assistantMessageEvent;
         if (d?.type === "text_delta" && d.delta) {
           this.post({ type: "delta", text: d.delta, ci: d.contentIndex ?? 0 });
