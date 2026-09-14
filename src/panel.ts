@@ -1689,11 +1689,17 @@ function dbgLog(msg: string): void {
  *  删除会话后残留条无害：缓存按 key=file 惰性覆盖，文件不在列表即不被引用。 */
 const sessionMetaCache = new Map<string, { mtimeMs: number; meta: SessionInfo }>();
 
-/** 指纹缓存（工单十三二刀-5）：指纹 → 上次 SessionManager.listAll 原样结果。
- *  命中即免 ~700ms 全量解析，稳态命中率近 100%（使用中会话极少变）；
- *  面板重开不失效（模块级），扩展重载失效（可接受）。 */
+/** 指纹缓存（工单十三二刀-5 补修）：**单槽** {fp, result}——指纹变即作废，永远只留最新
+ *  一份（原 Map 每换指纹新增条目，而 pi 每发消息必改 mtime → 指纹连变 → 聊 50 轮滞留
+ *  50 份 → ext host OOM）。只存轻量投影（path/cwd/name/firstMessage/modified 五字段），
+ *  弃 allMessagesText——listAll 每会话携带全会话文本拼接的重串（session-manager.js 实证
+ *  单次几十上百 MB），整枚缓存直接内存爆炸。投影后降 KB 级；面板重开不失效（模块级），
+ *  扩展重载失效（可接受）。PiSessionEntry 类型内联 import 保留（零运行时依赖，类型参考
+ *  正确做法）。 */
 type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
-const listAllFingerprintCache = new Map<string, PiSessionEntry[]>();
+/** 展示链唯一需要的投影字段（轻量缓存用，allMessagesText 等重串不进来） */
+type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
+let listAllSlot: { fp: string; result: PiSessionProjection[] } | null = null;
 
 /** 会话目录文件集指纹：stat 扫描全部 .jsonl 的 mtimeMs 做 FNV-1a 哈希（复用回退备胎
  *  collectJsonlFiles；79 文件 ≈30-50ms）。任何文件新增/删除/mtime 变化 → 指纹变 → 重跑
@@ -1718,16 +1724,24 @@ async function fingerprintSessions(): Promise<string> {
   return files.length + ":" + h1; // 文件数也进指纹，防碰撞
 }
 
-/** listAll 指纹缓存入口：指纹命中直接返回上次结果（真毫秒级），未命中才跑 pi 全量解析
- *  并填缓存。调用方无需关心缓存细节。 */
-async function listAllCached(): Promise<PiSessionEntry[]> {
+/** listAll 指纹单槽缓存入口：指纹命中直接返回上次轻量投影结果（真毫秒级），未命中才跑
+ *  pi 全量解析并投影后入槽（旧槽作废，永远只一份）。调用方无需关心缓存细节。 */
+async function listAllCached(): Promise<PiSessionProjection[]> {
   const fp = await fingerprintSessions();
-  const hit = listAllFingerprintCache.get(fp);
-  if (hit) return hit;
+  if (listAllSlot && listAllSlot.fp === fp) return listAllSlot.result;
   const sdk = await loadPiSdk();
-  const fresh = await sdk.SessionManager.listAll();
-  listAllFingerprintCache.set(fp, fresh);
-  return fresh;
+  const fresh = (await sdk.SessionManager.listAll()) as PiSessionEntry[];
+  listAllSlot = {
+    fp,
+    result: fresh.map((x) => ({
+      path: x.path,
+      cwd: x.cwd,
+      name: x.name,
+      firstMessage: x.firstMessage,
+      modified: x.modified,
+    })),
+  };
+  return listAllSlot.result;
 }
 
 /** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
