@@ -5,7 +5,7 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebview, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo } from "../src/protocol";
+import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo } from "../src/protocol";
 import { toolDetail } from "../src/toolDetail";
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -13,7 +13,18 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState
 // 语言跟随宿主写入的 <html lang="zh|en">
 const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh") as Lang];
 (function(){
-  var vscode = acquireVsCodeApi();
+  var vscodeApi = acquireVsCodeApi();
+  // ── 工单十五刀1：tabId 收发桥（协议见 src/protocol.ts TabTag）──
+  // webview 归属首次见到的宿主消息 tabId（宿主每条消息都带标）；归属不符的消息丢弃，
+  // 不进本标签画面。刀1 单标签恒等于宿主唯一标签，刀2 标签栏落地后按活动标签切换。
+  // 采纳时机注释：首条宿主消息到时定归属——宿主在刀2 会先发明确的标签清单，
+  // 这里的「首见即归」只是刀1 的兑底，不会猜错（单核心单标签）
+  var tabId: string | null = null;
+  var vscode = {
+    postMessage: function (m: any) { if (tabId !== null) m.tabId = tabId; vscodeApi.postMessage(m); },
+    getState: function () { return vscodeApi.getState(); },
+    setState: function (s: unknown) { vscodeApi.setState(s); }
+  };
   var messages = document.getElementById('messages') as HTMLElement;
   var input = document.getElementById('input') as HTMLTextAreaElement;
   var stopBtn = document.getElementById('stop') as HTMLButtonElement;
@@ -944,7 +955,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files, dt); });
   window.addEventListener('message', function (ev: MessageEvent) {
-    var m = ev.data as HostToWebview;
+    var m = ev.data as HostToWebviewTagged;
+    // tabId 分发（工单十五刀1）：首次见到的 tabId 定为本 webview 归属，此后不属本标签的消息丢弃；
+    // 无标消息（宿主旧版本/兑底路径）放行
+    if (m.tabId !== undefined) { if (tabId === null) tabId = m.tabId; else if (m.tabId !== tabId) return; }
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     else if (m.type === 'delta') appendDelta(m.text, m.ci);

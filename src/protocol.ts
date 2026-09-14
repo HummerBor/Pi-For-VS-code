@@ -351,6 +351,18 @@ export interface ToolChangedFile {
 // sessionList / listSessions 死链已删除（工单二b）：webview 从无该消息处理器（会话切换走宿主 QuickPick），
 // 面板内历史列表若重做再按需重建
 
+/* ══════════════ 工单十五：tabId 附加字段 ══════════════ */
+
+/** 面板内多标签（工单十五刀1）：宿主↔webview 双向消息的 tabId 附加字段。
+ *  以交叉类型附加而不并入各判别联合成员（✅活 2 约定照守——逐成员加公共字段改动面大且
+ *  有毒化字面量收窄的前科；交叉类型附加零成员改动，两侧按需读写 tabId）。
+ *  tabId 缺省 = 未标归属（webview 启动握手期等），宿主按活动标签兑底路由。 */
+export interface TabTag {
+  tabId?: string;
+}
+export type HostToWebviewTagged = HostToWebview & TabTag;
+export type WebviewToHostTagged = WebviewToHost & TabTag;
+
 export type HostToWebview =
   | UserMsg
   | NewLiveMsg

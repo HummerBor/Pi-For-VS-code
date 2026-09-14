@@ -7,7 +7,7 @@ import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
 import { loadPiSdk } from "./piSdk";
-import type { ChangesFileInfo, HostToWebview, ToolChangedFile, WebviewToHost } from "./protocol";
+import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
 import { extractText, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
@@ -16,8 +16,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
 
   private view?: vscode.WebviewView;
-  /** 核心控制器（piCore）：状态机/prompt 组装/事件路由住核心；本类只当 VS Code adapter（工单四） */
-  private readonly core: PiCore;
+  /** 工单十五刀1：核心多实例——每个标签一个 PiCore（独立 PiClient/AgentSession，可同时各自 busy）。
+   *  panel 持 Map<tabId, PiCore>；活动标签 id 见 activeTabId。刀2 落标签栏 UI，
+   *  刀3 落会话语义（lastSessionByWs 按标签、模型/思考记忆按标签等）；本刀只铺路由，UI 仍单标签。 */
+  private readonly cores = new Map<string, PiCore>();
+  /** 活动标签（webview 当前显示的标签）；刀1 恒为初始标签，行为与单实例等价 */
+  private activeTabId = "t1";
+  private tabSeq = 1;
   private sessionPickerShown = false;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
   private piCheckDone = false;
@@ -54,13 +59,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly version: string
   ) {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
-    // 组装核心：宿主能力与 UI 动作由本 adapter 注入，webview 消息经 post 桥回传；
-    // 桥内先做 adapter 侧拦截（state 会话切换 → 清变更条），再转发 webview
-    this.core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg), version);
-    this.core.lang = this.lang;
-    // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
-    this.core.onRunStart = () => this.snapshotGitStatus();
-    this.core.onRunSettled = (files) => void this.handleRunSettled(files);
+    // 核心创建延迟到首次访问（ensureCore）：多标签时代每个标签各自组装，构造器不再预建单例
+  }
+
+  /** 取（或创建）指定标签的核心控制器（工单十五刀1）。创建即接线：post 桥打 tabId 标、
+   *  工单七 run 边界回调接 adapter；caps/ui 每实例一份（闭包无共享状态，安全）。
+   *  core.lang 只在创建时同步：语言切换走 applyHtml 重载 webview，webviewReady 握手后
+   *  重绘链路经核心；后台标签保持旧语言到下次创建——可接受，刀3 会话语义再按标签收口 */
+  private ensureCore(tabId: string): PiCore {
+    let core = this.cores.get(tabId);
+    if (!core) {
+      core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg, tabId), this.version);
+      core.lang = this.lang;
+      // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
+      core.onRunStart = () => this.snapshotGitStatus();
+      core.onRunSettled = (files) => void this.handleRunSettled(files);
+      this.cores.set(tabId, core);
+    }
+    return core;
+  }
+
+  /** 活动标签的核心。历史 QuickPick/⚡菜单/设置等宿主 UI 流程一律作用于活动标签
+   *  （工单十五刀3 口径预埋）；单标签时代与原 this.core 字段行为等价 */
+  private get core(): PiCore {
+    return this.ensureCore(this.activeTabId);
   }
 
   /** HostCapabilities 的 VS Code 落地：核心（piCore）所需宿主能力，签名不含 vscode 类型 */
@@ -232,7 +254,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
       this.core.ensureClient();
     }
-    view.webview.onDidReceiveMessage((m: WebviewToHost) => {
+    view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
       // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
       if (m.type === "webviewReady") {
         if (this.changesFiles.length) this.postChangesList();
@@ -240,7 +262,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
         void listSessions().catch(() => {});
       }
-      void this.core.onWebviewMessage(m);
+      // 工单十五刀1：webview→宿主按 tabId 路由——消息带已知标签 id 走对应核心；
+      // 未标（启动握手期）或带已关闭标签 id 的兑底落活动标签
+      const core = (m.tabId && this.cores.get(m.tabId)) || this.ensureCore(this.activeTabId);
+      void core.onWebviewMessage(m);
     });
 
     // 监听编辑器选区，自动把选中代码 / 整个文件作为上下文（CC 同款）
@@ -296,13 +321,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.core.dispose();
+    // 工单十五：全部标签的核心一起回收（dispose 链各核心互不共享 PiClient）
+    for (const core of this.cores.values()) core.dispose();
+    this.cores.clear();
     for (const d of this.editorDisposables) d.dispose();
     this.editorDisposables = [];
     if (this.selTimer) clearTimeout(this.selTimer);
   }
 
-  private post(msg: HostToWebview): void {
+  /** 宿主→webview 全消息打 tabId 标（工单十五刀1，协议见 protocol.ts TabTag）：
+   *  核心桥转发的消息带所属标签 id；宿主直发的 UI 流程（附件回发/重绘等）归活动标签 */
+  private post(msg: HostToWebviewTagged, tabId?: string): void {
+    if (tabId !== undefined) msg.tabId = tabId;
+    else if (msg.tabId === undefined) msg.tabId = this.activeTabId;
     void this.view?.webview.postMessage(msg);
   }
 
@@ -1339,9 +1370,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   // ════════ 工单七：pi 变更 Git diff 可视化（混合方案，裁决 11） ════════
 
-  /** 核心消息桥：state 会话切换时清变更条（会话域信息不残留），其余原样转发 webview */
-  private pipeFromCore(msg: HostToWebview): void {
-    if (msg.type === "state") {
+  /** 核心消息桥（工单十五刀1）：①给消息打所属标签的 tabId 标（webview 按 tabId 分发）；
+   *  ②活动标签的 state 会话切换时清变更条（变更条是活动标签的 UI 态，后台标签切会话不清；
+   *  刀3 变更清单按会话域持有后再扩展）。核心侧消息其余原样转发 webview */
+  private pipeFromCore(msg: HostToWebview, tabId: string): void {
+    if (msg.type === "state" && tabId === this.activeTabId) {
       const f = msg.sessionFile ?? null;
       if (f !== this.lastStateFile) {
         this.lastStateFile = f;
@@ -1352,7 +1385,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
       }
     }
-    this.post(msg);
+    this.post(msg, tabId);
   }
 
   private postChangesList(): void {
