@@ -338,6 +338,8 @@ export interface TabInfo {
   id: string;
   title: string;
   busy: boolean;
+  /** 工单十五刀5：后台页签跑完亮未读点（宿主记账——webview 零影子状态，切回即清） */
+  unread?: boolean;
 }
 export interface TabsMsg {
   type: "tabs";

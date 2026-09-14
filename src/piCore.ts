@@ -353,28 +353,39 @@ export class PiCore {
     }
   }
 
+  /** UI 真相全量重发（工单十五刀5）：webview 不自养影子状态，页签切回/重建时由核心把
+   *  pi 会话真相一次推齐——消息重绘（session.messages）+ busy（真实耗时）+ 排队（queued
+   *  数组，先 queuedClear 再逐条重发，webview 零累积）+ 权限模式 + 压缩横幅。
+   *  webviewReady 与页签切换共用 */
+  async postUiState(): Promise<void> {
+    try {
+      // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
+      if (this.restoringSession) await this.restoringSession.catch(() => {});
+      const d = await this.client?.getMessages();
+      this.post({ type: "render", messages: d?.messages ?? [] });
+      this.post({ type: "busy", value: this.busy, ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}) });
+      // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建/切页签后不会重发，
+      // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
+      this.post({ type: "mode", text: this.modeBadgeText() });
+      // 压缩横幅随真相重发：横幅状态在宿主（工单六），webview 重建后不丢
+      this.post({ type: "banner", banner: this.banner });
+      // 排队真相重发：先清后发，webview 的 queuebar 由 queuedAdd 重建（切回页签不丢排队现场）
+      this.post({ type: "queuedClear" });
+      for (const q of this.queued) {
+        this.post({ type: "queuedAdd", qid: q.qid, text: q.text, imageCount: q.imageCount, codeInfo: q.codeInfo });
+      }
+    } catch {
+      // ignore
+    }
+    await this.refreshState();
+ }
+
   private async dispatchWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
-        // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险
-        void (async () => {
-          try {
-            // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
-            if (this.restoringSession) await this.restoringSession.catch(() => {});
-            const d = await this.client?.getMessages();
-            this.post({ type: "render", messages: d?.messages ?? [] });
-            this.post({ type: "busy", value: this.busy });
-            // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建（切语言/改背景）后不会重发，
-            // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
-            this.post({ type: "mode", text: this.modeBadgeText() });
-            // 压缩横幅随握手重发：横幅状态在宿主（工单六），webview 重建后不丢
-            this.post({ type: "banner", banner: this.banner });
-          } catch {
-            // ignore
-          }
-          await this.refreshState();
-        })();
+        // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险（真相重发已抽成 postUiState，刀5）
+        void this.postUiState();
         break;
       }
       case "prompt": {
