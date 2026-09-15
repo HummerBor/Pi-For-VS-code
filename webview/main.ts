@@ -726,9 +726,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
       else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
     }
-    // 工单十八：此处必须 addQueuedDom（纯 DOM）——addQueued 会 push 回 queuedItems 而循环
-    // 条件用同一个 length，排队非空时 rq 与 length 同步增长永真 = 死循环 + DOM 无限追加
-    // （用户实测：排队状态下插件卡死致 VS Code 关闭）
+    // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
+    // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
+    // 职责）再追加一遍 = 翻倍。修法：先清再建，幂等——本循环与 uiState 分支谁先谁后都不叠加
+    var qb = document.getElementById('queuebar');
+    qb.innerHTML = '';
     for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
     scroll();
   }
