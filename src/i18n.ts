@@ -161,6 +161,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     bannerCompactBtn: "一键压缩",
     bannerDismiss: "关闭",
     compactionFail: "⚠ 上下文压缩失败: ",
+    // 工单二十一：压缩边界的折叠块（对齐 pi TUI CompactionSummaryMessageComponent）
+    compactionSummary: "⌄ 上下文已压缩，此前历史已折叠为摘要（原 {n} tokens）",
     // ── 本次改动条 + QuickPick（工单七）──
     changesCount: "✦ 本轮改动 {n} 个文件",
     changesView: "查看改动",
@@ -539,6 +541,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     bannerCompactBtn: "Compact now",
     bannerDismiss: "Dismiss",
     compactionFail: "⚠ Context compaction failed: ",
+    // Ticket 21: collapsible block for the compaction boundary (mirrors pi TUI CompactionSummaryMessageComponent)
+    compactionSummary: "⌄ Context compacted — earlier history folded into a summary ({n} tokens)",
     // ── Changes bar + QuickPick (ticket 7) ──
     changesCount: "✦ {n} file(s) changed this run",
     changesView: "Review changes",

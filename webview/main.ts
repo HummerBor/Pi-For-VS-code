@@ -613,6 +613,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     d.appendChild(s); d.appendChild(body);
     return d;
   }
+  // 工单二十一：压缩边界折叠块（对齐 pi TUI CompactionSummaryMessageComponent）。
+  // compactionSummary 是 pi 恢复会话时把压缩点前历史折叠成的 {role, summary, tokensBefore,
+  // timestamp} 消息，webview 曾静默穿落——用户视角「以前发的消息没了」。这里复刻 makeThink 的
+  // details/summary 原生折叠交互（样式走 .think/.think-body 现有 token），默认收起、点击展开摘要正文；
+  // 收起态文案含 tokensBefore（原多少 tokens）声明边界，克服单（工单六）横幅只管「当下」的局限
+  function makeCompaction(m) {
+    var d = document.createElement('details');
+    d.className = 'think';
+    var s = document.createElement('summary');
+    s.textContent = L.compactionSummary.replace('{n}', (m.tokensBefore != null ? Number(m.tokensBefore).toLocaleString() : 0));
+    d.appendChild(s);
+    var body = el('div', 'think-body', '');
+    renderRich(body, String(m.summary || ''));
+    d.appendChild(body);
+    return d;
+  }
   function renderAll(list) {
     root.innerHTML = '';
     liveReset();
@@ -736,6 +752,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         }
       }
       else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
+      else if (m.role === 'compactionSummary') { root.appendChild(makeCompaction(m)); }
     }
     // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
     // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
