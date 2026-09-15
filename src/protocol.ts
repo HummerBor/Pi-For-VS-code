@@ -289,6 +289,12 @@ export interface QueuedDeliveredMsg {
 export interface QueuedClearMsg {
   type: "queuedClear";
 }
+/** 工单十八补刀：乐观入队失败回滚——单条移除（sendPromptCore 先画后发，prompt/steer 失败时
+ *  pi 队列无此条，不回滚则计数与 queuebar 永久分叉） */
+export interface QueuedRemoveMsg {
+  type: "queuedRemove";
+  qid: string;
+}
 /** 工单十六：取回完成——qid 项出队，text（sentText，含附件胶囊块）合入编辑框。
  *  与 queuedDelivered 的区别：不进气泡流，只回编辑框（用户在编辑框里删改，同 TUI alt+up） */
 export interface QueuedRetrievedMsg {
@@ -469,6 +475,7 @@ export type HostToWebview =
   | QueuedAddMsg
   | QueuedDeliveredMsg
   | QueuedClearMsg
+  | QueuedRemoveMsg
   | QueuedRetrievedMsg
   | CodeCtxMsg
   | AddImagesMsg

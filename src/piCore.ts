@@ -697,9 +697,11 @@ export class PiCore {
     });
     this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
     // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
+    let queuedQid: string | null = null;
     if (wasBusy) {
       // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
       const qid = "q" + Date.now();
+      queuedQid = qid; // 工单十八补刀：失败回滚要定位本条（乐观入队 pi 侧可能没收到）
       // kind 记账（工单十六）：插件链路插队一律走 streamingBehavior:"steer"（见下方 client.prompt），
       // 归属发送时即知，不靠 queue_update 对账猜
       this.queued.push({ qid, sentText: text, text: displayText, imageCount: images?.length ?? 0, codeInfo, kind: "steer" });
@@ -746,6 +748,17 @@ export class PiCore {
         // 若不重发：steer 不触发 agent_start，webview 的 Working 会消失（排队气泡丢失的根源）
         this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
         this.dbg("busy event (steer_resend: pi rejected prompt as already processing)");
+        // 工单十八补刀2（用户实测：每条插队切页签后变两条，用户气泡也成对）：
+        // 拒收 ≠ 未入队——被拒的 prompt 可能已以某种方式入队，盲目重发 = 双入队。
+        // 重发前先对账 pi 队列现状：同文本已在队列则跳过重发（镜像/queuebar 本就乐观画了一条，正好对应）
+        try {
+          const q = await client.getQueuedMessages();
+          const dup = [...(q?.steering ?? []), ...(q?.followUp ?? [])].some((t: unknown) => t === text);
+          if (dup) {
+            this.dbg("steer_resend_skipped (already queued: pi has same text)");
+            return;
+          }
+        } catch { /* 对账失败按原路径重发（宁可信没入，双条总比丟条好——丢条消息真没了） */ }
         await client.prompt(text, true, images);
       }
       // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
@@ -756,6 +769,17 @@ export class PiCore {
       this.post({ type: "busy", value: false });
       this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
       this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
+      // 工单十八补刀（用户实测「queuebar 2 条 vs 排队 1 条」）：乐观入队失败必须回滚——
+      // 镜像/queuebar 是先画的（气泡先行），prompt/steer 失败时 pi 队列里根本没有这条，
+      // 不回滚就是幽灵项：计数与 queuebar 永久分叉（镜像只增不减病灶的最后一处）
+      if (queuedQid) {
+        const existed = this.queued.some((q) => q.qid === queuedQid);
+        this.queued = this.queued.filter((q) => q.qid !== queuedQid);
+        if (existed) {
+          this.post({ type: "queuedRemove", qid: queuedQid });
+          this.dbg("queued_rollback (send_fail: qid=" + queuedQid + ")");
+        }
+      }
     }
   }
 
