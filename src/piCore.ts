@@ -73,7 +73,10 @@ export class PiCore {
   private codeCtx: { name: string; rel: string; range: string; text: string } | null = null;
   /** 中断后跳过一次 settled 重绘（会话里被中断的消息是空的，重绘会抹掉现场） */
   private abortSkipRender = false;
-  private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string }[] = [];
+  /** 排队镜像（插件自己发过的插队消息）。kind = pi 队列归属（工单十六）：插件链路入队一律
+   *  streamingBehavior:"steer"（见 sendPromptCore），发送时即知类型，不靠 queue_update 对账猜；
+   *  取回重排队时按原类型走 steer()/followUp() */
+  private queued: { qid: string; sentText: string; text: string; imageCount: number; codeInfo?: string; kind: "steer" | "followUp" }[] = [];
   /** 最近一次已知会话名/文件（用于自动命名判断） */
   private lastSessionName: string | null = null;
   /** 命令式应答标记：发出 prompt 后未等到 agent_start 前为 true（用于清除乐观 busy/免误导性中断提示） */
@@ -85,6 +88,10 @@ export class PiCore {
   private autoTitledFor: string | null = null;
   /** pi 侧 queue_update 报告的排队总数（steering+followUp），用于检测“队列变短=插话已被取走” */
   private lastQueueTotal = 0;
+  /** 工单十六：取回事务进行中。clearQueue/重排队自己就会触发 queue_update，若不抑制，
+   *  「队列变短」会被既有转正逻辑误判成 agent 取走 → 保留集还没重排队就被转正成用户气泡。
+   *  抑制期间只记账 lastQueueTotal；收口对账由 retrieveQueued 自己做（历史比对后 queuedDelivered） */
+  private retrieving = false;
   /** 最近一次权限模式徽标文本（webview 重建后补发用：session_start 的 setStatus 只推一次） */
   private lastModeText = "";
   /** 启动恢复闸门：按项目恢复上次会话期间，webviewReady 的重绘等它完成，
@@ -444,7 +451,6 @@ export class PiCore {
           this.post({ type: "notice", text: tuiOnly[firstTok] });
           break;
         }
-        const client = this.ensureClient();
         this.dbg("prompt: images=" + (m.images ? m.images.length : 0) + " files=" + (m.files ? m.files.length : 0) + " busy=" + this.busy);
         let text = m.text;
         const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
@@ -465,78 +471,11 @@ export class PiCore {
           const c = this.codeCtx;
           text = "--- 代码上下文: " + c.rel + " (" + c.range + ") ---\n" + c.text + "\n--- 代码上下文结束 ---\n\n" + text;
         }
-        // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
-        const wasBusy = this.busy;
-        // 刀6：乐观置位由下方 pendingPrompt 承担（isStreaming 尚未翻转的空窗），不再写镜像
-        // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
-        // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
-        this.post({
-          type: "busy",
-          value: true,
-          ...(wasBusy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
-        });
-        this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
         // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
         const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
-        // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
-        if (wasBusy) {
-          // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
-          const qid = "q" + Date.now();
-          this.queued.push({ qid, sentText: text, text: displayText, imageCount: m.images?.length ?? 0, codeInfo });
-          this.post({ type: "queuedAdd", qid, text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
-        } else {
-          this.post({ type: "user", text: displayText, imageCount: m.images?.length ?? 0, fileCount: m.files?.length ?? 0, codeInfo });
-        }
-        let steered = false;
-        // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到
-        //（实录 07:30:16.357 事件 vs ~16.358 响应，1ms 反转）。若在响应回来后才置
-        // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
-        //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
-        // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
-        // 工单五-2 重审结论（直连）：兜底保留。正常 prompt 的 agent_start 毫秒级到达，
-        // 兜底唯一日常触发场景是「不产生 agent 运行的命令式 prompt」（扩展 registerCommand
-        // 集合开放无法枚举拦截，b040fb2 只拦了 /mode）——撤掉兜底这类 prompt 的 busy
-        // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
-        if (!wasBusy) {
-          this.pendingPrompt = true;
-          setTimeout(() => {
-            // 刀6：agent_start 已清 pendingPrompt 的话本条件不成立；isStreaming 真跑起来时
-            // busy 恒真——4s 兜底只清乐观窗口，不再有镜像可清
-            if (!steered && this.pendingPrompt) {
-              this.pendingPrompt = false;
-              this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
-              this.post({ type: "busy", value: false });
-            }
-          }, 4000);
-        }
-        try {
-          try {
-            await client.prompt(text, wasBusy, m.images);
-          } catch (e: any) {
-            // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
-            // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
-            // 工单五-3 可达性结论（直连）：自愈保留。刀6 后镜像已死（busy=isStreaming 派生），
-            // 「镜像漂移撞运行中 session.prompt」的场景在架构上不存在，自愈纯兜底
-            const msg = String(e?.message ?? e);
-            if (!/already processing|streamingBehavior/i.test(msg)) throw e;
-            this.post({ type: "notice", text: this.L.autoQueued });
-            steered = true;
-            // pi 拒收 = 它一定正在跑上一个 run：isStreaming 必为 true，busy（派生，刀6）恒真，
-            // 无镜像可纠；busy:true 事件重发是给 webview 的——4s 兜底可能刚发过 busy:false，
-            // 若不重发：steer 不触发 agent_start，webview 的 Working 会消失（排队气泡丢失的根源）
-            this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
-            this.dbg("busy event (steer_resend: pi rejected prompt as already processing)");
-            await client.prompt(text, true, m.images);
-          }
-          // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
-          if (!wasBusy && m.text) void this.autoTitleSession(m.text);
-        } catch (err: any) {
-          // 刀6：清乐观窗口（isStreaming 本就 false——发送失败不会有 run 在跑）
-          this.pendingPrompt = false;
-          this.post({ type: "busy", value: false });
-          this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
-          this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
-        }
+        // 工单十六：发送核心抽成 sendPromptCore（乐观 busy/4s 兜底/steer 自愈/自动命名全套语义），
+        // 本 case 只留斜杠拦截与附件组装——取回重排队（retrieveQueued）的 idle 首项复用同一链路
+        await this.sendPromptCore(text, displayText, m.text, { images: m.images, fileCount: m.files?.length ?? 0, codeInfo });
         break;
       }
       case "abort":
@@ -713,6 +652,200 @@ export class PiCore {
       case "changesDismiss":
         await this.ui.dismissChanges();
         break;
+      case "queuedRetrieve":
+        // 工单十六：queuebar 条目「取回」→ 文本回编辑框（pi 原生 dequeue 语义的单条版）
+        await this.retrieveQueued(m.qid);
+        break;
+    }
+  }
+
+  /** prompt 发送核心（工单十六自 prompt case 抽出，方法体逐字符移植，仅 m.images/m.files 换成参数）：
+   *  乐观 busy → 气泡/排队镜像 → 4s pendingPrompt 兜底 → 发送 + steer 自愈 → 自动命名。
+   *  取回重排队（retrieveQueued）的 idle 首项复用这里，保证 streamingBehavior/兜底/自愈
+   *  语义全插件只有一份。titleText：自动命名用的文本（原 prompt case 的 m.text——
+   *  不复用 displayText 是为保留「纯图片/纯代码占位语不参与命名」的原行为） */
+  private async sendPromptCore(
+    text: string,
+    displayText: string,
+    titleText: string,
+    opts?: { images?: { data: string; mimeType: string }[]; fileCount?: number; codeInfo?: string }
+  ): Promise<void> {
+    const client = this.ensureClient();
+    const images = opts?.images;
+    const codeInfo = opts?.codeInfo;
+    // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
+    const wasBusy = this.busy;
+    // 刀6：乐观置位由下方 pendingPrompt 承担（isStreaming 尚未翻转的空窗），不再写镜像
+    // 插话（wasBusy=true）时 run 仍在跑：必须带上真实已过时长，否则 webview 计时起点
+    // 被重置——「一排队 Working 就重新计时」的根源；新消息（空闲）不带=从现在起算
+    this.post({
+      type: "busy",
+      value: true,
+      ...(wasBusy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
+    });
+    this.dbg("busy=true (prompt_optimistic, wasBusy=" + wasBusy + ")");
+    // 气泡先行：pi 启动/发送可能要几秒，等 await 完才画会让用户以为消息丢了
+    if (wasBusy) {
+      // 插队消息：只显示「排队中」气泡，等 queue_update 报告被取走后再转正为正式气泡（避免重复）
+      const qid = "q" + Date.now();
+      // kind 记账（工单十六）：插件链路插队一律走 streamingBehavior:"steer"（见下方 client.prompt），
+      // 归属发送时即知，不靠 queue_update 对账猜
+      this.queued.push({ qid, sentText: text, text: displayText, imageCount: images?.length ?? 0, codeInfo, kind: "steer" });
+      this.post({ type: "queuedAdd", qid, text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo });
+    } else {
+      this.post({ type: "user", text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo });
+    }
+    let steered = false;
+    // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到
+    //（实录 07:30:16.357 事件 vs ~16.358 响应，1ms 反转）。若在响应回来后才置
+    // pendingPrompt=true，会把事件刚清掉的标志覆写回 true → 4s 后误清运行中的 busy
+    //（「Working 中途消失」的原始触发源）。定时器触发时再查 steered：被拒收转 steer
+    // 的 prompt 不会有 agent_start，busy 已在 catch 里纠回 true，不能被兜底清掉
+    // 工单五-2 重审结论（直连）：兜底保留。正常 prompt 的 agent_start 毫秒级到达，
+    // 兜底唯一日常触发场景是「不产生 agent 运行的命令式 prompt」（扩展 registerCommand
+    // 集合开放无法枚举拦截，b040fb2 只拦了 /mode）——撤掉兜底这类 prompt 的 busy
+    // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
+    if (!wasBusy) {
+      this.pendingPrompt = true;
+      setTimeout(() => {
+        // 刀6：agent_start 已清 pendingPrompt 的话本条件不成立；isStreaming 真跑起来时
+        // busy 恒真——4s 兜底只清乐观窗口，不再有镜像可清
+        if (!steered && this.pendingPrompt) {
+          this.pendingPrompt = false;
+          this.dbg("busy=false (4s_pendingPrompt_fallback: no agent_start within 4s)");
+          this.post({ type: "busy", value: false });
+        }
+      }, 4000);
+    }
+    try {
+      try {
+        await client.prompt(text, wasBusy, images);
+      } catch (e: any) {
+        // busy 标志与 pi 真实状态错位时（如 agent_start 晚于 4s 兜底，busy 已被清），
+        // pi 会拒收不带 streamingBehavior 的 prompt → 自动转 steer 重发，消息照常排队
+        // 工单五-3 可达性结论（直连）：自愈保留。刀6 后镜像已死（busy=isStreaming 派生），
+        // 「镜像漂移撞运行中 session.prompt」的场景在架构上不存在，自愈纯兜底
+        const msg = String(e?.message ?? e);
+        if (!/already processing|streamingBehavior/i.test(msg)) throw e;
+        this.post({ type: "notice", text: this.L.autoQueued });
+        steered = true;
+        // pi 拒收 = 它一定正在跑上一个 run：isStreaming 必为 true，busy（派生，刀6）恒真，
+        // 无镜像可纠；busy:true 事件重发是给 webview 的——4s 兜底可能刚发过 busy:false，
+        // 若不重发：steer 不触发 agent_start，webview 的 Working 会消失（排队气泡丢失的根源）
+        this.post({ type: "busy", value: true, elapsedMs: this.runStartTs > 0 ? Date.now() - this.runStartTs : 0 });
+        this.dbg("busy event (steer_resend: pi rejected prompt as already processing)");
+        await client.prompt(text, true, images);
+      }
+      // 新会话首条真实文字消息 → 自动命名会话（CC 风格，历史列表/头部都能显示标题）
+      if (!wasBusy && titleText) void this.autoTitleSession(titleText);
+    } catch (err: any) {
+      // 刀6：清乐观窗口（isStreaming 本就 false——发送失败不会有 run 在跑）
+      this.pendingPrompt = false;
+      this.post({ type: "busy", value: false });
+      this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
+      this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
+    }
+  }
+
+  /** 工单十六：排队消息「取回到编辑框」——pi 原生语义的单条版（TUI alt+up dequeue：
+   *  clearQueue 全部取回编辑器，删改发生在编辑器里；pi 无单条删除 API，签单三处查
+   *  留证见 DIRECTOR.md）。对齐范式不造第二种：clearQueue 全清 → 被取回项文本合入
+   *  编辑框 → 保留集按原类型重排队。
+   *  图片项已知局限：queued 只存 imageCount 不存原图，取回仅还原文本（sentText，含
+   *  附件胶囊块——文件附件本就拼在文本里所以不丢），图片丢失；本工单不做附件数据回传 */
+  private async retrieveQueued(qid: string): Promise<void> {
+    const client = this.ensureClient();
+    const q = this.queued.find((x) => x.qid === qid);
+    if (!q) return;
+    this.retrieving = true;
+    try {
+      // pi 真相快照：clearQueue 返回清空前的全部队列内容。保留集以它为准——镜像可能滞后
+      //（agent 刚取走的项还在镜像里，但已不在 pi 队列）
+      const r = await client.clearQueue();
+      const snap: { text: string; kind: "steer" | "followUp" }[] = [
+        ...(Array.isArray(r?.steering) ? r.steering : []).map((t: unknown) => ({ text: String(t), kind: "steer" as const })),
+        ...(Array.isArray(r?.followUp) ? r.followUp : []).map((t: unknown) => ({ text: String(t), kind: "followUp" as const })),
+      ];
+      this.lastQueueTotal = 0; // pi 真相：队列已清空（抑制期事件只记账，这里直接落真相）
+      if (!snap.some((x) => x.text === q.sentText)) {
+        // 竞态：取回前 agent 刚把这条取走 → 回填编辑框必造成重复发送；队列条交还既有转正
+        // 链路（agent_start 的 deliverQueuedInHistory / queue_update 变短）收口
+        this.post({ type: "notice", text: this.L.retrieveTaken });
+        return;
+      }
+      // 被 agent 取走的（镜像有、pi 快照没有）：保留在镜像与队列条，等既有转正链路收口
+      const taken = this.queued.filter((y) => y.qid !== q.qid && !snap.some((x) => x.text === y.sentText));
+      // 保留集 = pi 快照 − 被取回项；qid/气泡文案从镜像找回，镜像没有的项（扩展直入 pi
+      // 队列等）用原文兑底自建镜像
+      const kept = snap
+        .filter((x) => x.text !== q.sentText)
+        .map((x) => {
+          const mirror = this.queued.find((y) => y.qid !== q.qid && y.sentText === x.text);
+          return mirror
+            ? { ...mirror, kind: x.kind }
+            : { qid: "q" + Date.now() + "-" + Math.floor(Math.random() * 10000), sentText: x.text, text: x.text, imageCount: 0, kind: x.kind };
+        });
+      this.queued = [...taken, ...kept];
+      // 被取回项文本回填编辑框（webview 合入：编辑框非空时换行追加，不覆盖正在输入的内容）
+      this.post({ type: "queuedRetrieved", qid: q.qid, text: q.sentText });
+      // 重排队：busy → 按原类型直入 pi 队列（steering 先于 followUp 送达的语义由 pi 队列
+      // 结构保证，各队列内部保序）；idle → 第一项走 prompt 链路（乐观 busy/4s 兜底/steer
+      // 自愈全套语义），其余照常排队——session.steer/followUp 对 idle 只入队不下跑
+      //（agent.steer = steeringQueue.enqueue，下一轮 run 消费），不会开出第二个 run
+      if (kept.length) {
+        const requeue = async (items: typeof kept) => {
+          for (const k of items) {
+            try {
+              if (k.kind === "followUp") await client.followUp(k.sentText);
+              else await client.steer(k.sentText);
+            } catch (err: any) {
+              // 单条重排队失败不中断其余项：该项留在镜像/队列条，pi 侧缺位由 dbg 留痕
+              this.dbg("retrieve_requeue_fail: " + String(err?.message ?? err).slice(0, 120));
+            }
+          }
+        };
+        if (this.busy) {
+          await requeue(kept);
+        } else {
+          const first = kept[0];
+          // 先把首项从镜像摘掉再发：它走正式 prompt 链路（乐观 user 气泡已发），留在镜像里
+          // 会被 agent_start 的 deliverQueuedInHistory 再转正一次（重复气泡）
+          this.queued = this.queued.filter((y) => y.qid !== first.qid);
+          await this.sendPromptCore(first.sentText, first.text, first.text, { codeInfo: first.codeInfo });
+          await requeue(kept.slice(1));
+        }
+      }
+      // 收口对账（工单十六·竞态验收条）：重排队与 queuebar 重建之间 agent 可能已把 steer
+      // 取走——steer 送达不触发 agent_start，错过 queue_update 就没有下一个事件可依赖，
+      // 队列条会永久残留。以 pi 队列现状为准逐条核对：已不在队列的项，进历史才转正
+      //（与既有 queue_update/deliverQueuedInHistory 口径一致，防误报），否则留在队列条
+      try {
+        const now = await client.getQueuedMessages();
+        const stillQueued = [...(now?.steering ?? []), ...(now?.followUp ?? [])];
+        this.lastQueueTotal = stillQueued.length;
+        if (this.queued.some((y) => !stillQueued.includes(y.sentText))) {
+          const d = await client.getMessages();
+          const histTexts = (d?.messages ?? []).filter((mm: any) => mm.role === "user").map((mm: any) => extractText(mm.content));
+          const waiting: typeof this.queued = [];
+          for (const item of this.queued) {
+            if (stillQueued.includes(item.sentText) || !histTexts.some((t: string) => t.includes(item.sentText))) {
+              waiting.push(item);
+            } else {
+              this.post({ type: "queuedDelivered", qid: item.qid, show: true, text: item.text, imageCount: item.imageCount, codeInfo: item.codeInfo });
+            }
+          }
+          this.queued = waiting;
+        }
+      } catch {
+        // 对账失败不影响主流程（既有事件链路仍会兜底）
+      }
+      // 重建 queuebar（先清后发，同 postUiState 款；不做整页重绘——busy 红线）
+      this.post({ type: "queuedClear" });
+      for (const item of this.queued) {
+        this.post({ type: "queuedAdd", qid: item.qid, text: item.text, imageCount: item.imageCount, codeInfo: item.codeInfo });
+      }
+    } finally {
+      this.retrieving = false;
     }
   }
 
@@ -1233,6 +1366,13 @@ export class PiCore {
         const steering = e.steering ?? [];
         const followUp = e.followUp ?? [];
         const total = steering.length + followUp.length;
+        // 工单十六：取回事务期间只记账不转正（否则 clearQueue 清空队列会被当成「全部被取走」，
+        // 保留集还没重排队就被转正成用户气泡）。收口对账在 retrieveQueued 内完成
+        if (this.retrieving) {
+          this.lastQueueTotal = total;
+          this.post({ type: "queue", steering, followUp });
+          break;
+        }
         // 关键：steering 是插进当前运行，不会触发 agent_start；只能靠队列变短感知插话已被取走
         if (total < this.lastQueueTotal && this.queued.length) {
           let n = Math.min(this.lastQueueTotal - total, this.queued.length);

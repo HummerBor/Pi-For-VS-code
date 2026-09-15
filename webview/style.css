@@ -53,7 +53,10 @@ body > :not(#bg-layer) { position: relative; z-index: 1; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 #queuebar { padding: 0 12px 3px; }
 .q-item { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .65; padding: 2px 0; }
-.q-item .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-item .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+/* 工单十六：取回按钮（q-btn）——低存在感，hover 才亮；不压缩 q-text 的 ellipsis 空间 */
+.q-item .q-btn { flex: none; cursor: pointer; opacity: .5; display: inline-flex; align-items: center; }
+.q-item .q-btn:hover { opacity: 1; }
 .bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; }
 .bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; max-width: 88%; }
 .bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }

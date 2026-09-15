@@ -383,6 +383,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     noArgs: "(无参数)",
     retryEdit: "↺ 修改后重试",
     queuedCount: "· 排队 {n} 条",
+    // 工单十六：queuebar 取回
+    queuedRetrieveTitle: "取回到编辑框（在编辑框里删改，同 pi 原生语义）",
+    retrieveTaken: "该消息刚被 agent 取走处理，未回填编辑框（内容见消息流）",
     turnDuration: "本轮耗时",
     curSession: "当前: ",
     clickSwitchSession: "点击切换历史会话",
@@ -748,6 +751,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     noArgs: "(no args)",
     retryEdit: "↺ Edit and retry",
     queuedCount: "· {n} queued",
+    // 工单十六：queuebar retrieve
+    queuedRetrieveTitle: "Restore to editor (edit/delete there, same as pi native)",
+    retrieveTaken: "This message was just taken by the agent; not restored to the editor (see the message flow)",
     turnDuration: "Turn duration",
     curSession: "Current: ",
     clickSwitchSession: "Click to switch sessions",

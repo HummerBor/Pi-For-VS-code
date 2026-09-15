@@ -376,6 +376,26 @@ export class PiClient {
     return this.ready().then(() => PiClient.snapshot(this.session.clearQueue()));
   }
 
+  /** 直入 pi 队列（工单十六：取回后保留集重排队）。session.steer 对 idle 只入队不下跑
+   *  （agent.steer = steeringQueue.enqueue，下一轮 run 消费），不会开出第二个 run；
+   *  busy 时即插队，送达时序由 pi 队列结构保证（steering 先于 followUp，各队列内部保序） */
+  steer(text: string): Promise<any> {
+    return this.ready().then(() => this.session.steer(text)).then(() => ({}));
+  }
+
+  /** 同上，followUp 归属（工单十六：取回重排队按原类型） */
+  followUp(text: string): Promise<any> {
+    return this.ready().then(() => this.session.followUp(text)).then(() => ({}));
+  }
+
+  /** 只读快照：当前 pi 队列内容（工单十六：取回收口对账用，同步真读非事件猜测） */
+  getQueuedMessages(): Promise<{ steering: string[]; followUp: string[] }> {
+    return this.ready().then(() => ({
+      steering: [...this.session.getSteeringMessages()].map(String),
+      followUp: [...this.session.getFollowUpMessages()].map(String),
+    }));
+  }
+
   /** 导出会话为 HTML */
   exportHtml(outputPath?: string): Promise<any> {
     return this.ready().then(async () => {

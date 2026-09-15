@@ -85,7 +85,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     x: '<path d="M4 4l8 8M12 4L4 12"/>',
     chev: '<path d="M6 3.5L10.5 8 6 12.5"/>',
     check: '<path d="M3.2 8.6l3 3L12.8 4.4"/>',
-    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>'
+    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>',
+    back: '<path d="M13 8H3.5M7.3 4.2L3.5 8l3.8 3.8"/>'
   };
   function ico(name: string, size?: number) {
     var s = size || 14;
@@ -383,6 +384,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);
 
     b.appendChild(el('span', 'q-text', (q.text || L.imgOrCode) + (q.fileCount ? ' +' + q.fileCount + L.qFilesUnit : '') + (q.imageCount ? ' +' + q.imageCount + L.qImgsUnit : '')));
+    // 工单十六：取回按钮——文本回编辑框（用户在编辑框里删改），其余项按原类型重排队，
+    // 与 pi TUI alt+up dequeue 同构，不在队列条上直接删
+    var rb = el('span', 'q-btn');
+    rb.title = L.queuedRetrieveTitle;
+    rb.innerHTML = ico('back', 12);
+    rb.addEventListener('click', function (ev) { ev.stopPropagation(); vscode.postMessage({ type: 'queuedRetrieve', qid: q.qid }); });
+    b.appendChild(rb);
     // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流
     document.getElementById('queuebar').appendChild(b);
   }
@@ -1040,6 +1048,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
     else if (m.type === 'queuedClear') { queuedItems = []; document.getElementById('queuebar').innerHTML = ''; }
+    else if (m.type === 'queuedRetrieved') {
+      // 工单十六：取回文本合入编辑框——已有内容时换行追加，不覆盖正在输入的内容
+      removeQueued(m.qid);
+      input.value = input.value ? input.value + '\n\n' + (m.text || '') : (m.text || '');
+      input.focus(); scroll();
+    }
     else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChip(); }
     else if (m.type === 'addImages') { (function() {
       var list = m.images || []; var k = 0;

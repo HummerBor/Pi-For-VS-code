@@ -117,6 +117,11 @@ export interface WvShowChangesMsg {
 export interface WvChangesDismissMsg {
   type: "changesDismiss";
 }
+/** 工单十六：queuebar 条目「取回」→ 文本回编辑框（pi 原生 dequeue 语义的单条版） */
+export interface WvQueuedRetrieveMsg {
+  type: "queuedRetrieve";
+  qid: string;
+}
 export type WebviewToHost =
   | WvReadyMsg
   | WvPromptMsg
@@ -146,6 +151,7 @@ export type WebviewToHost =
   | WvCompactSessionMsg
   | WvShowChangesMsg
   | WvChangesDismissMsg
+  | WvQueuedRetrieveMsg
   | WvTabSwitchMsg
   | WvTabNewMsg
   | WvTabCloseMsg;
@@ -273,6 +279,13 @@ export interface QueuedDeliveredMsg {
 }
 export interface QueuedClearMsg {
   type: "queuedClear";
+}
+/** 工单十六：取回完成——qid 项出队，text（sentText，含附件胶囊块）合入编辑框。
+ *  与 queuedDelivered 的区别：不进气泡流，只回编辑框（用户在编辑框里删改，同 TUI alt+up） */
+export interface QueuedRetrievedMsg {
+  type: "queuedRetrieved";
+  qid: string;
+  text: string;
 }
 export interface CodeCtxInfo {
   name: string;
@@ -420,6 +433,7 @@ export type HostToWebview =
   | QueuedAddMsg
   | QueuedDeliveredMsg
   | QueuedClearMsg
+  | QueuedRetrievedMsg
   | CodeCtxMsg
   | AddImagesMsg
   | AddFilesMsg
