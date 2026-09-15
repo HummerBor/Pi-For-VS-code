@@ -288,6 +288,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!this.editorDisposables.length) {
       this.editorDisposables.push(
         vscode.window.onDidChangeActiveTextEditor(() => this.pushCodeContext()),
+        // 关 tab 必触发：activeTextEditor 在「焦点落入 webview 预览/面板」时会滞留为已关
+        // 编辑器（VS Code 陈旧行为），只靠上面两个事件胶囊永远不刷新（用户实测：关了
+        // tsconfig.json 胶囊还在，且下条消息会静默附上已关文件）——复用选区防抖重算
+        vscode.window.onDidChangeVisibleTextEditors(() => {
+          if (this.selTimer) clearTimeout(this.selTimer);
+          this.selTimer = setTimeout(() => this.pushCodeContext(), 250);
+        }),
         vscode.window.onDidChangeTextEditorSelection(() => {
           if (this.selTimer) clearTimeout(this.selTimer);
           this.selTimer = setTimeout(() => this.pushCodeContext(), 250);
@@ -484,7 +491,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  上下文本体存核心（prompt 组装消费），本方法只负责计算+推送（工单四接线） */
   private pushCodeContext(): void {
     const ed = vscode.window.activeTextEditor;
-    if (!ed || ed.document.uri.scheme !== "file") {
+    // 滞留守卫：焦点落入 webview 预览/终端时 activeTextEditor 可能还是刚关掉的编辑器，
+    // 不在可见列表 = 已关 → 清上下文（否则胶囊滞留 + 下条消息静默附已关文件）
+    if (!ed || !vscode.window.visibleTextEditors.includes(ed) || ed.document.uri.scheme !== "file") {
       if (this.core.hasCodeContext) {
         this.core.setCodeContext(null);
         this.post({ type: "codeCtx", ctx: null });
