@@ -122,6 +122,12 @@ patchRevert/steering 自愈等守卫；不读 jsonl、不加「查看完整历�
    一帧只画一次）→ GLM burst（实测 gap 178ms 后连发多块）每帧一跳 = 「一段一段」
 4. **死代码佐证**：scheduleStream（main.ts:521，100ms 节流 timer）定义了但**全文件零调用**
    ——历史上有人预感到要节流，接线从未发生
+5. **会话体量是主因（2026-09-15 用户观察补充修订，总监漏判后补）**：用户实测「只有这个
+   会话蹦，别的会话正常，之前一直不卡」——每条 delta 的 scroll() scrollTop 写强制 layout，
+   **成本随会话 DOM 树增长**：本会话 jsonl 已 477KB+（数百条消息/上万节点），单次 layout
+   毫秒级 → GLM burst 一到就积压；新/短会话 layout 便宜 → 看着正常；TUI 只画视口、
+   成本与会话长度无关 → 恒逐字。「越来越卡」是随会话进度，非随版本（今日四笔提交
+   均不碰 delta 路径，总监已逐笔核对）
 5. **pi 原生查重（三处）**：TUI render 链实查（interactive-mode.js:2799 requestRender
    每事件直调 + tui bundle doRender 同步写终端），**无打字机/无帧平滑层**——壳做平滑
    不是重复 pi 原生，是补偿 webview 传输合批，理由成立
@@ -144,8 +150,9 @@ markdown fence 语义（streamTick 的代码块边界逻辑）零改动——dra
 不改「它怎么算」。
 
 **验收**：npm run compile 全绿 → 装包实测：①glm-5.3 快速生成观感连续（不再一段一段），
-收尾无缺字 ②DS 慢速回归无退化 ③流式中上滑/回底（工单十七现场）不复发 ④流式不卡顿
-（工单十九现场不复发——drain 每帧 DOM 写次数应≤现状）⑤toolDetail/patchRevert 不回归。
+收尾无缺字 ②DS 慢速回归无退化 ③**长会话实测（主验收场）**：本工作区长会话
+（jsonl 数百 KB 级）流式观感连续 ④流式中上滑/回底（工单十七现场）不复发 ⑤流式不卡顿
+（工单十九现场不复发——drain 每帧 DOM 写次数应≤现状）⑥toolDetail/patchRevert 不回归。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
