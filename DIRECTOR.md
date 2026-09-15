@@ -38,62 +38,59 @@
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
-### 工单十六：排队消息「取回到编辑框」（= pi 原生语义的删除）
+### 工单十七：滚动跟随对齐 pi 原生（上滑暂停跟随，回底自动恢复）
 
-**背景**：用户要求对排队中（queuebar）的消息做删除操作。签单三处查留证（2026-09-14
-总监亲查，勿重查；**负结论也是证据**）：
+**背景（用户原话）**：「会话在工作的时候滚动条一直保持下拉……很难受，优化一下」——
+流式中每 100ms tick 无条件拉底（webview/main.ts:222 `scroll()` =
+`root.scrollTop = root.scrollHeight`，:491 节流 tick），用户上滑读历史被拽回，实际读不了早期内容。
 
-1. **pi 公开 API**（node_modules/@earendil-works/pi-coding-agent/dist/core/
-   agent-session.d.ts:428-441）：`clearQueue(): {steering: string[]; followUp: string[]}`
-   （全清并返回快照）、`getSteeringMessages()` / `getFollowUpMessages()`（只读）、
-   `pendingMessageCount`。**没有单条删除 API**。
-2. **pi TUI 行为**（dist/modes/interactive/interactive-mode.js:3408 handleDequeue、
-   3615 restoreQueuedMessagesToEditor；docs/keybindings.md:166）：`app.message.dequeue`
-   （alt+up，Windows alt+q）=「Restore queued messages to editor」——全部排队 clearQueue
-   后合入编辑框，删改发生在编辑器里；队列条上无单条删除交互。abort 时同样走
-   restore({abort:true})（interactive-mode.js:1406/1577/2255）。
-3. **扩展生态**：pi 包内置扩展无队列管理先例；扩展 API 同样只暴露 steer/followUp/
-   clearQueue，单条删除在扩展侧也做不了。
+**签单三处查留证（2026-09-14 总监亲查，勿重查；负结论也是证据）**：
 
-**结论**：pi 原生语义 =「取回到编辑器再删」，不存在队列条上的直接删除。插件按壳原则对齐：
-排队条每项加「取回」动作 → clearQueue 全清 → 被取回项文本合入 webview 编辑框 → 保留集
-按原类型重排队。用户要删就在编辑框里删——与 TUI alt+up 完全同构，不造第二种范式。
+1. **pi 公开 API**：AgentSession 等 core API 无 UI 滚动概念（负结论——UI 是壳的事，
+   本该没有）。
+2. **pi TUI 行为（原生范式，直接照抄）**：pi-tui 官方 ScrollView 组件
+   （node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/
+   dist/components/scroll-view.d.ts）有完整 follow 语义：`follow: "end"` 选项 +
+   `isFollowingEnd` 状态。语义（scroll-view.js:106/125-131）：**跟随 = 钉在 content end；
+   用户滚离底部 → 跟随自动暂停（`followingEnd = followEnd && next === maxScrollTop`）；
+   滚回最底 → 自动恢复跟随**。transcript 视口已开启此模式（dist/modes/interactive/
+   chat-viewport.js:5 `follow: "end"`）。无「回底浮标」类 UI（终端手势即滚回）。
+3. **扩展生态**：扩展 API 无 webview/滚动能力（extensions.md 无先例，负结论）。
+
+**结论**：这不是发明新交互，是把 pi 原生 ScrollView 的 follow 语义映射到 webview DOM。
 
 **实现要点**：
 
-1. **类型感知**：现 `piCore.ts` queued 数组（:76）不记 steer/followUp 归属。所有入队都经
-   插件 prompt 链路（streamingBehavior 自发即知类型），发送时记下归属；queue_update 事件
-   带 `{steering, followUp}` 两数组（agent-session.d.ts:49-51）可对账兜底。
-2. **重排队保序**：保留集重发时原 steering 走 `steer()`、原 followUp 走 `followUp()`，
-   各自内部保序；steering 先于 followUp 送达的语义不变。
-3. **竞态**：clearQueue 与重发之间 agent 可能取走消息——重发的是「保留集」，与被取走项
-   无交集，天然不重复；重发完成后 post queuedClear+queuedAdd 重建 queuebar（复用
-   piCore.ts:397-399「先清后发」同款机制），不做整页重绘（busy 红线）。
-4. **clearQueue 后恰好 idle 的边界**：agent 已 idle 时不能对保留集走 steer()——须判 busy，
-   idle 则第一项走现有 prompt 链路（含 streamingBehavior 语义）、其余照常排队。判定口径
-   以 piClient 现有 busy/steer 自愈逻辑为准，不另造一套。
-5. **图片项已知局限**：queued 只存 imageCount 不存原图，取回仅还原文本，图片丢失——
-   在实现处留注释记为已知局限，本工单不做附件数据回传。
-6. **协议三处同步**：protocol.ts（如 queuedRetrieve{qid} / queuedRestored）+ piCore 发送方
-   + webview/main.ts 接收方；i18n 走模板 `{{t:key}}`。
+1. `#messages` 容器加 scroll 监听（passive），维护 `followingEnd` 布尔：
+   `scrollHeight - scrollTop - clientHeight <= 阈值`（≤48px，DOM 里内容增长不触发
+   scroll 事件、程序化赋值后有像素容差，写注释说明与 TUI `next === maxScrollTop`
+   精确等值的差异原因）。
+2. `scroll()`（:222）改为：仅 `followingEnd` 为真才拉底。所有现有调用点
+   （节流 tick/气泡/notice/工具详情）不动，改动面收敛在这一个函数。
+3. **用户主动动作强制回底**：addUser（发消息，:379）与 fillInput（取回输入框，:1037）
+   置 `followingEnd = true`——主动动作即回底意图。
+4. **不做「↓ 回到最新」浮标**：TUI 无此 UI，拖滚动条回底即恢复跟随，壳不自研
+   原生没有的东西。
+5. 纯 webview 内部改动：协议三处不动（无跨边界消息）；ES5 var 风格；strict:false
+   零报错；busy 不整页重绘红线不受影响（跟随判定只在滚动事件与 scroll() 内）。
 
 **验收标准**：
 
-- 流式中排队 3 条 → 取回中间 1 条：编辑框出现该文本，另 2 条按原顺序留队列条且原类型
-  不变（steering 仍先送达）；期间无整页重绘、流式渲染不闪断
-- 取回含图项：文本还原、无报错
-- 竞态实测：取回瞬间 agent 正取走一条 → 不重复、不丢、queuebar 与 pi 真相一致
+- 流式中上滑：停在用户滚到的位置读历史，新 token 不拽人；滚回底部 → 跟随自动恢复
+- 流式中不滚动：行为与现状一致（钉底跟随，无闪烁/跳动）
+- 发消息/取回排队消息 → 回底
 - `npm run compile` 全绿；单笔提交（不含版本 bump）
 
-**不许顺手改**：steer 自愈正则、4s pendingPrompt 兜底、还原边界（patchRevert）、
-queue_update 转正逻辑本身、queuedDelivered 现有语义。
+**不许顺手改**：liveRTimer 节流周期、streamTick 逻辑、工单十六的排队域、
+:222 以外的任何 scroll 调用点语义。
 
-## 攒包小刀（随 0.0.89，可与任意工单顺带，不许混笔）
+## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
-> **两项均已随重做单落地（2026-09-14 总监亲施），本节销账**
-
-- README.md 删 `<!-- 注释性改动示例 -->` 残留（0.0.88 发版混入的测试行，随市场已出，改后需 push 才在市场生效）
-- importSession 大小检查上移到 .jsonl 检查旁（工单十遗留）
+- **renderAll 死循环隐患（工单十六施工发现，总监已裁决修法）**：webview/main.ts:717
+  `for (rq = 0; rq < queuedItems.length; rq++) addQueued(queuedItems[rq])`——addQueued
+  push 回同数组而 for 条件用同一 length：排队非空 + renderAll 重入时死循环 + queuebar
+  重复 DOM。修法（裁决）：改调 `addQueuedDom(queuedItems[rq])`（纯 DOM，不 push）——
+  数组已是真相，push 回去本身即错；不要改成「先清 queuebar」方案（绕远且语义含糊）
 
 ## 排队（未签发，勿提前施工）
 

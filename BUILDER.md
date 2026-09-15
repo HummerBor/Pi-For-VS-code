@@ -4,7 +4,51 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-14 工单十五刀3 施工回报（会话语义按标签，待用户实测）
+最后更新：2026-09-14 工单十六施工回报（排队消息取回到编辑框，待用户实测）
+
+## 工单十六施工回报（排队消息「取回到编辑框」，一笔提交 617baca，待用户实测）
+
+**实现形态（与签单要点逐条对账）**：
+
+1. **类型感知**：queued 镜像加 `kind: "steer"|"followUp"`——插件链路入队一律
+   streamingBehavior:"steer"（发送时即知，sendPromptCore 内注释留痕）；保留集以
+   **clearQueue 返回的 pi 快照为准**（镜像可能滞后于 agent 取走），qid/气泡文案从镜像
+   找回，镜像没有的项（扩展直入 pi 队列）用原文兑底自建
+2. **重排队保序**：busy → session.steer()/followUp() 按原类型直入（steering 先于
+   followUp 由 pi 队列结构保证，各队列内部保序）；idle → 第一项走 prompt 链路、其余
+   照常排队——**实查 pi 源码：session.steer 对 idle 只入队不下跑**（agent.steer =
+   steeringQueue.enqueue，下一轮 run 消费），不会开出第二个 run
+3. **抑制窗口（签单外必要新增）**：clearQueue/重排队自己会触发 queue_update，若不抑制
+   会被既有「队列变短=已取走」逻辑误判 → 保留集还没重排队就被转正成用户气泡。
+   retrieving 标志期间 queue_update 只记账；收口对账由取回事务自己做：pi 队列现状
+   （getSteeringMessages/getFollowUpMessages 同步真读）+ 历史比对后 queuedDelivered——
+   防 steer 中途被取走后队列条永久残留（steer 送达不触发 agent_start，错过事件无兑底）
+4. **竞态（签单第 3/验收条）**：取回目标若已不在 pi 快照 = agent 刚取走 → 不回填编辑框
+   （回填=重复发送），发 retrieveTaken 通知，队列条交还既有转正链路收口
+5. **idle 首项复用链路**：prompt 发送核心抽成 sendPromptCore（乐观 busy/4s 兖底/steer
+   自愈/自动命名逐字符移植，仅 m.images/m.files 换参数），prompt case 只留斜杠拦截与
+   附件组装——steer 自愈正则/4s 兑底语义零改动（红线遵守）
+6. **协议三处同步**：queuedRetrieve{qid} 上行 / queuedRetrieved{qid,text} 下行；
+   webview 合入编辑框（非空时换行追加，不覆盖正在输入的内容）；queuebar 条目加
+   取回按钮（back 图标，{{t:queuedRetrieveTitle}} 中英 tooltip）
+7. **图片项已知局限**（签单第 5 条）：取回仅还原 sentText（含附件胶囊块——文件附件
+   本就拼在文本里所以不丢），图片丢失，注释已在 retrieveQueued 头部留痕
+
+**验证**：npm run compile 全绿；toolDetail 27/27、patchRevert 12/12 过；
+pi-for-vscode-0.0.92.vsix 已重打。红线四项（steer 自愈正则/4s 兑底/还原边界/
+queue_update 转正本身）零改动——queue_update 仅加抑制分支（本单实现点，非顺手改）。
+
+**施工中发现一笔既有债务（未混笔修，报总监定夺）**：webview/main.ts renderAll 尾部
+（709 行）`for (rq < queuedItems.length; rq++) addQueued(queuedItems[rq])` —— addQueued
+会 push 回同数组而 for 条件用同一 length：排队项非空时若触发整页重绘（postUiState 的
+render 延迟一拍，晚于 queuedAdd）会**死循环 + queuebar 重复 DOM**。远古代码（panel.ts
+抽出时就带着），与本单无触发交集（取回流程不发 render），建议另立小刀：该循环删除或
+改为 addQueuedDom 前先清 queuebar。
+
+**待实测（需真 vsix，对齐验收标准）**：①流式中排队 3 条 → 取回中间 1 条：文本回编辑
+框、另 2 条按原顺序留队列条且 steering 仍先送达；期间无整页重绘、流式不闪断 ②取回含
+图项：文本还原、无报错（图丢失为已知局限）③竞态：取回瞬间 agent 正取走一条 → 不重复、
+不丢、queuebar 与 pi 真相一致 ④取回时编辑框已有草稿 → 换行追加不覆盖
 
 ## 工单十五刀3施工回报（会话语义，一笔提交，待用户实测）
 
@@ -199,7 +243,12 @@ clean=true（弥散文字完整、无 \uFFFD）。compile 全绿。
 
 ## 二、技术债（未排期，按性价比排序；演化见 归档.md「八、后续排队」）
 
-1. panel.ts 状态机收敛：18 个可变标志 + 4s pendingPrompt timer hack（做之前先读各标志上的事故注释）
+1. **webview renderAll 尾部 queuebar 重建死循环隐患（工单十六施工发现，待裁决）**：
+   `for (rq < queuedItems.length; rq++) addQueued(queuedItems[rq])` —— addQueued push 回
+   同数组而条件用同一 length：排队项非空 + 整页重绘（postUiState 的 render 晚于 queuedAdd
+   到达）时死循环 + queuebar 重复 DOM。远古代码，与本单无触发交集；修法：删该循环或改
+   addQueuedDom 前先清 queuebar（详见工单十六施工回报）
+2. panel.ts 状态机收敛：18 个可变标志 + 4s pendingPrompt timer hack（做之前先读各标志上的事故注释）
 2. applyHtml 同步读大图转 base64（listSessions 链已由工单十三/后续异步化）
 3. .vscodeignore 核查收录完整性（0.0.81 事故，test*.txt 清理随 0.0.87 攒包）
 
@@ -216,3 +265,10 @@ clean=true（弥散文字完整、无 \uFFFD）。compile 全绿。
 splitUtf8/parseMetaLine，grep 零残留）；fingerprintSessions 独立实现（readdir+stat+
 FNV-1a，不再依赖备胎）；README 残留行删除；importSession 50MB 检查上移到 .jsonl 守卫区。
 compile 全绿；listAll 真目录实测 504-515ms（80 会话）。0.0.90 测试包已打。
+
+## 直令留痕（✅活 6，2026-09-15，总监亲施：取回按钮图标换删除图标）
+
+用户直令「撤回按钮语意不清，改成删除图标，功能不变，你直接改」。改动：webview/main.ts
+ICON_PATHS 新增 trash（stroke 风格与现有图标一致）、取回按钮 ico('back')→ico('trash')、
+back 键删除（唯一调用点已换，避免死数据）；实现处注释留痕「功能不变仍是取回，别改行为」。
+compile 全绿。工单十六同日结单（用户实测「可以撤回效果不错」），全录迁归档.md 9.11。
