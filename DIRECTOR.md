@@ -25,7 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-11 藏身二轮——账目/排队/守则/分工迁入归档.md，全文件只保留工单
+> 最后更新：2026-09-14 签工单十六（排队消息取回，三处查留证：pi 原生只有 clearQueue 全清 +
+> TUI dequeue 取回编辑器，无单条删除 API）
 
 ## 施工工单（按序执行）
 
@@ -34,13 +35,58 @@
 > 已完成工单全文（验收标准/边界/教训）见 [归档.md](归档.md)——做新单前若与其边界
 > 相关先查归档，勿凭记忆执行旧单条目。
 
-  （http(s) 与本地路径两条路都保留）；不动 webview/main.ts
+> 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
+> pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
-### ~~工单十五：面板内多标签并行会话~~ ✅ 已完成已验收（2026-09-14 用户实测结单）
+### 工单十六：排队消息「取回到编辑框」（= pi 原生语义的删除）
 
-> 六刀全录+教训见 归档.md 9.10。并发多页签/切页签续接/新页签独立会话均实测通过。
-> **遗留认知**：mode.json 是 pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
-> 当前无待施工工单——新需求先过签单三处查（留证），产品论点见卷首。
+**背景**：用户要求对排队中（queuebar）的消息做删除操作。签单三处查留证（2026-09-14
+总监亲查，勿重查；**负结论也是证据**）：
+
+1. **pi 公开 API**（node_modules/@earendil-works/pi-coding-agent/dist/core/
+   agent-session.d.ts:428-441）：`clearQueue(): {steering: string[]; followUp: string[]}`
+   （全清并返回快照）、`getSteeringMessages()` / `getFollowUpMessages()`（只读）、
+   `pendingMessageCount`。**没有单条删除 API**。
+2. **pi TUI 行为**（dist/modes/interactive/interactive-mode.js:3408 handleDequeue、
+   3615 restoreQueuedMessagesToEditor；docs/keybindings.md:166）：`app.message.dequeue`
+   （alt+up，Windows alt+q）=「Restore queued messages to editor」——全部排队 clearQueue
+   后合入编辑框，删改发生在编辑器里；队列条上无单条删除交互。abort 时同样走
+   restore({abort:true})（interactive-mode.js:1406/1577/2255）。
+3. **扩展生态**：pi 包内置扩展无队列管理先例；扩展 API 同样只暴露 steer/followUp/
+   clearQueue，单条删除在扩展侧也做不了。
+
+**结论**：pi 原生语义 =「取回到编辑器再删」，不存在队列条上的直接删除。插件按壳原则对齐：
+排队条每项加「取回」动作 → clearQueue 全清 → 被取回项文本合入 webview 编辑框 → 保留集
+按原类型重排队。用户要删就在编辑框里删——与 TUI alt+up 完全同构，不造第二种范式。
+
+**实现要点**：
+
+1. **类型感知**：现 `piCore.ts` queued 数组（:76）不记 steer/followUp 归属。所有入队都经
+   插件 prompt 链路（streamingBehavior 自发即知类型），发送时记下归属；queue_update 事件
+   带 `{steering, followUp}` 两数组（agent-session.d.ts:49-51）可对账兜底。
+2. **重排队保序**：保留集重发时原 steering 走 `steer()`、原 followUp 走 `followUp()`，
+   各自内部保序；steering 先于 followUp 送达的语义不变。
+3. **竞态**：clearQueue 与重发之间 agent 可能取走消息——重发的是「保留集」，与被取走项
+   无交集，天然不重复；重发完成后 post queuedClear+queuedAdd 重建 queuebar（复用
+   piCore.ts:397-399「先清后发」同款机制），不做整页重绘（busy 红线）。
+4. **clearQueue 后恰好 idle 的边界**：agent 已 idle 时不能对保留集走 steer()——须判 busy，
+   idle 则第一项走现有 prompt 链路（含 streamingBehavior 语义）、其余照常排队。判定口径
+   以 piClient 现有 busy/steer 自愈逻辑为准，不另造一套。
+5. **图片项已知局限**：queued 只存 imageCount 不存原图，取回仅还原文本，图片丢失——
+   在实现处留注释记为已知局限，本工单不做附件数据回传。
+6. **协议三处同步**：protocol.ts（如 queuedRetrieve{qid} / queuedRestored）+ piCore 发送方
+   + webview/main.ts 接收方；i18n 走模板 `{{t:key}}`。
+
+**验收标准**：
+
+- 流式中排队 3 条 → 取回中间 1 条：编辑框出现该文本，另 2 条按原顺序留队列条且原类型
+  不变（steering 仍先送达）；期间无整页重绘、流式渲染不闪断
+- 取回含图项：文本还原、无报错
+- 竞态实测：取回瞬间 agent 正取走一条 → 不重复、不丢、queuebar 与 pi 真相一致
+- `npm run compile` 全绿；单笔提交（不含版本 bump）
+
+**不许顺手改**：steer 自愈正则、4s pendingPrompt 兜底、还原边界（patchRevert）、
+queue_update 转正逻辑本身、queuedDelivered 现有语义。
 
 ## 攒包小刀（随 0.0.89，可与任意工单顺带，不许混笔）
 
