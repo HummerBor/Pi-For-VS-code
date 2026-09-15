@@ -12,15 +12,6 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 ![Follow VS Code theme](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E8%B7%9F%E9%9A%8Fvsc.png)
 
-## Highlights
-
-- **In-process, not a remote-controlled CLI**: the pi engine is imported as an SDK into the extension (nearly every agent extension spawns a subprocess and parses strings) — permission modes, queued steering and session management come straight from pi's native semantics; the terminal TUI and this panel behave identically, and streaming speed is just a side effect
-- **True parallel sessions**: multiple tabs, each an independent conversation running at once; tab switches restore state from an atomic snapshot, and scrolling up mid-stream never gets yanked back
-- **Queue you can take back**: messages sent while pi is working queue up automatically — take any back to the editor with one click (pi's native dequeue semantics, not invented delete)
-- **Change review**: when pi finishes a run, the panel lists exactly the files it touched this run — open a native diff in one click, or revert a file whole if you don't like it (your own uncommitted work is never touched). The confidence to run in Auto mode
-
-Session history and credentials stay on your machine — no cloud, no telemetry.
-
 ## Getting started
 
 Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) → click the pi icon in the activity bar. Missing pi triggers a one-click install; missing keys walk you through setup. Then just chat:
