@@ -53,7 +53,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 | 命令 | 用途 |
 |---|---|
 | `npm run compile` | 完整构建（webview 类型检查 → vite → tsc），提交前必跑 |
-| `npm run package` | 本地打 vsix 手动装（不动 git、不升版本） |
+| `npm run package` | 本地打测试 vsix（自动 bump patch；不动 git，版本号随下次提交入库。事故教训：同版本号覆盖打包 → 装旧包无法自证，2026-09-15） |
 | `npm run test:detail` | 跑 toolDetail 用例（scripts/toolDetail.test.mts，零依赖） |
 | `npm run test:revert` | 跑 patchRevert 逆向还原用例（scripts/patchRevert.test.mts） |
 | `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
