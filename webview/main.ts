@@ -239,8 +239,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
     });
   }, { passive: true });
-  // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
-  function scroll() { if (followingEnd) root.scrollTop = root.scrollHeight; }
+  // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人。
+  // 工单十九实测回归修复（用户要终端同款体验）：scroll() 合帧化——流式每条 delta 都调 scroll()
+  // （message_update 分支等），裸写会每 delta 一次拉底+scroll 事件+reflow，高频时主线程被吃满。
+  // 改成 rAF 合帧：一帧内多少条 delta 都只拉一次底、读一次布局，与浏览器渲染同拍
+  // （pi TUI requestRenderCallback 的 DOM 同构）。下一帧（~16ms）内完成，感知无差
+  var scrollRaf = false;
+  function scroll() {
+    if (scrollRaf) return;
+    scrollRaf = true;
+    requestAnimationFrame(function () {
+      scrollRaf = false;
+      if (followingEnd) root.scrollTop = root.scrollHeight;
+    });
+  }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
   function renderStatus() { modeBadge.textContent = modeText; }
 
