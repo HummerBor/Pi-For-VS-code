@@ -226,18 +226,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // TUI 用 `next === maxScrollTop` 精确等值，DOM 里给 48px 容差：①DOM 内容增长不触发 scroll
   // 事件，程序化拉底后有像素/取整容差；②流式内容高频增长，精确等值会把跟随频繁误判为暂停
   var followingEnd = true;
-  // 工单十九实测回归修复：streamTick 每条 delta 都 scroll() 拉底 → 每次触发 scroll 事件 →
-  // 本监听器同步读 scrollHeight = 每条 delta 一次强制 reflow，流式高频时主线程被 layout
-  // 吃满（用户实测「插件卡卡的没终端流畅」）。修：rAF 节流——每帧最多读一次布局，一帧内
-  // 合并的 scroll 事件取最后状态，判定语义不变
-  var fpPending = false;
   root.addEventListener('scroll', function () {
-    if (fpPending) return;
-    fpPending = true;
-    requestAnimationFrame(function () {
-      fpPending = false;
-      followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
-    });
+    followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
   }, { passive: true });
   // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
   function scroll() { if (followingEnd) root.scrollTop = root.scrollHeight; }
