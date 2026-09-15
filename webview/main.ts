@@ -220,7 +220,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (text !== undefined && text !== '') e.textContent = text;
     return e;
   }
-  function scroll() { root.scrollTop = root.scrollHeight; }
+  // ── 工单十七：滚动跟随（对齐 pi TUI ScrollView 的 follow 语义，chat-viewport.js:5 follow:"end"）──
+  // 跟随 = 钉在内容底；用户滚离底部 → 跟随自动暂停；滚回最底 → 自动恢复
+  // （pi-tui scroll-view.js:125-131 `followingEnd = followEnd && next === maxScrollTop` 的 DOM 映射）。
+  // TUI 用 `next === maxScrollTop` 精确等值，DOM 里给 48px 容差：①DOM 内容增长不触发 scroll
+  // 事件，程序化拉底后有像素/取整容差；②流式内容高频增长，精确等值会把跟随频繁误判为暂停
+  var followingEnd = true;
+  root.addEventListener('scroll', function () {
+    followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
+  }, { passive: true });
+  // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
+  function scroll() { if (followingEnd) root.scrollTop = root.scrollHeight; }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
   function renderStatus() { modeBadge.textContent = modeText; }
 
@@ -377,7 +387,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     linkify(parent);
   }
 
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); scroll(); }
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
@@ -1044,7 +1054,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
     else if (m.type === 'notice') notice(m.text);
-    else if (m.type === 'fillInput') { input.value = m.text || ''; input.focus(); scroll(); }
+    else if (m.type === 'fillInput') { followingEnd = true; input.value = m.text || ''; input.focus(); scroll(); } // 主动动作回底（工单十七要点 3）
     else if (m.type === 'status') setStatus(m.text);
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
@@ -1054,6 +1064,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 工单十六：取回文本合入编辑框——已有内容时换行追加，不覆盖正在输入的内容
       removeQueued(m.qid);
       input.value = input.value ? input.value + '\n\n' + (m.text || '') : (m.text || '');
+      followingEnd = true; // 取回排队消息=主动动作回底（工单十七验收条，同 fillInput 口径）
       input.focus(); scroll();
     }
     else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChip(); }
