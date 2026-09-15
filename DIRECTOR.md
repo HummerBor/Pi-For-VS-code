@@ -38,6 +38,40 @@
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
+### 工单十九：历史会话 QuickPick 秒开（后台刷新替代前置指纹等待）
+
+**背景**：用户实测「当前会话已加载，点历史仍要等一段时间」（观察项 2026-09-15 挂账）。
+
+**根因（总监预查完毕，勿重查）**：热路径唯一剩余开销 = `fingerprintSessions()`
+（panel.ts:1917）——每次 pickSession 都 walk 整个 sessions 目录树 + stat 每个 .jsonl
+（NTFS 上几百 ms，随会话数线性涨）。listAll 有指纹缓存（listAllSlot）、meta 有 mtime 缓存，
+唯独指纹计算是「检测变更」本身、每次必跑且不可缓存；预热链路（webviewReady→listSessions）
+填的是结果缓存，绕不开这一步。
+
+**三处查说明**：内部性能债非新功能，核心 API（SessionManager.listAll）已是工单十三选定的
+pi 公开 API，无需三处查。
+
+**修法（定案，施工方照做）**：
+
+1. pickSession 开头：若 `listAllSlot` 存在（有上次结果），**立即用它弹 QuickPick 列表**
+   （不显示 loading 占位），同时后台 `fingerprintSessions()`：命中 → 结束（列表已对）；
+   未命中 → 重算 `listAll()` + 填缓存 + 原地更新同一个 QuickPick 的 items
+   （vscode.QuickPick.items 可变，原生支持；注意 scope 过滤与排序同现逻辑）。
+2. `listAllSlot` 不存在（真首次）→ 现有 loading 占位路径照旧。
+3. 用户在刷新完成前已选中某项 → 刷新回调不得弹新 QuickPick/重置选中，只更新 items
+   （防选中丢失；activeItems 保持同 file 项）。
+
+**边界（不许顺手改）**：指纹算法（FNV-1a/walk）、mtime 缓存、预热链路、deleteSessionPick、
+switchSession 渲染链全不动；本单不改 piCore/webview（纯 panel.ts）。
+
+**验收标准**：
+
+- 会话已加载状态下点历史：列表**毫秒级出现**，无「正在加载会话…」
+- 新会话产生后再点历史：列表反映最新（后台刷新生效），已打开的 QuickPick 不闪不重弹
+- 刷新期间用户已选中某项：选中保持
+- 冷启动首次点历史：照旧占位→填充
+- `npm run compile` 全绿；单笔提交
+
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
 > renderAll 死循环隐患已吸收进工单十八（P0 越序），本节销账。
