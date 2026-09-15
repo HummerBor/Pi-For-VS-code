@@ -583,34 +583,82 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const picker = vscode.window.createQuickPick<Item>();
     picker.placeholder =
       scope === "all" ? this.L.pickSessionAll : this.L.pickSessionProj;
-    picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
-    picker.show();
-    dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
 
-    const sessions = await listSessions(scope === "all" ? undefined : wsPath).catch(() => []);
-    dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
+    // 工单十九：条目构建统一入口——秒开快路径与占位慢路径共用，保证 scope 过滤/
+    // 排序/入口项两条路径完全一致（工单验收点：后台刷新后的列表与现逻辑同构）
+    const buildItems = (sessions: SessionInfo[]): Item[] => {
+      const items: Item[] = [];
+      // 工单十五入口收敛（2026-09-14 拍板）：「开始新会话」项已删——开新会话=开新标签，
+      // 全插件只剩头部＋与本项两个入口，行为一致；busy 中选中会话自动开进新标签
+      items.push({ label: "$(add) " + this.L.tabNewTitle, action: "newTab" });
+      if (scope !== "all") {
+        items.push({ label: this.L.browseAllSessions, action: "all" });
+      }
+      // 删除入口独立于会话条目：避免误触（条目点击=切换，删除走二级选择+确认）
+      items.push({ label: this.L.delSessionEntry, action: "delete" });
+      for (const s of sessions) {
+        items.push({
+          label: "$(history) " + (s.name || s.preview || path.basename(s.file)),
+          description: s.cwd || undefined,
+          detail: s.time + "  ·  " + s.file,
+          action: "file",
+          file: s.file,
+        });
+      }
+      return items;
+    };
 
-    const items: Item[] = [];
-    // 工单十五入口收敛（2026-09-14 拍板）：「开始新会话」项已删——开新会话=开新标签，
-    // 全插件只剩头部＋与本项两个入口，行为一致；busy 中选中会话自动开进新标签
-    items.push({ label: "$(add) " + this.L.tabNewTitle, action: "newTab" });
-    if (scope !== "all") {
-      items.push({ label: this.L.browseAllSessions, action: "all" });
+    // 工单十九：热路径秒开。fingerprintSessions（walk 整树 + 逐文件 stat）是 pickSession
+    // 唯一剩余前置开销（NTFS 几百 ms，随会话数线性涨）——有上次结果缓存槽时先用它立即
+    // 出列表（无 loading 占位），后台再跑指纹校验：命中即结束（列表已对）；未命中重算
+    // listAll 入槽后**原地更新同一个 picker 的 items**（不重弹新 QuickPick、不重置选中，
+    // activeItems 保持同 file 项——防用户在刷新完成前已选中某项被冲掉）。
+    // 真首次（无槽）照旧 loading 占位→填充路径。pickerClosed 守卫：用户已关掉选择器后
+    // 后台刷新不再碰 items（picker 即将 dispose，防止打在尸体上）。
+    let pickerClosed = false;
+    const keepAlive = picker.onDidHide(() => {
+      pickerClosed = true;
+    });
+    const cwdFilter = scope === "all" ? undefined : wsPath;
+    const cachedSlot = listAllSlot;
+    if (cachedSlot) {
+      picker.items = buildItems(toSessionInfos(cachedSlot.result, cwdFilter));
+      picker.show();
+      dbgLog(`pickSession 缓存秒开 ${(Date.now() - t0).toFixed(0)}ms（消息到达→列表就绪）`);
+      // 后台指纹校验：listAllCached 指纹命中返回同一份 result（引用相等即列表未变）；
+      // 未命中则内部已重算 listAll 并入槽，返回新引用 → 原地刷新 items
+      void listAllCached()
+        .then((fresh) => {
+          if (pickerClosed || fresh === cachedSlot.result) return; // 指纹命中/已关闭 → 列表已对
+          const prev = picker.selectedItems[0];
+          picker.items = buildItems(toSessionInfos(fresh, cwdFilter));
+          // 防选中丢失：原选中是会话条目 → 同 file 项保持 active（非会话入口项无需保）
+          if (prev?.file) {
+            const again = picker.items.find(
+              (it) => it.action === "file" && it.file === prev.file
+            );
+            if (again) picker.activeItems = [again];
+          }
+          dbgLog(
+            `pickSession 后台刷新就绪 ${(Date.now() - t0).toFixed(0)}ms（指纹变化→原地更新）`
+          );
+        })
+        .catch(() => {}); // 后台刷新失败 → 列表维持旧数据，不打扰用户
+    } else {
+      // 工单十三二刀-2：先弹占位 busy 项，立即反馈（不等 listSessions），完成后原地填充。
+      // 「点历史零反馈」的直接治理：原来 showQuickPick 等 listSessions 完才弹，等待期只看到
+      // 命令触发、无任何 UI 反应。占位 busy:true 在 VS Code 17+ 显示加载动画。
+      picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
+      picker.show();
+      dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
+
+      const sessions = await listSessions(cwdFilter).catch(() => []);
+      dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
+
+      // 占位 busy 项已被完整 items 替换；无会话时仍留有操作入口（开始新会话/删除），不走 notice
+      picker.items = buildItems(sessions);
+      dbgLog(`pickSession 内容就绪 ${picker.items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
     }
-    // 删除入口独立于会话条目：避免误触（条目点击=切换，删除走二级选择+确认）
-    items.push({ label: this.L.delSessionEntry, action: "delete" });
-    for (const s of sessions) {
-      items.push({
-        label: "$(history) " + (s.name || s.preview || path.basename(s.file)),
-        description: s.cwd || undefined,
-        detail: s.time + "  ·  " + s.file,
-        action: "file",
-        file: s.file,
-      });
-    }
-    // 占位 busy 项已被完整 items 替换；无会话时仍留有操作入口（开始新会话/删除），不走 notice
-    picker.items = items;
-    dbgLog(`pickSession 内容就绪 ${items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
 
     // —— showQuickPick 语义平移为 createQuickPick：选中/取消等价，渲染链（switch/
     //    getMessages/refreshState）照旧，不许借本单顺手改 ——
@@ -622,6 +670,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       });
       picker.onDidHide(() => resolve(undefined)); // 用户取消
     });
+    keepAlive.dispose(); // 工单十九：pickerClosed 监听随 picker 一起收尸
     picker.dispose();
     if (!pick) return; // 用户取消 → 保持现状，首次输入消息时再启动 pi
     if (pick.busy) return; // 占位/空态项不可交互，兑底不落渲染链
@@ -1968,13 +2017,14 @@ async function listAllCached(): Promise<PiSessionProjection[]> {
   return listAllSlot.result;
 }
 
-/** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
- *  工单十三二刀-4/5：主路径改用 pi 公开 API SessionManager.listAll()（pi -r 同款，10 路
- *  并发全量解析，字段白拿，格式变更 pi 自己扛），按 cwd 的 samePath 过滤（pi 的 list 不做
- *  项目过滤）；刀 5 指纹缓存包在外——指纹命中直接复用上次 listAll 结果（免 700ms 全量解析），
- *  未命中才 listAll 并填缓存。展示层 mtime 缓存（key=file）照旧免重建。 */
-async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
-  const entries = await listAllCached();
+/** 投影→展示条目变换（cwd 过滤 + mtime 缓存复用 + 按最近使用排序 + 截断）。
+ *  工单十九从 listSessions 抽出：pickSession 秒开快路径要对缓存槽里的投影做**同一套**
+ *  变换，抽成纯函数保证快/慢两条路径的 scope 过滤与排序行为永远一致，不各写一份漂移。 */
+function toSessionInfos(
+  entries: PiSessionProjection[],
+  cwd?: string,
+  limit = 50
+): SessionInfo[] {
   const result: SessionInfo[] = [];
   for (const e of entries) {
     if (cwd && !samePath(e.cwd, cwd)) continue; // 只保留属于该项目的会话（pi 的 list 不做项目过滤）
@@ -1999,5 +2049,14 @@ async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
   }
   result.sort((a, b) => b.mtime - a.mtime);
   return result.slice(0, limit);
+}
+
+/** 列出历史会话，按最近使用排序；传入 cwd 则只保留属于该项目的会话（异步，工单十三）。
+ *  工单十三二刀-4/5：主路径改用 pi 公开 API SessionManager.listAll()（pi -r 同款，10 路
+ *  并发全量解析，字段白拿，格式变更 pi 自己扛），按 cwd 的 samePath 过滤（pi 的 list 不做
+ *  项目过滤）；刀 5 指纹缓存包在外——指纹命中直接复用上次 listAll 结果（免 700ms 全量解析），
+ *  未命中才 listAll 并填缓存。展示层 mtime 缓存（key=file）照旧免重建。 */
+async function listSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
+  return toSessionInfos(await listAllCached(), cwd, limit);
 }
 
