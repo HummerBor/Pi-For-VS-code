@@ -257,6 +257,14 @@ export interface StatusMsg {
   type: "status";
   text: string;
 }
+/** 压缩进行中（compaction_start→compaction_end 窗口）：webview 用 ⏳ 压缩标签压过 Working，
+ *  且 busy:false 不再清它——手动压缩不走 agent_start（空闲会话无 agent 事件），没有这条
+ *  消息压缩期间状态栏零反馈；用户实测压缩中发消息被 preflight 拒收，busy:false 连面板
+ *  的一次性 status 也一并抹掉，「正在压缩」提示消失事故的根治 */
+export interface CompactingMsg {
+  type: "compacting";
+  value: boolean;
+}
 export interface ModeMsg {
   type: "mode";
   text: string;
@@ -407,6 +415,8 @@ export interface UiStateMsg {
   /** busy 时的全量在途消息（liveSync 同款数据，webview 复用重定基逻辑） */
   live?: SessionMessage;
   busy: boolean;
+  /** 压缩进行中（同 CompactingMsg 真相；切回页签快照恢复压缩标签） */
+  compacting: boolean;
   /** busy 本轮实测耗时（同 BusyMsg.elapsedMs 口径） */
   elapsedMs?: number;
   modeText: string;
@@ -471,6 +481,7 @@ export type HostToWebview =
   | NoticeMsg
   | FillInputMsg
   | StatusMsg
+  | CompactingMsg
   | ModeMsg
   | QueuedAddMsg
   | QueuedDeliveredMsg

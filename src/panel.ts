@@ -426,6 +426,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       tabId,
       messages: [],
       busy: false,
+      compacting: false, // 空页签无压缩窗口；同 busy 口径必发，漏发在架构上不可能
       modeText: "",
       banner: null,
       queued: [],

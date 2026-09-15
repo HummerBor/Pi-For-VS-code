@@ -31,6 +31,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var toolEls = {}; var queuedItems = [];
   var liveMsg = null; var liveDiv = null; var pdet = null; var liveParts = null; var liveRTimer = null;
   var streaming = false; var busyTimer = null; var busyStart = 0; var queueN = 0;
+  // 压缩进行中（宿主 compaction_start→end 驱动，真相随 uiState 快照）：压过 Working 标签，
+  // 且 busy:false 不清它——压缩中发消息被 preflight 拒收时 busy:false 不该抹掉压缩提示
+  var compacting = false;
   var lastElapsed: number | null = null;
   var modeText = 'Auto';
   var pendingImages: any[] = []; var pendingFiles: any[] = [];
@@ -288,6 +291,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var h = Math.floor(m / 60); m = m % 60;
     return h + 'h' + (m ? m + 'm' : '');
   }
+  // 状态栏主标签：压缩中一律显示压缩提示（自动压缩发生在 run 中途，Working 会被它覆写；
+  // 手动压缩的空闲会话本就没有 Working）
+  function busyLabel(base) { return compacting ? '⏳ ' + L.compacting : base; }
   function setBusy(v, elapsedMs) {
     streaming = v;
     if (v) {
@@ -302,15 +308,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
-      statusEl.textContent = frames[0] + ' Working… 0s';
+      statusEl.textContent = busyLabel(frames[0] + ' Working… 0s');
       busyTimer = setInterval(function () {
         fi = (fi + 1) % frames.length;
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = frames[fi] + ' Working… ' + fmtDur(Date.now() - busyStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : '');
+        statusEl.textContent = busyLabel(frames[fi] + ' Working… ' + fmtDur(Date.now() - busyStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : ''));
       }, 120);
     } else {
       statusEl.classList.remove('busy');
       statusEl.textContent = '';
+      if (compacting) {
+        // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
+        statusEl.classList.add('busy');
+        statusEl.textContent = '⏳ ' + L.compacting;
+      } else
       // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
       // 同时入记录，切走再切回来能恢复 ⏱ 现场
       if (elapsedMs != null) {
@@ -320,6 +331,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
     }
     if (!v) { finalizeLive(); liveReset(); }
+  }
+  /** 压缩窗口开合（宿主 CompactingMsg）：true 直接接管状态栏——手动压缩是空闲会话里的
+   *  RPC 调用，全程无 agent 事件，没有这条压缩期间零反馈。false 时不主动清：streaming 时
+   *  busyTimer 会按新 flag 重写 Working，空闲时由后续 status/settled 流程收尾 */
+  function setCompacting(v) {
+    compacting = v;
+    if (v) {
+      statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
+      statusEl.textContent = '⏳ ' + L.compacting;
+    }
   }
 
   // 轻量 Markdown：代码块 / 标题 / 列表 / 行内 code / 粗体
@@ -772,7 +793,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function applyState(m) {
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
-    if (statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
+    // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
+    if (!compacting && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
     // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
     modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
@@ -1090,6 +1112,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       banner = m.banner;
       modeText = m.modeText || '';
       renderPending = m.messages; liveSyncPending = m.live || null; scheduleRender(); // 复用延后一拍：render→liveSync 同拍顺序不变
+      compacting = m.compacting === true; // 先落 flag 再 setBusy：压缩真相决定状态栏写压缩标签还是 Working
       setBusy(m.busy, m.elapsedMs);
       renderStatus();
       renderBanner(m.banner);
@@ -1106,6 +1129,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { followingEnd = true; input.value = m.text || ''; input.focus(); scroll(); } // 主动动作回底（工单十七要点 3）
     else if (m.type === 'status') setStatus(m.text);
+    else if (m.type === 'compacting') setCompacting(m.value);
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
@@ -1157,6 +1181,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 窗口期串显消除；真相由 uiState 回填（B 有排队/横幅会重建，本地激进清安全）
     statusEl.classList.remove('busy');
     statusEl.textContent = '';
+    compacting = false; // 本地清场同款：压缩标签真相由宿主 uiState 回填
     stopBtn.style.display = 'none';
     queueN = 0;
     queuedItems = [];

@@ -81,6 +81,10 @@ export class PiCore {
   private lastSessionName: string | null = null;
   /** 命令式应答标记：发出 prompt 后未等到 agent_start 前为 true（用于清除乐观 busy/免误导性中断提示） */
   private pendingPrompt = false;
+  /** 压缩进行中（compaction_start→compaction_end）：驱动 webview 状态栏「⏳ 正在压缩上下文」。
+   *  手动压缩不走 agent_start（空闲会话无 agent 事件），没有它压缩期间零反馈；且压缩中发消息
+   *  被 preflight 拒收时 sendPromptCore 的 busy:false 会清状态栏——webview 靠这条真相保住压缩标签 */
+  private compacting = false;
   /** 本轮 agent 运行起点（agent_start 时记录，settled 时算实测耗时）；0=无运行 */
   private runStartTs = 0;
   private lastSessionFile: string | null = null;
@@ -240,7 +244,9 @@ export class PiCore {
     client.onUiRequest = (req) => void this.handleUiRequest(req);
     client.onExit = (code, detail) => {
       // 刀6：进程没了 isStreaming 必为 false，busy 派生即假，无需清镜像；事件照发（webview 收尾）
+      this.compacting = false; // 压缩状态随进程消亡（重连后 compaction_end 不再来，不重置标签会永久卡住）
       this.post({ type: "busy", value: false });
+      this.post({ type: "compacting", value: false });
       this.dbg("busy=false (pi_exit)");
       this.post({ type: "status", text: this.L.piExitedPre + code + this.L.piExitedSuf + (detail ? this.L.seeNotify : "") });
       // 下一条消息前会自动重启 pi；把 stderr 尾巴透出，崩溃原因不再靠猜
@@ -407,6 +413,7 @@ export class PiCore {
         messages: msgs,
         ...(stripLive && this.liveMessage ? { live: JSON.parse(JSON.stringify(this.liveMessage)) } : {}),
         busy: this.busy,
+        compacting: this.compacting,
         ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
         modeText: this.modeBadgeText(),
         banner: this.banner,
@@ -1403,11 +1410,19 @@ export class PiCore {
       }
 
       case "compaction_start":
-        // start 事件不消费（工单六只显性化 end）。缺此 case 时会落 default 分支被当
-        // 未知事件透传「⚠ compaction_start: manual」假警告（2026-09-09 实测抓到）
+        // 压缩进行中状态标签：手动压缩是空闲会话里的 RPC 调用，全程无 agent_start/settled 事件，
+        // 没有它压缩期间状态栏零反馈；压缩中发消息被 preflight 拒收时 busy:false 也会把面板
+        // 的一次性 status 抹掉（用户实测「正在压缩」提示消失事故）。webview 用它压过 Working
+        // 并在 busy:false 时保住标签。start 事件的显性化横幅仍不做（工单六只显性化 end，
+        // 缺此 case 时会落 default 被当未知事件透传「⚠ compaction_start: manual」假警告）
+        this.compacting = true;
+        this.post({ type: "compacting", value: true });
         break;
 
       case "compaction_end": {
+        // 压缩窗口关闭：先落状态再走显性化，busy:false/settled 重绘按非压缩真相清标签
+        this.compacting = false;
+        this.post({ type: "compacting", value: false });
         // 自动压缩（threshold/overflow）成功 → 横幅显性化（工单六）。手动压缩已有
         // compactDone 通知不重复；aborted/willRetry 属未完成或将重试，静默等下一次 end
         if (e.reason !== "manual" && e.aborted !== true && e.willRetry !== true) {
