@@ -386,10 +386,15 @@ export class PiCore {
       // 刀5b：在途 assistant 消息（message_start 起就在 agent.state.messages 里，事件携带
       // 全量对象 in-place 更新）从重绘中剥掉——显示由 liveSync 重定基 + 后续 delta 增量续接。
       // 不剥的话快照画一遍、delta 再画一遍（用户实测「切回去一直重新开始思考/内容重复」）。
-      // 保守条件：busy + 尾部是 assistant 才剥；误剥（刚好完成的消息）由 settled 真相重绘自愈
-      const msgs = this.busy && this.liveMessage && all.length > 0 && all[all.length - 1].role === "assistant"
-        ? all.slice(0, -1)
-        : all;
+      // 保守条件：busy + 尾部是 assistant 才剥；误剥（刚好完成的消息）由 settled 真相重绘自愈。
+      // 工单十八回归修复（用户实测切页签后整段内容×2，jsonl 证实 pi 历史无重复 = 渲染层双画）：
+      // **live 与剥必须原子**——工具刚跑完的窗口期快照尾部是 toolResult（非 assistant）不剥，
+      // 但 live 原先仍下发 → applyLiveSync 把同一条 assistant 的 toolCall 重放成 live 块，
+      // 与 renderAll 刚画的历史工具行叠加 = 同段内容两遍。修：剥了才带 live，没剥不带
+      // （renderAll 已画全量无需重放；工具窗口期无文本 delta，不丢续接；下一条 assistant
+      // 开始生成时 newLive 重建）
+      const stripLive = this.busy && this.liveMessage && all.length > 0 && all[all.length - 1].role === "assistant";
+      const msgs = stripLive ? all.slice(0, -1) : all;
       // 页脚数据（含既有副作用：会话记账/横幅 re-arm）与消息快照同源拉取——
       // 原子化后不再发单独 state 消息，页脚字段直接进 uiState
       const foot = await this.collectState();
@@ -400,7 +405,7 @@ export class PiCore {
         type: "uiState",
         tabId: this.tabKey,
         messages: msgs,
-        ...(this.busy && this.liveMessage ? { live: JSON.parse(JSON.stringify(this.liveMessage)) } : {}),
+        ...(stripLive && this.liveMessage ? { live: JSON.parse(JSON.stringify(this.liveMessage)) } : {}),
         busy: this.busy,
         ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
         modeText: this.modeBadgeText(),
