@@ -403,17 +403,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postTabs();
     // 刀5：单一渲染上下文，新页签的一切旧现场都得显式清（刀2 时代每页签自带欢迎页 DOM，
     // 这项真空是刀5 引入的——用户实测「新建了会话但内容还是上一个的」）
-    this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
-    this.post({ type: "render", messages: [] });
-    this.post({ type: "queuedClear" });
-    this.post({ type: "banner", banner: null });
+    this.postEmptyUiState(id);
     // 立即起会话（刀4 freshTab→SessionManager.create）：模型/思考记忆当场恢复上屏，
     // 页脚不再显示「—」/「临时(未保存)」——与 t1 面板打开即 prewarm 同口径。
     // forceSession=true：新标签=新持久会话是本单铁语义，不受 sessionMode=ephemeral 影响
     this.ensureCore(id).ensureClient(true);
   }
 
-  /** 切换活动标签（刀5：切回即拉真相——postUiState 全量重发消息/busy/排队/模式/横幅） */
+  /** 工单十八：空页签的原子空快照——原先散发 state/render（部分分支还漏 queuedClear/banner/
+   *  busy:false），A 页签的 Working/排队/横幅残留到 B（串显/两套 DOM）。一条 uiState 打包
+   *  全部区域的空值，漏发在架构上不可能 */
+  private postEmptyUiState(tabId: string): void {
+    this.post({
+      type: "uiState",
+      tabId,
+      messages: [],
+      busy: false,
+      modeText: "",
+      banner: null,
+      queued: [],
+      model: null,
+      thinkingLevel: null,
+      sessionFile: null,
+      sessionName: null,
+      stats: null,
+    });
+  }
+
+  /** 切换活动标签（刀5：切回即拉真相——postUiState 原子快照全量重发消息/busy/排队/模式/横幅/页脚） */
   private handleTabSwitch(tabId: string): void {
     if (!this.tabMeta.has(tabId) || tabId === this.activeTabId) return;
     this.activeTabId = tabId;
@@ -425,8 +442,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       void core.postUiState();
     } else {
       // 没启动过 pi 的标签（含新标签）：页脚清空 + 欢迎页，不串显上个标签
-      this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
-      this.post({ type: "render", messages: [] });
+      this.postEmptyUiState(tabId);
     }
   }
 
@@ -451,18 +467,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.tabMeta.set(nid, { title: this.L.tabUntitled, busy: false });
         this.freshTabs.add(nid);
         this.activeTabId = nid;
-        this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
-        this.post({ type: "render", messages: [] });
-        this.post({ type: "queuedClear" });
-        this.post({ type: "banner", banner: null });
+        this.postEmptyUiState(nid);
         this.ensureCore(nid).ensureClient(true); // 同 handleTabNew：立即起会话恢复模型记忆
       }
       const next = this.cores.get(this.activeTabId);
       if (next?.clientRef?.running) {
         void next.postUiState(); // 刀5：切回即拉真相
       } else {
-        this.post({ type: "state", model: null, thinkingLevel: null, sessionFile: null, sessionName: null, stats: null });
-        this.post({ type: "render", messages: [] });
+        this.postEmptyUiState(this.activeTabId);
       }
     }
     this.postTabs();

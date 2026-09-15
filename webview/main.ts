@@ -726,7 +726,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
       else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
     }
-    for (var rq = 0; rq < queuedItems.length; rq++) addQueued(queuedItems[rq]);
+    // 工单十八：此处必须 addQueuedDom（纯 DOM）——addQueued 会 push 回 queuedItems 而循环
+    // 条件用同一个 length，排队非空时 rq 与 length 同步增长永真 = 死循环 + DOM 无限追加
+    // （用户实测：排队状态下插件卡死致 VS Code 关闭）
+    for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
     scroll();
   }
   function fmtSession(file, name) {
@@ -1049,6 +1052,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
+    else if (m.type === 'uiState') {
+      // 工单十八：原子快照——tabId 不符直接丢弃（连切竞态：慢到的旧页签快照不得覆盖新活动页签）
+      if (m.tabId !== activeTabId) return;
+      // 状态栏排队计数随快照同页签对齐（原 queueN 是上个页签的 queue_update 残留值）
+      queueN = (m.queued || []).length;
+      banner = m.banner;
+      modeText = m.modeText || '';
+      renderPending = m.messages; liveSyncPending = m.live || null; scheduleRender(); // 复用延后一拍：render→liveSync 同拍顺序不变
+      setBusy(m.busy, m.elapsedMs);
+      renderStatus();
+      renderBanner(m.banner);
+      // queuebar 原子重建：先置数组再重建 DOM（不再走 addQueued——它 push 回数组，会翻倍）
+      queuedItems = (m.queued || []).slice();
+      document.getElementById('queuebar').innerHTML = '';
+      for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
+      applyState(m);
+    }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
@@ -1102,6 +1122,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     activeTabId = tid; tabId = tid;
     liveReset();
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+    // 工单十八：本地立即清场（零延迟）——原子快照在途时不再挂着上个页签的 Working/排队，
+    // 窗口期串显消除；真相由 uiState 回填（B 有排队/横幅会重建，本地激进清安全）
+    statusEl.classList.remove('busy');
+    statusEl.textContent = '';
+    stopBtn.style.display = 'none';
+    queueN = 0;
+    queuedItems = [];
+    document.getElementById('queuebar').innerHTML = '';
     renderTabs();
   }
 

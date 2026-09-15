@@ -269,6 +269,15 @@ export interface QueuedAddMsg {
   fileCount?: number;
   codeInfo?: string;
 }
+/** 工单十八：uiState.queued 的项 payload（同 QueuedAddMsg 形状但无判别 type——
+ *  原子快照里它是嵌套数据不是独立消息） */
+export interface QueuedItemPayload {
+  qid: string;
+  text: string;
+  imageCount: number;
+  fileCount?: number;
+  codeInfo?: string;
+}
 export interface QueuedDeliveredMsg {
   type: "queuedDelivered";
   qid: string;
@@ -379,6 +388,33 @@ export interface BannerMsg {
   /** null = 收起横幅 */
   banner: BannerPayload | null;
 }
+/** 工单十八：切页签/真相重拉的原子快照——postUiState 原先连发 render/liveSync/busy/mode/
+ *  banner/queuedClear/queuedAdd 七条消息，webview 各区域各自更新，中间态混搭（消息区 B、
+ *  排队条/Working 还是 A）被切页签空分支漏发固化成永久态（用户实测「两个 DOM 结构」/串显）。
+ *  一条消息打包全部区域，webview 原子应用；tabId 戳根治连切竞态（快照无戳时慢到的旧页签
+ *  快照会覆盖新活动页签内容）——webview 收到非活动页签的快照直接丢弃 */
+export interface UiStateMsg {
+  type: "uiState";
+  tabId: string;
+  /** 全量消息快照（busy 且有在途消息时已剥尾部在途消息，刀 5b 同款保守条件） */
+  messages: SessionMessage[];
+  /** busy 时的全量在途消息（liveSync 同款数据，webview 复用重定基逻辑） */
+  live?: SessionMessage;
+  busy: boolean;
+  /** busy 本轮实测耗时（同 BusyMsg.elapsedMs 口径） */
+  elapsedMs?: number;
+  modeText: string;
+  banner: BannerPayload | null;
+  /** 排队项（镜像 payload，同 QueuedAddMsg 形状；webview 原子重建 queuebar） */
+  queued: QueuedItemPayload[];
+  /** 页脚（同 StateMsg 字段口径；client 未 running 时 model 等为 null） */
+  ver?: string;
+  model?: { id: string; name?: string; provider?: string } | null;
+  thinkingLevel?: number | null;
+  sessionFile?: string | null;
+  sessionName?: string | null;
+  stats?: { contextPercent?: number | null; cost?: number } | null;
+}
 /** 工单七：单个变更文件的 webview 展示信息（还原/diff 所需细节留在宿主，不进 webview） */
 export interface ChangesFileInfo {
   /** 绝对路径（webview 只取 basename 显示，tooltip 用全路径） */
@@ -444,7 +480,8 @@ export type HostToWebview =
   | BannerMsg
   | ChangesListMsg
   | TabsMsg
-  | LiveSyncMsg;
+  | LiveSyncMsg
+  | UiStateMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 

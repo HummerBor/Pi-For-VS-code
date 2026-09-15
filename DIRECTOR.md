@@ -39,6 +39,7 @@
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
 ### 工单十八（P0 越序，先于十七施工）：切页签状态串显 + 排队时 render 死循环致 VSC 崩溃
+> ✅ 已施工（2026-09-15 总监亲施，用户直令「一次性整好」升级为原子化方案），待用户实测
 
 **背景（2026-09-15 用户实测事故）**：A 页签插队后切到 B 页签，B 显示 A 的 Working/排队
 （「多个页签好像使用的是同一个 working」）；随后排队状态下插件卡死，VS Code 直接关闭。
@@ -80,6 +81,27 @@
 
 **不许顺手改**：sendPromptCore、steer 自愈、4s 兜底、还原边界、工单十七滚动域、
 queue_update 转正逻辑。
+
+**施工记录（2026-09-15 总监亲施，方案按用户拍板升级为原子化）**：
+1. 协议新增 `UiStateMsg`（tabId 戳 + messages/live/busy/elapsedMs/modeText/banner/queued/页脚
+   全区域一次打包）——postUiState 原先连发七条消息、webview 各区域各自更新、中间态混搭被
+   空分支漏发固化（串显/两套 DOM）的根治；queued 用独立 QueuedItemPayload（判别联合成员
+   带 type 不能嵌套复用）。
+2. piCore：refreshState 抽出 collectState（副作用保留：会话记账/横幅 re-arm），postUiState
+   改发单条 uiState（页脚同源拉取，不再单独发 state）。
+3. panel：postEmptyUiState(tabId) 收口四处空分支（state/render/queuedClear/banner 空值一条
+   消息原子下发，漏发在架构上不可能）。
+4. webview：uiState 分支原子应用（tabId 不符丢弃；queueN 随快照对齐；queuebar 数组先置后
+   addQueuedDom 重建）；activateTab 本地立即清场（Working 文本/stopBtn/queuebar，快照在途
+   不再挂上个页签的东西）；renderAll 死循环改 addQueuedDom（P0-1）。
+5. **签单表述修正**：签单时写的「快照无 tabId 戳会被连切竞态覆盖」过虑——实测查证 webview
+   message 路由层（main.ts:1176-1180）对一切带标消息先过滤，刀5 打标机制已挡住慢快照；
+   uiState 自带 tabId 与 TabTag 同名同值，检查保留为三保险。
+6. 验证：compile 全绿；test:detail 27/27、patchRevert 12/12；0.0.92 测试包已重打。
+
+**待实测（对齐验收标准）**：①A 插队后切 B/新建/关标签：无 Working/排队/横幅残留、不卡死
+②A busy 中反复切页签 ≥10 次：流畅、各页签现场正确 ③排队非空收 render：queuebar 正常重建
+无重复 ④旧回归：切换/新会话/压缩横幅/权限徽章/页脚模型与会话名照旧。
 
 ### 工单十七：滚动跟随对齐 pi 原生（上滑暂停跟随，回底自动恢复）
 

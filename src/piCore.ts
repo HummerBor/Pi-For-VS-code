@@ -390,26 +390,38 @@ export class PiCore {
       const msgs = this.busy && this.liveMessage && all.length > 0 && all[all.length - 1].role === "assistant"
         ? all.slice(0, -1)
         : all;
-      this.post({ type: "render", messages: msgs });
-      if (this.busy && this.liveMessage) {
-        this.post({ type: "liveSync", message: JSON.parse(JSON.stringify(this.liveMessage)) });
-      }
-      this.post({ type: "busy", value: this.busy, ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}) });
-      // 权限模式徽标：session_start 的 setStatus 只推一次，webview 重建/切页签后不会重发，
-      // 这里用记住的值/ mode.json 兑底补发，否则徽标永远空白
-      this.post({ type: "mode", text: this.modeBadgeText() });
-      // 压缩横幅随真相重发：横幅状态在宿主（工单六），webview 重建后不丢
-      this.post({ type: "banner", banner: this.banner });
-      // 排队真相重发：先清后发，webview 的 queuebar 由 queuedAdd 重建（切回页签不丢排队现场）
-      this.post({ type: "queuedClear" });
-      for (const q of this.queued) {
-        this.post({ type: "queuedAdd", qid: q.qid, text: q.text, imageCount: q.imageCount, codeInfo: q.codeInfo });
-      }
+      // 页脚数据（含既有副作用：会话记账/横幅 re-arm）与消息快照同源拉取——
+      // 原子化后不再发单独 state 消息，页脚字段直接进 uiState
+      const foot = await this.collectState();
+      // 工单十八：原子快照。原先连发 render/liveSync/busy/mode/banner/queuedClear/queuedAdd
+      // 七条消息，webview 各区域各自更新，切页签空分支漏发时中间态混搭被固化（串显/两套 DOM）。
+      // tabId 戳：webview 收到非活动页签快照直接丢弃（连切竞态：慢到的旧快照覆盖新页签内容）
+      this.post({
+        type: "uiState",
+        tabId: this.tabKey,
+        messages: msgs,
+        ...(this.busy && this.liveMessage ? { live: JSON.parse(JSON.stringify(this.liveMessage)) } : {}),
+        busy: this.busy,
+        ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
+        modeText: this.modeBadgeText(),
+        banner: this.banner,
+        queued: this.queued.map((q) => ({
+          qid: q.qid,
+          text: q.text,
+          imageCount: q.imageCount,
+          ...(q.codeInfo !== undefined ? { codeInfo: q.codeInfo } : {}),
+        })),
+        ver: foot?.ver,
+        model: foot?.model ?? null,
+        thinkingLevel: foot?.thinkingLevel ?? null,
+        sessionName: foot?.sessionName ?? null,
+        sessionFile: foot?.sessionFile ?? null,
+        stats: foot?.stats ?? null,
+      });
     } catch {
       // ignore
     }
-    await this.refreshState();
- }
+  }
 
   private async dispatchWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
@@ -1099,8 +1111,31 @@ export class PiCore {
   /** 拉取当前模型/思考等级/token 用量并更新头部状态栏；
    *  public：adapter 的 webview 重建恢复路径（resolveWebviewView）也调用 */
   async refreshState(): Promise<void> {
+    const foot = await this.collectState();
+    if (!foot) return;
+    this.post({
+      type: "state",
+      ver: foot.ver,
+      model: foot.model,
+      thinkingLevel: foot.thinkingLevel,
+      sessionName: foot.sessionName,
+      sessionFile: foot.sessionFile,
+      stats: foot.stats,
+    });
+  }
+
+  /** 工单十八：拉取页脚数据 + 既有副作用（会话记账/横幅 re-arm）。从 refreshState 抽出——
+   *  postUiState 原子化后 uiState 需同源页脚数据，不再靠单独 state 消息拼 */
+  private async collectState(): Promise<{
+    ver: string;
+    model: { name?: string; provider?: string; id: string } | null;
+    thinkingLevel: number | null;
+    sessionName: string | null;
+    sessionFile: string | null;
+    stats: { contextPercent: number | null; cost: number } | null;
+  } | null> {
     const client = this.client;
-    if (!client?.running) return;
+    if (!client?.running) return null;
     try {
       const st = await client.getState();
       let stats: GetSessionStatsResult | null = null;
@@ -1143,8 +1178,7 @@ export class PiCore {
           if (this.banner?.kind === "contextWarning") this.setBanner(null);
         }
       }
-      this.post({
-        type: "state",
+      return {
         ver: this.version,
         model: st?.model
           ? { name: st.model.name, provider: st.model.provider, id: st.model.id }
@@ -1158,9 +1192,10 @@ export class PiCore {
               cost: stats?.cost ?? 0,
             }
           : null,
-      });
+      };
     } catch {
       // ignore
+      return null;
     }
   }
 
