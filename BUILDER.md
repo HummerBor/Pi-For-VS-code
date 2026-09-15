@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-14 工单十七施工回报（滚动跟随对齐 pi 原生，待用户实测）
+最后更新：2026-09-15 工单二十一施工回报（compactionSummary 折叠块，待用户实测）
 
 ## 工单十七施工回报（滚动跟随，一笔提交 fdc32aa，待用户实测）
 
@@ -350,3 +350,28 @@ removeComments 管不到 vite 链路；经用户确认「有必要的话可以�
 
 **待实测**（需真 vsix 环境）：本地装包开面板——webview 经 minify 后行为应无差异，
 重点过一遍：发消息/中断/steering/历史会话/还原按钮。
+
+## 工单二十一施工回报（09dbea2，2026-09-15）
+
+**改动**（2 文件，仅 i18n.ts + webview/main.ts；协议零改动）：
+1. **webview/main.ts renderAll 补 `role==='compactionSummary'` 分支** → `makeCompaction(m)`
+   折叠块：复刻 makeThink 的 details/summary 原生折叠交互，样式走现有 .think/.think-body token；
+   默认收起（details 不带 open），收起态文案含 tokensBefore（toLocaleString 千分位）；点击展开用
+   renderRich 渲染 m.summary（markdown，走既有 md 渲染）+ linkify（renderAll 尾部 15 条窗口内生效）。
+2. **i18n.ts 新增 compactionSummary 一条，中英各一份**（webview 侧 L.xxx，非原生对话框，不进 NATIVE_KEYS）。
+   收起态文案：「⌄ 上下文已压缩，此前历史已折叠为摘要（原 {n} tokens）」/ 英文对应。
+3. **pi 原生查重已核**：pi TUI `CompactionSummaryMessageComponent`（interactive-mode.js:2934）就是
+   `[compaction]` 标签 + collapsed/expanded 两态，收起态 `Compacted from {tokens} tokens`、展开态含摘要——
+   壳对齐该语义，非新造能力；不读 jsonl 不加「完整历史」入口（工单边界照守）。
+
+**字段来源已实测确认**（对账 pi 源码 + aaaxcx 会话 jsonl）：compactionSummary 消息 =
+ `{role:"compactionSummary", summary, tokensBefore, timestamp}`（messages.js createCompactionSummaryMessage）；
+ aaaxcx 会话 2026-09-14T08-42-30…jsonl 内 `type:"compaction"` 条目 tokensBefore=157889、summary 为
+ markdown 长文（renderRich 可正常渲染）。恢复会话时 pi buildContextEntries 把压缩点前历史叠成这条消息。
+
+**验证**：npm run compile 全绿（typecheck ✓ vite ✓ tsc ✓）；toolDetail 27/27、patchRevert 12/12 过；
+protocol.ts 零改动；单笔提交无混笔。
+
+**待实测**（需真 vsix 环境，对齐验收标准）：恢复 aaaxcx 那个会话——压缩边界处出现折叠块、
+收起态显「原 157,889 tokens」、展开可见摘要正文、其前用户消息按 pi 语义不显示（折叠块即边界声明）；
+新开对话发长任务触发手动 /compact 后 settled 重绘同样出折叠块、工单六横幅照旧；切页签后恢复同显。

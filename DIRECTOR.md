@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-15 验收循环：工单二十代码验收通过（待用户装包实测）；追认两笔回归修复
-> 9594ba7/819a883（✅活 13，BUILDER 留痕缺失记档）。下一单=工单二十一（pi 未开工）
+> 最后更新：2026-09-15 第二轮验收：工单二十一代码验收通过（待用户实测）；追认 892ccbf
+> 胶囊滞留修复（✅活 14，直令无留痕已三犯——升格为硬要求）。无待施工工单，等用户实测反馈
 
 ## 施工工单（按序执行）
 
@@ -65,7 +65,14 @@ vite 构建产物 dist/webview/main.js 因 `minify: false` 保留 `//#region` �
 out/*.js 与 dist/webview/main.js 中 grep 不到源码注释关键词
 （如「工单十六」「steering 自愈」「兜底」）；面板装包实测行为正常（本地 vsix 手动装）。
 
-### 工单二十一：压缩边界可见化——compactionSummary 消息渲染（2026-09-15 用户直令）
+### 工单二十一：压缩边界可见化——compactionSummary 消息渲染（2026-09-15 用户直令）——代码验收通过（总监 09-15），待用户实测后结单
+
+> **总监验收（2026-09-15）**：compile 全绿 + test:detail 27/27 + test:revert 12/12 复跑 ✓；
+> makeCompaction 复刻 makeThink 的 details/summary 折叠、样式走 .think token、ES5 var
+> 风格保持（函数体 grep 3 处 var 零 let/const）✓；i18n 中英双语各一份、不硬编码 ✓；
+> 协议零改动（stat 仅 i18n.ts+webview/main.ts）✓；字段实证：aaaxcx jsonl 内
+> tokensBefore:157889 坐实 ✓；产物含 makeCompaction ✓。剩余：用户装包恢复 aaaxcx
+> 会话实测折叠块 + /compact 触发场景。
 
 **背景**（2026-09-14 aaaxcx 会话实测，用户报告「历史里只看到一条继续」）：该会话 11:17
 触发过 pi 自动压缩（threshold：glm-5.3-flash 窗口 128k − reserve 16384，估算 157,889 超
@@ -129,6 +136,13 @@ patchRevert/steering 自愈等守卫；不读 jsonl、不加「查看完整历�
   勿三犯**。已知取舍（记录不立项）：suppressScroll 在「已在底时程序化拉底不触发 scroll
   事件」下残留 true，用户首次上滑事件被吞一次（低频：流式中拉底多伴内容增长；若实测
   出现「上滑要滚两次」再立项）
+- ✅活 14（09-15 追认，**留痕违规已三犯，升格硬要求**）：892ccbf（关文件后代码上下文胶囊
+  滞留）——onDidChangeVisibleTextEditors 监听 + activeTextEditor 可见性守卫，机制成立：
+  焦点落非编辑器视图时 activeTextEditor 滞留为已关编辑器且 change 事件不触发，关 tab 必触发
+  visibleTextEditors 变化，不在可见列表即清上下文；复用 selTimer 防抖无新定时器；
+  守卫修复「下条消息静默附已关文件」的正确性风险，批准。**硬要求（三犯生效）：此后一切
+  用户直令修复，提交同时必须在 BUILDER.md 留痕（一句改动面+一句验证即可），总监验收时
+  无留痕一律记违规并打回补痕——这不是文牍主义，是验收对账的唯一入口**
 
 > 机制：pi 请示写在 BUILDER.md → 总监在此裁决 → pi 以此为准执行并从请示区清除。
 > 标记：✅活 = 仍约束后续施工；✅史 = 已执行完（存 归档.md）。
