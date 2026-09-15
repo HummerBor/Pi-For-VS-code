@@ -16,6 +16,8 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 - **No terminal needed**: pi is installed with one click from the panel and launched in the background — you just describe the task; keys, models and sessions are clicks too
 - **Lightweight & fast**: a webview driving the pi engine in-process (no subprocess remote-control) — streaming at terminal TUI speed, no Electron nesting — happy to stay open all day
+- **Multi-tab parallel sessions**: run several conversations at once, each with its own busy state; scroll up mid-stream to read history without being yanked back
+- **Queue you can take back**: messages sent while pi is working queue up automatically — take any of them back to the editor with one click, tweak and resend
 - **Customizable**: icon, tips, themes — all just strings to edit; reload and done
 - **Change review**: when pi finishes a run, the panel lists exactly the files it touched this run — open a native diff in one click, or revert a file whole if you don't like it (your own uncommitted work is never touched). The confidence to run in Auto mode
 - **Local-first data**: session history and credentials stay on your machine, no cloud, no telemetry
@@ -33,10 +35,6 @@ Every existing option has its own kind of heaviness: **Codex** makes my machine 
 ## Built with itself
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
-
-## Roadmap
-
-- Multi-tab parallel sessions in the panel
 
 Requests or bugs welcome at [Issues](../../issues). Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
 
