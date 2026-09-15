@@ -297,3 +297,27 @@ compile 全绿；listAll 真目录实测 504-515ms（80 会话）。0.0.90 测�
 ICON_PATHS 新增 trash（stroke 风格与现有图标一致）、取回按钮 ico('back')→ico('trash')、
 back 键删除（唯一调用点已换，避免死数据）；实现处注释留痕「功能不变仍是取回，别改行为」。
 compile 全绿。工单十六同日结单（用户实测「可以撤回效果不错」），全录迁归档.md 9.11。
+
+## 工单十九施工回报（80f1d1f，2026-09-15）
+
+**改动**（纯 panel.ts，+93/−34）：
+1. **pickSession 秒开快路径**（工单定案照做）：`listAllSlot` 有槽 → 立即用上次结果弹列表
+   （无 loading 占位），后台 `listAllCached()` 做指纹校验——命中（返回引用 === 槽内 result）
+   即结束；未命中则内部已重算 listAll 入槽，**原地更新同一 picker 的 items**，不重弹不重置
+   选中，`activeItems` 保持同 file 项（验收点 3）。无槽真首次 → 占位 busy 路径照旧（验收点 4）。
+2. **toSessionInfos 抽函数**：listSessions 的「投影→展示条目」变换（cwd 过滤+mtime 缓存+排序
+   +截断）抽成纯函数，秒开快路径与占位慢路径共用——scope 过滤/排序行为由同一份代码保证
+   不漂移（工单注意事项逐字落实）。
+3. **pickerClosed 守卫**：onDidHide 置位，用户关掉选择器后后台刷新不再碰已 dispose 的 picker；
+   后台刷新 catch 吞错维持旧列表（不打扰用户）。keepAlive 监听随 picker 一起收尸。
+
+**边界遵守**：指纹算法（FNV-1a/walk）、mtime 缓存、预热链路、deleteSessionPick、switchSession
+渲染链全未动；piCore/webview 零改动（纯 panel.ts）。 dbgLog 加了两条计时点（缓存秒开/后台刷新）。
+
+**compile 全绿**（vite ✓ tsc --noEmit ✓）。单笔提交 80f1d1f，无混笔。
+
+**待实测**（需真 vsix 环境）：
+- ①会话已加载状态点历史：列表毫秒级出现，无「正在加载会话…」
+- ②新会话产生后再点历史：列表反映最新，已打开的 QuickPick 不闪不重弹
+- ③刷新完成前已选中某项：选中保持（activeItems 同 file 项）
+- ④冷启动首次点历史：照旧占位→填充
