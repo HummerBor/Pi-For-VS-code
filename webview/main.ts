@@ -226,11 +226,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // TUI 用 `next === maxScrollTop` 精确等值，DOM 里给 48px 容差：①DOM 内容增长不触发 scroll
   // 事件，程序化拉底后有像素/取整容差；②流式内容高频增长，精确等值会把跟随频繁误判为暂停
   var followingEnd = true;
+  // 工单十九回归修复终版（替代两版被 revert 的 rAF 方案）：读写交错每帧两次强制布局
+  // （layout thrashing）比不修还卡。终版思路：程序化滚动不判定，用户滚动才判定——
+  // scroll() 拉底前压 suppressScroll 标志，本标志的 scroll 事件直接跳过（零布局读）；
+  // 非程序化滚动（用户拖滚动条/滚轮/触摸）才读一次布局判 followingEnd。流式时 delta
+  // 改 DOM + 拉底全程零读布局，钉底同步无延迟；在底时误判定结果恒 true 无害
+  var suppressScroll = false;
   root.addEventListener('scroll', function () {
+    if (suppressScroll) { suppressScroll = false; return; }
     followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
   }, { passive: true });
   // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
-  function scroll() { if (followingEnd) root.scrollTop = root.scrollHeight; }
+  function scroll() {
+    if (!followingEnd) return;
+    suppressScroll = true;
+    root.scrollTop = root.scrollHeight;
+  }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
   function renderStatus() { modeBadge.textContent = modeText; }
 
