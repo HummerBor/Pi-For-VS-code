@@ -231,10 +231,16 @@ export class PiClient {
     return this.ready().then(
       () =>
         new Promise<any>((resolve, reject) => {
+          // preflight ok=false 不再当场 reject 通用文案：pi 的 prompt() 在 preflight 失败时
+          // 先调 preflightResult(false) 再 throw 真实原因（压缩中/已在运行/无模型/无 key……
+          // agent-session.js prompt() 的 catch 结构），让 rejection 把真错误带上来。
+          // 事故教训：通用「pi 拒绝了该消息（preflight rejected）」把「压缩进行中」盖掉，
+          // 用户无法判断会话状态（2026-09-15）。ok=true 仍验收即回（RPC 时序契约不变）
+          let preflightOk: boolean | null = null;
           const opts: any = {
             preflightResult: (ok: boolean) => {
+              preflightOk = ok;
               if (ok) resolve(undefined);
-              else reject(new Error("pi 拒绝了该消息（preflight rejected）"));
             },
           };
           if (steer) opts.streamingBehavior = "steer";
@@ -242,9 +248,12 @@ export class PiClient {
           if (images && images.length) {
             opts.images = images.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
           }
-          // 验收后的失败走事件流（rpc.md 契约）；prompt() 自身若再 reject，
-          // 外层 Promise 多半已 resolve——重复 reject 是 no-op，.catch 同时防未处理异常
-          this.session.prompt(text, opts).catch(reject);
+          // 验收后的失败走事件流（rpc.md 契约）；resolve 兜底只在 preflight 回调从未触发时
+          // 生效（现版 pi 源码不可达；若 ok=false 且 promise 反常 resolve，宁挂起不伪造成功）
+          this.session.prompt(text, opts).then(
+            () => { if (preflightOk === null) resolve(undefined); },
+            (err: unknown) => reject(err instanceof Error ? err : new Error(String(err)))
+          );
         })
     );
   }

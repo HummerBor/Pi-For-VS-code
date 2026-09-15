@@ -780,7 +780,11 @@ export class PiCore {
       this.pendingPrompt = false;
       this.post({ type: "busy", value: false });
       this.dbg("busy=false (prompt_send_fail: " + String(err?.message ?? err).slice(0, 120) + ")");
-      this.post({ type: "notice", text: this.L.sendFail + (err?.message ?? err) });
+      // 真错误透传（piClient 不再吞成通用文案）后的友好映射：压缩中拒收是日常操作，
+      // pi 原文是英文长句，直接给结论
+      const raw = String(err?.message ?? err);
+      const failMsg = /compaction is in progress/i.test(raw) ? this.L.rejectedCompacting : raw;
+      this.post({ type: "notice", text: this.L.sendFail + failMsg });
       // 工单十八补刀（用户实测「queuebar 2 条 vs 排队 1 条」）：乐观入队失败必须回滚——
       // 镜像/queuebar 是先画的（气泡先行），prompt/steer 失败时 pi 队列里根本没有这条，
       // 不回滚就是幽灵项：计数与 queuebar 永久分叉（镜像只增不减病灶的最后一处）

@@ -149,6 +149,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     compactTooSmall: "上下文占比很小，无需压缩",
     compactAlready: "上下文已压缩过，无需重复",
     compactFail: "⚠ 压缩失败: ",
+    // preflight 真错误透传（piClient 不再吞成通用文案）后的友好映射：压缩中拒收是日常操作
+    rejectedCompacting: "上下文压缩进行中，等它结束再发",
     cmdCompact: "$(output) 手动压缩上下文 (compact)…",
     cmdCompactDetail: "上下文快满时手动压缩，可附加说明",
     compactPrompt: "压缩提示（可选，直接回车跳过）",
@@ -529,6 +531,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     compactTooSmall: "Context is small — nothing to compact",
     compactAlready: "Context already compacted",
     compactFail: "⚠ Compaction failed: ",
+    rejectedCompacting: "Compaction in progress — wait for it to finish, then resend",
     cmdCompact: "$(output) Compact context manually…",
     cmdCompactDetail: "Compact when context is nearly full; optional note",
     compactPrompt: "Compaction note (optional, press Enter to skip)",
