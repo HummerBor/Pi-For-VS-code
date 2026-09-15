@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-15 第二轮验收：工单二十一代码验收通过（待用户实测）；追认 892ccbf
-> 胶囊滞留修复（✅活 14，直令无留痕已三犯——升格为硬要求）。无待施工工单，等用户实测反馈
+> 最后更新：2026-09-15 签工单二十二（流式平滑：GLM 快速生成时插件蹦段 vs TUI 逐字，
+> 实证链已写进工单）；工单二十/二十一仍待用户装包实测
 
 ## 施工工单（按序执行）
 
@@ -37,8 +37,6 @@
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
-
-## 施工工单（按序执行）
 
 ### 工单二十：vsix 去注释瘦身（2026-09-15 用户直令）——代码验收通过（总监 09-15），待装包实测后结单
 
@@ -106,6 +104,48 @@ patchRevert/steering 自愈等守卫；不读 jsonl、不加「查看完整历�
 展开可见摘要正文，其前的用户消息仍按 pi 语义不显示（折叠块即边界声明）；新开对话发
 长任务触发手动 /compact 后，settled 重绘同样出现折叠块，横幅照旧；
 `npm run test:detail` `npm run test:revert` 不回归。
+
+### 工单二十二：流式平滑——delta 攒批帧内重放（打字机 drain），2026-09-15 用户实测直报
+
+**现象**：同模型（glm-5.3）pi TUI 里慢速快速都逐字流出，插件里一段一段蹦。
+
+**总监实证链（2026-09-15，签单前置查，施工方勿重查）**：
+1. **provider 不背锅**：直打智谱 coding 端点（scripts/test-glm-stream.mjs，留存备诊断），
+   glm-5.3 流式 55 块全是 1~2 字（均值 1.5），块间隔 0ms——SSE 细粒度；首 token 等
+   4.9s（reasoning 阶段），之后 80 字 1.2s 倾泻。DS 慢所以逐 delta 逐帧≈逐字观感；
+   GLM 快所以同一机制下每帧积压多字 → 观感差异根源
+2. **piCore 不背锅**：message_update 分支每条 delta 即时 post（piCore.ts:1309 起，
+   text_delta→delta 无节流）
+3. **webview 病灶坐实**：appendDelta（main.ts:524）每条 delta **立即** streamTick+
+   scroll——TUI requestRender 同样每事件直渲但终端逐笔 write 所以逐字；webview 的
+   postMessage 传输本身有合批（burst 到达的 N 条 delta 同一事件循turn处理完，浏览器
+   一帧只画一次）→ GLM burst（实测 gap 178ms 后连发多块）每帧一跳 = 「一段一段」
+4. **死代码佐证**：scheduleStream（main.ts:521，100ms 节流 timer）定义了但**全文件零调用**
+   ——历史上有人预感到要节流，接线从未发生
+5. **pi 原生查重（三处）**：TUI render 链实查（interactive-mode.js:2799 requestRender
+   每事件直调 + tui bundle doRender 同步写终端），**无打字机/无帧平滑层**——壳做平滑
+   不是重复 pi 原生，是补偿 webview 传输合批，理由成立
+
+**改动**（仅 webview/main.ts，协议零改动）：
+1. text delta 改攒批 drain：appendDelta 只入 buffer（p.buf += t）+ 调度 drain（rAF 或
+   ≤33ms timer，选型理由写回报）；drain 每 tick 用现有 streamTick 逻辑从 doneLen 起渲
+   预算内字符——预算自适应（如 max(2, ceil(待渲字数/8))）：慢速 DS 每 tick 1~2 字＝
+   逐字观感，快速 GLM 也能在数十 ms 内追平不滞留
+2. scheduleStream 死代码回收：改造为 drain 调度器或删除（删除则注释留痕「曾为未接线的
+   100ms 节流」），别留死代码
+3. **收尾必须 flush**：message_end/settled/newLive/applyLiveSync 重定基时把未渲 buffer
+   全量渲完或丢弃（重定基丢弃，结束渲完）——别让最后一截字卡在 buffer 里
+4. thinking delta（appendThink）同病灶但本单**不动**（范围锁死；若实测思考块也明显蹦
+   段再签补刀）
+
+**边界**：不碰 scroll/工单十七 suppressScroll（drain 的 scroll() 调用点照旧走 scroll()）；
+不碰 busy 禁整页重绘红线；ES5 var 风格、strict:false 零报错；不碰 piCore/协议；
+markdown fence 语义（streamTick 的代码块边界逻辑）零改动——drain 只是改「何时调用它」
+不改「它怎么算」。
+
+**验收**：npm run compile 全绿 → 装包实测：①glm-5.3 快速生成观感连续（不再一段一段），
+收尾无缺字 ②DS 慢速回归无退化 ③流式中上滑/回底（工单十七现场）不复发 ④流式不卡顿
+（工单十九现场不复发——drain 每帧 DOM 写次数应≤现状）⑤toolDetail/patchRevert 不回归。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
