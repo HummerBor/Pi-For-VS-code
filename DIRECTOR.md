@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-15 签工单二十二（流式平滑：GLM 快速生成时插件蹦段 vs TUI 逐字，
-> 实证链已写进工单）；工单二十/二十一仍待用户装包实测
+> 最后更新：2026-09-15 事故修复三笔验收通过（压缩标签/版本号自证/preflight 透传，见文末账）；
+> 工单二十/二十一仍待装包实测项：二十一的折叠块（恢复 aaaxcx）未报
 
 ## 施工工单（按序执行）
 
@@ -162,6 +162,24 @@ markdown fence 语义（streamTick 的代码块边界逻辑）零改动——dra
 收尾无缺字 ②DS 慢速回归无退化 ③**长会话实测（主验收场）**：本工作区长会话
 （jsonl 数百 KB 级）流式观感连续 ④流式中上滑/回底（工单十七现场）不复发 ⑤流式不卡顿
 （工单十九现场不复发——drain 每帧 DOM 写次数应≤现状）⑥toolDetail/patchRevert 不回归。
+
+## 事故修复账（2026-09-15，用户同场指挥下修复，非工单流程）——代码验收通过（总监 09-15）
+
+> 三笔均为当日本会话修复，验收证据为 grep+compile 实证（非 commit message）：
+>
+> | commit | 修什么 | 验证命中 |
+> | --- | --- | --- |
+> | a872a02 | 压缩中标签一等状态化（CompactingMsg 三处同步 + busy:false 不清标签 + uiState 快照恢复） | protocol ×3 / piCore ×8 / panel ×2 / webview ×12；用户实测压缩期间标签可见（「压缩测速正常」）✓ |
+> | 20c8947 | package 自动 bump patch——同版本号覆盖打包致装旧包无法自证（事故：旧 0.0.93 vsix 被覆盖，用户测了数小时旧代码） | package.json:125 ✓ AGENTS.md 命令表已修订 ✓；0.0.94 装包自证可行 |
+> | df86ec1 | preflight 拒收透传真实原因（ok=false 等 session.prompt rejection，不再吞成通用文案；压缩中拒收给友好映射） | piClient preflightOk ✓ / i18n 中英 ✓ / piCore 映射 ✓；steer 自愈正则仍命中真错误原文（already processing/streamingBehavior）✓ |
+>
+> **同场定位结论（留证）**：`Provider finish_reason: error` = OpenRouter 服务端上游故障
+> （pi-ai mapStopReason 对 SSE finish_reason:"error" 的直译），TUI 不经插件也报同错——
+> 插件无责；多会话同时报错是共享上游的相关性，会话间零因果（独立进程/连接）。
+>
+> **连带观察（待用户定夺，未签发）**：模型报错自动 fork 回退会在会话列表产生分支副本
+> （104→145→151 链，pi 原生 Threaded 展示）——用户困惑「这段会话有两个」。是否要在
+> 回退 notice 里说明「已另存分支」或在列表标注分支来源，等产品口径。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
