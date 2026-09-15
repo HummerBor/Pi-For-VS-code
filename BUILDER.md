@@ -321,3 +321,32 @@ compile 全绿。工单十六同日结单（用户实测「可以撤回效果不
 - ②新会话产生后再点历史：列表反映最新，已打开的 QuickPick 不闪不重弹
 - ③刷新完成前已选中某项：选中保持（activeItems 同 file 项）
 - ④冷启动首次点历史：照旧占位→填充
+
+## 工单二十施工回报（287bb04，2026-09-15）
+
+**改动**（2 文件，+6/−2）：
+1. tsconfig.json 加 `"removeComments": true` → out/*.js（宿主侧产物链）不再携带源码注释
+2. vite.config.mts `minify: false→true` → dist/webview/main.js（webview 侧产物链）去注释。
+   选型依据：esbuild 没有「只去注释、不压缩」的独立开关（legalComments 只管 legal 类，
+   源码普通注释在 minify:false 下实测保留）；原 `minify: false` 无注释说明存在理由，
+   产物是 CSP nonce 注入的内联脚本且不开 sourcemap，可读性无调试收益——连同注释、
+   region 标记与体积一并解决
+
+**中途用户纠偏留痕**：施工中曾自认「minify 超出指令范围」回退为 false，随后实测证伪——
+minify:false 时 webview 产物带 12 处真实源码注释（含「工单六/七」内部信息），且
+removeComments 管不到 vite 链路；经用户确认「有必要的话可以加上」后恢复 true。
+
+**验证**：
+- `npm run compile` 全绿（typecheck ✓ vite ✓ tsc ✓）
+- 0.0.93 测试包解包：注释关键词（工单十/steering 自愈/兜底/事故）+ 行首注释语法零命中；
+  唯二命中均为误报/工具元数据——`findFiles("**/node_modules/**")` 的 glob 字符串、
+  指向 .map 的 `sourceMappingURL`（map 本身被 .vscodeignore 排除不随包，本地 F5 依赖，不动）
+- 尺寸：piCore.js 84980→52533、panel.js 99205→72741、main.js 92178→65150；
+  vsix 解包总 399075→291645（−27%）
+- README_EN.md 在包内（按用户裁决保留，readme.md 引用未断）
+
+**边界遵守**：源码注释一字未动；.vscodeignore 文档排除项未动；单笔提交，DIRECTOR.md
+（总监签发 hunk）留在工作区未混入。
+
+**待实测**（需真 vsix 环境）：本地装包开面板——webview 经 minify 后行为应无差异，
+重点过一遍：发消息/中断/steering/历史会话/还原按钮。
