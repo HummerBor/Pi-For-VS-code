@@ -38,6 +38,49 @@
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
+### 工单十八（P0 越序，先于十七施工）：切页签状态串显 + 排队时 render 死循环致 VSC 崩溃
+
+**背景（2026-09-15 用户实测事故）**：A 页签插队后切到 B 页签，B 显示 A 的 Working/排队
+（「多个页签好像使用的是同一个 working」）；随后排队状态下插件卡死，VS Code 直接关闭。
+
+**根因（总监预查完毕，勿重查）**：
+
+1. **卡死元凶——renderAll 死循环**（webview/main.ts:717）：
+   `for (var rq = 0; rq < queuedItems.length; rq++) addQueued(queuedItems[rq]);`
+   addQueued（:397）push 回 queuedItems 而循环条件用同一个 length——排队非空时 rq 与
+   length 同步增长永真 → 无限循环 + DOM 无限追加 → webview 卡死拖垮窗口。任何 render
+   消息（切页签空分支的 render[]、postUiState 重绘、webviewReady）都可引爆。
+2. **串显缺口——切页签空分支漏发清场消息**（panel.ts:406/:428/:454/:464 四处）：
+   `state null + render []` 只有两样，漏 `busy:false` / `queuedClear` / `banner null` →
+   A 页签的 Working 文本、排队气泡、压缩横幅在 B 页签残留。
+3. **窗口期串显——webview activateTab 本地清场不足**（webview/main.ts:1092）：清了
+   busyTimer/liveReset，但 statusEl 文本（Working…Ns·排队N条）没清、stopBtn 没藏 →
+   running 分支 postUiState 异步回填前残留。
+
+**关联**：归档 9.11 遗留观察项①「排队 1 条」幻影与本病同域——切页签串显可能就是幻影的
+一个实态，本单修完复测幻影是否再现。
+
+**实现要点**：
+
+1. 死循环：循环体改调 `addQueuedDom(queuedItems[rq])`（纯 DOM 不 push，攒包小刀裁决过，
+   本单吸收实施——数组已是真相，push 回去本身即错）。修后循环 `for (rq = 0; rq <
+   queuedItems.length; rq++) addQueuedDom(...)` 与 length 恒定，正常终止。
+2. panel.ts 四处空分支补发 `busy:false` + `queuedClear` + `banner null`；抽一个
+   postEmptyUiState() helper 收口四处（防下次新增分支再漏）。
+3. webview activateTab 本地立即清：statusEl 文本清空、stopBtn 藏、queuebar 清空——
+   真相由 postUiState 回填，本地激进清安全（B 有排队/横幅会随后重建）。
+4. webview/main.ts 保持 ES5 var 风格；协议无新消息（全是现有消息的补发），三处不同步。
+
+**验收标准**：
+
+- A 页签插队（排队条有货）→ 任意切 B/新建/关闭标签：无 Working/排队/横幅残留；不卡死
+- A busy 中反复切换页签 ≥10 次：流畅、各页签消息/busy/排队现场正确
+- 排队非空时收到 render（webviewReady/重绘）：queuebar 正常重建、无重复项
+- `npm run compile` 全绿；单笔提交
+
+**不许顺手改**：sendPromptCore、steer 自愈、4s 兜底、还原边界、工单十七滚动域、
+queue_update 转正逻辑。
+
 ### 工单十七：滚动跟随对齐 pi 原生（上滑暂停跟随，回底自动恢复）
 
 **背景（用户原话）**：「会话在工作的时候滚动条一直保持下拉……很难受，优化一下」——
@@ -86,11 +129,7 @@
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
-- **renderAll 死循环隐患（工单十六施工发现，总监已裁决修法）**：webview/main.ts:717
-  `for (rq = 0; rq < queuedItems.length; rq++) addQueued(queuedItems[rq])`——addQueued
-  push 回同数组而 for 条件用同一 length：排队非空 + renderAll 重入时死循环 + queuebar
-  重复 DOM。修法（裁决）：改调 `addQueuedDom(queuedItems[rq])`（纯 DOM，不 push）——
-  数组已是真相，push 回去本身即错；不要改成「先清 queuebar」方案（绕远且语义含糊）
+> renderAll 死循环隐患已吸收进工单十八（P0 越序），本节销账。
 
 ## 排队（未签发，勿提前施工）
 
