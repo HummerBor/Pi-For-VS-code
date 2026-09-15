@@ -83,10 +83,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     up: '<path d="M8 13V3.5M4.2 7.3L8 3.5l3.8 3.8"/>',
     stop: '<rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="currentColor" stroke="none"/>',
     x: '<path d="M4 4l8 8M12 4L4 12"/>',
+    trash: '<path d="M2.5 4.5h11"/><path d="M6.5 2.5h3"/><path d="M4.5 4.5l.7 9h5.6l.7-9"/><path d="M6.7 7.5v3.5M9.3 7.5v3.5"/>',
     chev: '<path d="M6 3.5L10.5 8 6 12.5"/>',
     check: '<path d="M3.2 8.6l3 3L12.8 4.4"/>',
-    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>',
-    back: '<path d="M13 8H3.5M7.3 4.2L3.5 8l3.8 3.8"/>'
+    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>'
   };
   function ico(name: string, size?: number) {
     var s = size || 14;
@@ -385,10 +385,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
     b.appendChild(el('span', 'q-text', (q.text || L.imgOrCode) + (q.fileCount ? ' +' + q.fileCount + L.qFilesUnit : '') + (q.imageCount ? ' +' + q.imageCount + L.qImgsUnit : '')));
     // 工单十六：取回按钮——文本回编辑框（用户在编辑框里删改），其余项按原类型重排队，
-    // 与 pi TUI alt+up dequeue 同构，不在队列条上直接删
+    // 与 pi TUI alt+up dequeue 同构，不在队列条上直接删。
+    // 图标用垃圾桶：← 箭头被用户误读为「撤回」（2026-09-15 实测反馈），功能不变仍是取回，
+    // hover tooltip 已写明真实语义，别把按钮行为改成直接删（破坏 pi 原生语义对齐）
     var rb = el('span', 'q-btn');
     rb.title = L.queuedRetrieveTitle;
-    rb.innerHTML = ico('back', 12);
+    rb.innerHTML = ico('trash', 12);
     rb.addEventListener('click', function (ev) { ev.stopPropagation(); vscode.postMessage({ type: 'queuedRetrieve', qid: q.qid }); });
     b.appendChild(rb);
     // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流
