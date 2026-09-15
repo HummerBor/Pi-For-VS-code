@@ -23,7 +23,9 @@ export default defineConfig({
     outDir: "dist/webview",
     emptyOutDir: true,
     target: "es2020",
-    minify: false,
+    // 工单二十：产物是经 CSP nonce 注入的内联脚本且不开 sourcemap，保注释无可读性收益——
+    // minify 同时去除 esbuild 自带的 //#region 标记并缩体积
+    minify: true,
     sourcemap: false,
     lib: {
       entry: "webview/main.ts",

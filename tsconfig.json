@@ -9,7 +9,9 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "sourceMap": true
+    "sourceMap": true,
+    // 工单二十：源码注释（事故教训/内部路径）是资产但只留源码，不随编译产物进 vsix
+    "removeComments": true
   },
   "include": ["src"]
 }
