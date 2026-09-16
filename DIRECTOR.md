@@ -30,75 +30,14 @@
 
 ## 施工工单（按序执行）
 
-> ⚠️ **状态标记约定**：标题带「✅ 已完成已验收」的工单**禁止重复执行**；
-> pi 只施工不带 ✅ 的工单。完成与否以本文件 + 归档.md 验收记录为准，勿信 commit message。
-> 已完成工单全文（验收标准/边界/教训）见 [归档.md](归档.md)——做新单前若与其边界
-> 相关先查归档，勿凭记忆执行旧单条目。
+> ⚠️ **状态标记约定**（用户三次纠偏后钉死）：结单工单**全文迁 归档.md，DIRECTOR.md 零残留**——
+> 不留指针行、不留 ✅ 标题、不留「待实测」尾巴；判死单同样原样迁归档（工单八/22 先例）。
+> 工单区只存在待施工项。已完成与否以 归档.md 为准，勿信 commit message。
+> 做新单前若与旧单边界相关先查归档，勿凭记忆执行旧单条目。
+> **工单号一律阿拉伯数字**（工单23 起，用户拍板 2026-09-15；存量编号不改）
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
-
-### 工单二十：vsix 去注释瘦身 ✅ 已完成已验收（2026-09-15 用户实测结单，全文见 归档.md 9.15）
-
-### 工单二十一：压缩边界可见化——compactionSummary 折叠块 ✅ 已完成已验收（2026-09-15 用户实测结单，全文见 归档.md 9.16；结单前补刀 compaction_end 重拉消息已随 0.0.95 入包）
-
-### ~~工单二十二：流式平滑~~ ❌判死（2026-09-15 用户受控实验否决，未开工即废）
-
-> **判死过程存档**：签单时实证链五条——实测三条（短上下文 SSE 细粒度/piCore 即时转发/
-> scheduleStream 死代码）+ 推断两条（postMessage 合批每帧一跳/DOM layout 成本随会话涨）。
-> **推断全灭**：用户把同一长会话切到终端 TUI，同样蹦段（2×2 受控实验：面板长会话蹦/
-> 面板短会话顺/TUI 短会话逐字/**TUI 长会话蹦**）——翻转行为的变量是上下文长度，与客户端
-> 无关。真因：**长上下文下智谱侧生成/传输本身突发**（短上下文 SSE 细粒度是实测，但测错了
-> 档位就外推了）。壳无罪，drain 治不了 TUI 也有的病，且壳自研平滑=造 TUI 没有的东西
-> （违铁律）。**教训入库总监.md：签单前实验必须覆盖出问题的那档条件；机制推断未实测
-> 不得签单**。本工单全文保留于此仅作教训载体，禁止施工。
-
-**现象**：同模型（glm-5.3）pi TUI 里慢速快速都逐字流出，插件里一段一段蹦。
-
-**总监实证链（2026-09-15，签单前置查，施工方勿重查）**：
-1. **provider 不背锅**：直打智谱 coding 端点（scripts/test-glm-stream.mjs，留存备诊断），
-   glm-5.3 流式 55 块全是 1~2 字（均值 1.5），块间隔 0ms——SSE 细粒度；首 token 等
-   4.9s（reasoning 阶段），之后 80 字 1.2s 倾泻。DS 慢所以逐 delta 逐帧≈逐字观感；
-   GLM 快所以同一机制下每帧积压多字 → 观感差异根源
-2. **piCore 不背锅**：message_update 分支每条 delta 即时 post（piCore.ts:1309 起，
-   text_delta→delta 无节流）
-3. **webview 病灶坐实**：appendDelta（main.ts:524）每条 delta **立即** streamTick+
-   scroll——TUI requestRender 同样每事件直渲但终端逐笔 write 所以逐字；webview 的
-   postMessage 传输本身有合批（burst 到达的 N 条 delta 同一事件循turn处理完，浏览器
-   一帧只画一次）→ GLM burst（实测 gap 178ms 后连发多块）每帧一跳 = 「一段一段」
-4. **死代码佐证**：scheduleStream（main.ts:521，100ms 节流 timer）定义了但**全文件零调用**
-   ——历史上有人预感到要节流，接线从未发生
-5. **会话体量是主因（2026-09-15 用户观察补充修订，总监漏判后补）**：用户实测「只有这个
-   会话蹦，别的会话正常，之前一直不卡」——每条 delta 的 scroll() scrollTop 写强制 layout，
-   **成本随会话 DOM 树增长**：本会话 jsonl 已 477KB+（数百条消息/上万节点），单次 layout
-   毫秒级 → GLM burst 一到就积压；新/短会话 layout 便宜 → 看着正常；TUI 只画视口、
-   成本与会话长度无关 → 恒逐字。「越来越卡」是随会话进度，非随版本（今日四笔提交
-   均不碰 delta 路径，总监已逐笔核对）
-5. **pi 原生查重（三处）**：TUI render 链实查（interactive-mode.js:2799 requestRender
-   每事件直调 + tui bundle doRender 同步写终端），**无打字机/无帧平滑层**——壳做平滑
-   不是重复 pi 原生，是补偿 webview 传输合批，理由成立
-
-**改动**（仅 webview/main.ts，协议零改动）：
-1. text delta 改攒批 drain：appendDelta 只入 buffer（p.buf += t）+ 调度 drain（rAF 或
-   ≤33ms timer，选型理由写回报）；drain 每 tick 用现有 streamTick 逻辑从 doneLen 起渲
-   预算内字符——预算自适应（如 max(2, ceil(待渲字数/8))）：慢速 DS 每 tick 1~2 字＝
-   逐字观感，快速 GLM 也能在数十 ms 内追平不滞留
-2. scheduleStream 死代码回收：改造为 drain 调度器或删除（删除则注释留痕「曾为未接线的
-   100ms 节流」），别留死代码
-3. **收尾必须 flush**：message_end/settled/newLive/applyLiveSync 重定基时把未渲 buffer
-   全量渲完或丢弃（重定基丢弃，结束渲完）——别让最后一截字卡在 buffer 里
-4. thinking delta（appendThink）同病灶但本单**不动**（范围锁死；若实测思考块也明显蹦
-   段再签补刀）
-
-**边界**：不碰 scroll/工单十七 suppressScroll（drain 的 scroll() 调用点照旧走 scroll()）；
-不碰 busy 禁整页重绘红线；ES5 var 风格、strict:false 零报错；不碰 piCore/协议；
-markdown fence 语义（streamTick 的代码块边界逻辑）零改动——drain 只是改「何时调用它」
-不改「它怎么算」。
-
-**验收**：npm run compile 全绿 → 装包实测：①glm-5.3 快速生成观感连续（不再一段一段），
-收尾无缺字 ②DS 慢速回归无退化 ③**长会话实测（主验收场）**：本工作区长会话
-（jsonl 数百 KB 级）流式观感连续 ④流式中上滑/回底（工单十七现场）不复发 ⑤流式不卡顿
-（工单十九现场不复发——drain 每帧 DOM 写次数应≤现状）⑥toolDetail/patchRevert 不回归。
 
 ## 事故修复账（2026-09-15，用户同场指挥下修复，非工单流程）——代码验收通过（总监 09-15）
 
