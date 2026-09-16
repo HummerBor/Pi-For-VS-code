@@ -25,8 +25,20 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-15 晚 工单二十/二十一实测结单迁归档；事故修复四笔全过（含 compaction_end
-> 重拉折叠块，0.0.95）
+> 最后更新：2026-09-16 发版前终验通过（0.0.95 树 → 0.0.96 ship），放行记录见下
+
+## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
+
+- **compile 全链门禁**：typecheck:webview 零报错（无 @ts-nocheck）→ vite → tsc 全绿
+- **四笔 fix 逐一 grep 实证**：a872a02（protocol/webview/piCore 三处 compaction 同步✓）、
+  df86ec1（piClient preflightOk 透传真因✓）、0b077e6（compaction_end 改 postUiState 整体重拉✓，
+  教训注释随逻辑走✓）、20c8947（package 自动 bump ✓）；回归修复 819a883 suppressScroll
+  零布局读✓、9594ba7 原子绑定✓；287bb04 双产物去注释（tsconfig removeComments + vite minify）✓
+- **vsix 边界**：.vscodeignore 覆盖 scripts/**（含工单二十二实验脚本）与全部内部文档✓
+- **混笔记档（不返工）**：0b077e6 fix 提交混入版本号 bump（0.0.93→0.0.95 测试消耗）+
+  BUILDER.md 留痕——bump 按既定口径记档；BUILDER 留痕系 ✅活14 硬要求，合规
+- **随版内容**：事故修复四笔 + 工单二十/二十一 + 十八/十九回归终版 + README 重写。
+  下一版 0.0.96（ship 自动 bump）
 
 ## 施工工单（按序执行）
 
