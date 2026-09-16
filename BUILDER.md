@@ -375,3 +375,14 @@ protocol.ts 零改动；单笔提交无混笔。
 **待实测**（需真 vsix 环境，对齐验收标准）：恢复 aaaxcx 那个会话——压缩边界处出现折叠块、
 收起态显「原 157,889 tokens」、展开可见摘要正文、其前用户消息按 pi 语义不显示（折叠块即边界声明）；
 新开对话发长任务触发手动 /compact 后 settled 重绘同样出折叠块、工单六横幅照旧；切页签后恢复同显。
+
+---
+
+## 留痕（✅活 14 硬要求）：压缩结束立即重绘折叠块（2026-09-15，用户直令随验收发现）
+
+**改动面**：piCore.ts compaction_end 分支 `refreshState()` → `postUiState()`——pi 手动压缩
+完成当场重建 agent.state.messages（agent-session.js:1539 buildSessionContext 合成
+compactionSummary），原实现只刷页脚不重拉消息，折叠块不切页签不出现。
+
+**验证**：compile 全绿；打包含入 0.0.95。**教训**：工单二十一回报里「settled 重绘同样出
+折叠块」系未实测推断，被用户实测证伪（settled 不重拉消息）——推断当实测写回报，罚记一次。

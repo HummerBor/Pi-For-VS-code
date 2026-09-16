@@ -1440,8 +1440,11 @@ export class PiCore {
             this.dbg("banner: compacted (reason=" + (e.reason ?? "?") + ")");
           }
         }
-        // 压缩后占比大降：刷新用量显示 + re-arm 阈值预警
-        await this.refreshState();
+        // 压缩后占比大降 + 折叠块已入消息数组（pi 压缩完成即重建 agent.state.messages，
+        // agent-session.js: buildSessionContext 合成 compactionSummary）——postUiState 整体
+        // 重拉消息让折叠块立即上屏。事故教训：原先只 refreshState 刷页脚，DOM 留在压缩前，
+        // 折叠块不切页签不出现（BUILDER 报告「settled 重绘出折叠块」被实测证伪，settled 不重拉消息）
+        await this.postUiState();
         break;
       }
 
