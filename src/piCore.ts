@@ -1362,6 +1362,24 @@ export class PiCore {
         }
         break;
 
+      case "entry_appended":
+        // A2+B：异步子 agent 后台进度——subagent 扩展 appendEntry("subagent-async") 推送，
+        // 不进 LLM 上下文的旁路事件流；异步工具已返回，没有 tool_execution_update 可蹭，
+        // 浮窗直播全靠这条。id 用句柄（sa-n）非 toolCallId——浮窗按 tab 缓存单例，无需对齐
+        if (e.entry?.type === "custom" && e.entry?.customType === "subagent-async") {
+          const data = e.entry.data as { handle?: string; status?: string; detail?: unknown } | undefined;
+          const asyncSnap = data?.handle ? subagentSnapshot(data.detail) : null;
+          if (asyncSnap && data!.handle) {
+            this.post({
+              type: "subagentUpdate",
+              id: data!.handle,
+              snapshot: asyncSnap,
+              final: data!.status !== "running",
+            });
+          }
+        }
+        break;
+
       case "tool_execution_end": {
         // 工单七：edit 的 result.details.patch（jsdiff unified）按时间序累积——
         // 未跟踪文件逆序逆向还原的唯一依据（裁决 11③）；write 无 details，不可还原

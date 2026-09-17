@@ -591,6 +591,11 @@ export interface PiToolExecutionUpdateEvent {
   /** subagent 扩展在 onUpdate 里上报 AgentToolResult，进度在 .details.results（保守可选） */
   partialResult?: { details?: unknown } | null;
 }
+/** 异步子 agent 后台进度（A2+B：subagent 扩展 appendEntry("subagent-async")，不进 LLM 上下文的旁路） */
+export interface PiEntryAppendedEvent {
+  type: "entry_appended";
+  entry?: { type?: string; customType?: string; data?: unknown } | null;
+}
 export interface PiModelSelectEvent {
   type: "model_select";
 }
@@ -654,6 +659,7 @@ export type PiEvent =
   | PiMessageUpdateEvent
   | PiToolExecutionStartEvent
   | PiToolExecutionUpdateEvent
+  | PiEntryAppendedEvent
   | PiToolExecutionEndEvent
   | PiModelSelectEvent
   | PiThinkingLevelSelectEvent
