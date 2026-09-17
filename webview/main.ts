@@ -425,10 +425,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
 
   function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) {
-    // 子 agent 异步回报不渲染（2026-09-18 用户拍板：面板消息流一律不展示；浮窗下钻已有全文）。
-    // 只过滤展示、不动上下文——主会话验收依赖这条消息。前缀契约在 subagent 扩展的
-    // sendUserMessage 处（"[子 agent sa-N 完成|失败]"），扩展改格式此处必须同步。
-    if (/^\[子 agent \S+ (完成|失败)\]/.test(text || '')) return;
+    // 子 agent 异步回报特殊标记渲染（2026-09-18 用户拍板升级：不隐藏，改独立卡片——
+    // 防止被当成用户自己说的话；前版“直接不展示”作废）。前缀契约在 subagent 扩展的
+    // sendUserMessage 处（"[子 agent sa-N 完成|失败] agent名: 输出"），改格式两处同步。
+    var sm2 = (text || '').match(/^\[子 agent (\S+) (完成|失败)\] ([^:\n]*): ?/);
+    if (sm2) {
+      var card = el('div', 'subret' + (sm2[2] === '失败' ? ' fail' : ''));
+      var sh = el('div', 'subret-head', '⮑ 子 agent ' + sm2[1] + ' · ' + sm2[2] + (sm2[3] ? ' · ' + sm2[3] : ''));
+      card.appendChild(sh);
+      var sb = el('div', 'subret-body');
+      renderRich(sb, text.slice(sm2[0].length) || text); // 正文 markdown 渲染（回报常带表格）
+      card.appendChild(sb);
+      root.appendChild(card); followingEnd = true; scroll();
+      return;
+    }
     var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
@@ -1273,7 +1283,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    else if (e.key === 'Escape' && !sgOpen) { vscode.postMessage({ type: 'abort' }); }
+    else if (e.key === 'Escape' && !sgOpen && !e.isComposing) { vscode.postMessage({ type: 'abort' }); }
+    // isComposing 守门：中文输入法取消候选词也是 Esc，不拦的话打字打到一半就把运行中的任务中断了
+    // （2026-09-18 事故：用户没点停止却见“已中断当前任务”）
   });
   function filesFromClipboard(items) {
     var out = [];

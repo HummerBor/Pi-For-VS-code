@@ -237,3 +237,8 @@ body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { ba
 #banner .b-act:hover, #changesbar .b-act:hover { background: var(--vscode-button-hoverBackground, rgba(0,120,212,.85)); }
 #banner .b-close, #changesbar .b-close { flex: none; cursor: pointer; opacity: .55; padding: 0 2px; }
 #banner .b-close:hover, #changesbar .b-close:hover { opacity: 1; }
+/* ── 子 agent 回报卡片：独立于用户气泡，左缘色条标识状态（2026-09-18）── */
+.subret { margin: 6px 0; max-width: 88%; border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding: 5px 10px 6px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.1)); border-radius: 4px; }
+.subret.fail { border-left-color: var(--vscode-charts-red, #f14c4c); }
+.subret-head { font-size: 11px; opacity: .65; margin-bottom: 3px; }
+.subret-body { font-size: 12px; overflow-x: auto; }
