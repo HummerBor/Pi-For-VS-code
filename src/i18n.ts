@@ -389,7 +389,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     thinkingProcess: "思考过程",
     noArgs: "(无参数)",
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
-    smTitle: "子代理",
+    smTitle: "子智能体",
     smRunningGroup: "已开启",
     smDoneGroup: "完成",
     smProcessing: "处理中",
@@ -780,7 +780,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     noArgs: "(no args)",
     // Subagent monitor (subagentUpdate): card header and task rows
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
-    smTitle: "Subagent",
+    smTitle: "Subagents",
     smRunningGroup: "Running",
     smDoneGroup: "Done",
     smProcessing: "Processing",

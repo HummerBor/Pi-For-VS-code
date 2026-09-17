@@ -158,7 +158,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   historyEl.innerHTML = ico('clock');
   newChatEl.innerHTML = ico('plus');
   moreEl.innerHTML = ico('gear');
-  subindEl.innerHTML = ico('loading', 15); // codicon loading 同款断弧圆环，旋转在 CSS
+  subindEl.innerHTML = ico('cpu', 15); // 芯片图标 = 子 agent 锚点（⏳/✓/断弧圆环被用户评'意义不明'，09-18）
   attachEl.innerHTML = ico('image');
   pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';
   pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';
@@ -659,7 +659,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 完整活动流 + markdown 产出（subagentDetailRequest → 宿主留存的全量 details）。
   // 数据模型：每页签 runs（id → {snap, final, startAt, endAt}），id 是 toolCallId 或异步句柄
   // sa-n；一个 parallel 运行拆多行（每任务一行，Codex 同款）
-  var SM_ICONS: Record<string, string> = { running: '⏳', done: '✓', failed: '✗' };
+  var SM_ICONS: Record<string, string> = { running: ico('loading', 12), done: ico('check', 12), failed: ico('x', 12) };
   // 浮窗：单例。收起（subCollapsed）= 整块隐藏、头部 spinner 亮（运行中），codex 模型；
   // 拖过一次（dockDragged）后位置归用户，未拖则每次刷新回默认右上角（防漂移事故）
   var subdock: HTMLElement | null = null;
@@ -775,7 +775,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
     head.innerHTML = '';
-    head.appendChild(el('span', 'sm-ico' + (subRunning ? ' spin' : ''), subRunning ? '⏳' : '✓'));
+    if (subDetailView) {
+      // 下钻模式：返回并进标题行（2026-09-18 用户反馈：单独一行浪费且突兀）
+      var backB = el('span', 'sd-btn sm-back-head', '‹ ' + L.smBack);
+      backB.addEventListener('click', function (e) { e.stopPropagation(); subDetailView = null; renderSubDock(); });
+      head.appendChild(backB);
+    } else {
+      head.appendChild(el('span', 'sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
+    }
     head.appendChild(el('span', 'sm-title', L.smTitle));
     var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
     minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
@@ -833,9 +840,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function renderSubDetail(body: HTMLElement) {
     var parts = (subDetailView || '').split(':');
     var runId = parts[0]; var ti = Number(parts[1]) || 0;
-    var back = el('div', 'sm-back', '‹ ' + L.smBack);
-    back.addEventListener('click', function () { subDetailView = null; renderSubDock(); });
-    body.appendChild(back);
     var full = subDetailCache[runId];
     if (!full) {
       body.appendChild(el('div', 'sm-empty', L.smLoading));
@@ -854,7 +858,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     body.appendChild(hd);
     // 完整活动流（Full 快照，上限 400 条）
     for (var ai = 0; ai < t.items.length; ai++) {
-      var act = el('div', 'sm-act', t.items[ai]); act.title = t.items[ai];
+      var isOut = t.items[ai].lastIndexOf('⮑ ', 0) === 0; // 工具输出行（FULL 口径 ⮑ 前缀）
+      var act = el('div', 'sm-act' + (isOut ? ' out' : ''), t.items[ai]); act.title = t.items[ai];
       body.appendChild(act);
     }
     if (t.activityCount > t.items.length)
