@@ -782,15 +782,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var body = d.lastElementChild as HTMLElement;
     head.innerHTML = '';
     if (subDetailView) {
-      // 下钻模式：返回并进标题行（2026-09-18 用户反馈：单独一行浪费且突兀）
+      // 下钻模式：返回并进标题行（2026-09-18 用户反馈：单独一行浪费且突兀）；
+      // 标题显示当前任务 agent 名（Codex 同款），Full 缓存未到时回退通用标题
+      var dparts = subDetailView.split(':');
+      var dfull = subDetailCache[dparts[0]];
+      var dtask = dfull && dfull.tasks[Number(dparts[1]) || 0];
       var backB = el('span', 'sd-btn sm-back-head', '‹ ' + L.smBack);
       backB.addEventListener('mousedown', function (e) { e.stopPropagation(); }); // 拖拽/收起路径全断
       backB.addEventListener('click', function (e) { e.stopPropagation(); subDetailView = null; renderSubDock(); });
       head.appendChild(backB);
+      head.appendChild(el('span', 'sm-title', dtask ? dtask.agent : L.smTitle));
     } else {
       head.appendChild(elIco('sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
+      head.appendChild(el('span', 'sm-title', L.smTitle));
     }
-    head.appendChild(el('span', 'sm-title', L.smTitle));
     var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
     minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
     head.appendChild(minB);
@@ -1289,7 +1294,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
   // 语言/主题头部按钮已移除：功能保留（pickLang/pickTheme），入口收进 ⚙ 设置菜单
   // 子 agent 监控浮窗收起（头部 spinner 顶班）时，点 spinner 重新展开
-  subindEl.addEventListener('click', function () { dockSetCollapsed(false); });
+  subindEl.addEventListener('click', function () { dockSetCollapsed(!subCollapsed); }); // toggle（09-18 用户反馈）
   // 头部 ＋ → 开新标签会话（工单十五入口收敛，用户拍板 2026-09-14）：多标签时代
   // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）

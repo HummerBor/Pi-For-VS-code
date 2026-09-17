@@ -112,7 +112,8 @@ details.think summary { cursor: pointer; user-select: none; }
 .sd-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; cursor: move; background: var(--vscode-titleBar-activeBackground, rgba(128,128,128,.14)); user-select: none; font-weight: bold; }
 .sd-head .sm-mode { font-weight: normal; }
 .sd-head .sm-count { font-weight: normal; }
-.sd-btn { margin-left: auto; cursor: pointer; opacity: .55; padding: 0 4px; border-radius: 3px; font-size: 12px; }
+.sd-btn { cursor: pointer; opacity: .55; padding: 0 4px; border-radius: 3px; font-size: 12px; }
+.sd-head .sd-btn:last-child { margin-left: auto; } /* 只把最右按钮（—）推到右侧，返回按钮贴左（09-18 用户反馈） */
 .sd-head .sm-count + .sd-btn, .sd-head .sm-mode + .sd-btn { margin-left: auto; }
 .sd-btn + .sd-btn { margin-left: 0; }
 .sd-btn:hover { opacity: 1; background: rgba(128,128,128,.25); }
