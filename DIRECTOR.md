@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-16 **0.0.97 已 ship**（push/publish 补跑闭环；0.0.96 未发布消耗，
-> 对账见归档七）。发版前终验记录见下方「发版前终验」节
+> 最后更新：2026-09-17 **签工单24**（P0：切页签丢渲染内容，根因预查已闭环）。
+> 前情：工单23 判死迁归档（同仓重组作废，未开工即废）。0.0.97 已 ship（对账见归档七）。
 
 ## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
 
@@ -51,6 +51,63 @@
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
+
+## 工单24：P0 切页签丢渲染内容——快照期流式事件被冲且永不重发（宿主侧保序回放修复）
+
+> **症状（用户 2026-09-17 实测报）**：切页签后面板渲染丢内容，切走再切回/看真会话
+> （jsonl）内容完好——丢的是渲染层，不是数据。截图特征：在途 assistant 消息的
+> thinking 块句子截断、正文出现空黑条，截断处正是切页签瞬间正在生成的段落。
+
+### 根因（总监预查已闭环，施工方勿重查，直接按此修）
+
+1. 切页签 → panel.handleTabSwitch 置 activeTabId → 新活动 core 调 postUiState()
+2. **postUiState 是 async**（piCore.ts:387）：`await getMessages()` +
+   `await collectState()` 两跳异步——这就是快照窗口（几十~几百 ms）
+3. 窗口内，该 core 的流式事件**绕过快照直接 this.post**（piCore.ts:1324-1331
+   message_update 分支：delta/thinking/toolCallStart/toolCallDelta），经
+   panel.pipeFromCore（活动页签直通）立即喂到 webview
+4. webview 先画了这些 delta（liveBlock/appendDelta 作用于刚 liveReset 的空现场）；
+   随后 uiState（快照@T1）抵达 → renderAll(快照) + applyLiveSync(live@T1) 把窗口内
+   已画的 delta **全部冲掉**（webview/main.ts:1107-1114 → flushRender）
+5. delta 是增量事件，pi 侧永不重发 → **窗口内生成的内容永久丢失**；jsonl 在 pi 侧
+   完好 → 与症状完全吻合（空黑条 = 窗口内起的 text 块被冲剩空壳）
+
+> **认知沉淀**：工单十八修的是同一竞态的另一面（双画：剥 live 与下发原子化），
+> 但「窗口期事件被快照冲掉且不重发」这面当时没修——双画和丢失是同一竞态的两面，
+> 当时只按用户实测到的那面修。本轮补齐。
+
+### 修法（单点，保序回放）
+
+piCore.ts 加**快照期事件闸门**：postUiState 入口（两跳 await 之前）置缓冲态，
+活动 core 的流式事件改为入队不直发；uiState 发出后解除缓冲、**按原序重放**队列。
+要点：
+- 闸门盖住 webview 消费的全部流式事件类型（newLive/delta/thinking/toolStart/
+  toolCallStart/toolCallDelta/message_update 派生事件/busy/settled 等）——最稳做法
+  是在 core 的 post 出口统一分流（uiState 本身与 notice 等非流式消息不缓冲），
+  别在 1324-1331 逐个 case 打补丁（漏一类就是新事故）
+- 重放保序 = settled 真相重绘自愈语义不变（若窗口内会话恰好结束，重放的 settled
+  在快照之后执行，全量重绘自愈，不会退回旧快照）
+- webviewReady 触发的 postUiState（piCore.ts:443）同闸门覆盖——重建窗口同款竞态
+- 缓冲上限不设也行（窗口内事件量有限），但队列必须是 FIFO 数组，不得去重合并
+  （去重 = 重新发明增量协议，必错）
+
+### 施工与验收
+
+- 先实证再修：回报里贴出窗口期事件被冲的证据（在 postUiState 两跳 await 前后
+  打时间戳日志 + 窗口内捕获到的 delta 事件列表，一处 dbg 日志即可，修完可留）
+- `npm run compile` 全绿；`npm run test:detail` / `test:revert` 全绿
+- 回归红线：工单十八「切页签整段内容×2」不复发（保序回放下快照先画、事件后补，
+  不产生重放）
+- 用户实测（主验收场）：快流式模型（glm-5.3）生成中连切页签≥10 次，来回切、
+  切走再切回，面板内容与 jsonl 对账无缺；空黑条不复发
+- 单笔提交，提交信息写清根因
+
+### 不许顺手改的边界
+
+- 剥 live 原子性（刀5b/工单十八口径）、stripLive 条件、tabId 丢弃逻辑一个不动
+- 不动 webview/main.ts（修复完全住宿主侧）；若实证后发现必须动 webview，先请示
+- 不动 panel.pipeFromCore 的后台不喂语义；不动 getMessages/collectState 的拉取方式
+- 顺手发现的其他疑似竞态记 BUILDER.md，不混笔
 
 ## 事故修复账（2026-09-15，用户同场指挥下修复，非工单流程）——代码验收通过（总监 09-15）
 
