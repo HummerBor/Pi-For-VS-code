@@ -38,10 +38,15 @@ export interface SubagentSnapshot {
 }
 
 /** 每任务最多携带的最近活动条数（头尾窗，webview 展开也只看这些，防消息历史撑爆协议） */
+/** 每任务最多携带的最近活动条数（尾窗，防消息历史撑爆协议）；下钻视图用 FULL 变体不截 */
 const MAX_ITEMS = 12;
+/** 下钻视图（subagentSnapshotFull）的活动条数上限：足够完整又不至于撑爆协议 */
+const FULL_ITEMS = 400;
 const TASK_MAX = 120;
 const ITEM_MAX = 160;
 const OUTPUT_MAX = 2000;
+/** 下钻视图的产出上限：markdown 全文渲染用，比概览尾窗宽两个量级 */
+const FULL_OUTPUT_MAX = 60_000;
 
 function oneLine(s: string, max: number): string {
   return String(s).replace(/\s+/g, " ").trim().slice(0, max);
@@ -111,8 +116,8 @@ function toolCallFallback(a: Record<string, unknown>): string {
   return "";
 }
 
-/** 助手消息里提取展示项（对齐官方扩展 getDisplayItems：只取 text 与 toolCall，跳过 thinking） */
-function itemsFromMessages(messages: unknown): { items: string[]; total: number } {
+/** 助手消息里提取展示项（对齐官方扩展 getDisplayItems：只取 text 与 toolCall，跳过 thinking）；tail<=0 不截 */
+function itemsFromMessages(messages: unknown, tail: number): { items: string[]; total: number } {
   const out: string[] = [];
   let total = 0;
   if (!Array.isArray(messages)) return { items: out, total };
@@ -132,7 +137,7 @@ function itemsFromMessages(messages: unknown): { items: string[]; total: number 
       }
     }
   }
-  return { items: out.slice(-MAX_ITEMS), total };
+  return { items: tail > 0 ? out.slice(-tail) : out, total };
 }
 
 /**
@@ -152,7 +157,7 @@ function taskStatus(r: Record<string, unknown>): "running" | "done" | "failed" {
 }
 
 /** 结束态最终输出：失败取 errorMessage/stderr，成功取最后一条助手文本（对齐 getResultOutput） */
-function finalOutput(r: Record<string, unknown>): string {
+function finalOutput(r: Record<string, unknown>, max: number): string {
   const status = taskStatus(r);
   if (status === "running") return "";
   const err = typeof r.errorMessage === "string" ? r.errorMessage : "";
@@ -175,14 +180,14 @@ function finalOutput(r: Record<string, unknown>): string {
     }
   }
   const raw = status === "failed" ? err || stderr || text : text;
-  return raw ? oneLine(raw, OUTPUT_MAX) : "";
+  return raw ? oneLine(raw, max) : "";
 }
 
-function snapTask(raw: unknown): SubagentTaskSnapshot | null {
+function snapTask(raw: unknown, itemTail: number, outMax: number): SubagentTaskSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.agent !== "string") return null;
-  const { items, total } = itemsFromMessages(r.messages);
+  const { items, total } = itemsFromMessages(r.messages, itemTail);
   return {
     agent: r.agent,
     task: typeof r.task === "string" ? oneLine(r.task, TASK_MAX) : "",
@@ -192,7 +197,7 @@ function snapTask(raw: unknown): SubagentTaskSnapshot | null {
     usage: fmtUsage(r.usage),
     items,
     activityCount: total,
-    output: finalOutput(r),
+    output: finalOutput(r, outMax),
   };
 }
 
@@ -201,6 +206,15 @@ function snapTask(raw: unknown): SubagentTaskSnapshot | null {
  * 形状不符（非本扩展的 details / 旧版扩展）返回 null，调用方跳过即可。
  */
 export function subagentSnapshot(details: unknown): SubagentSnapshot | null {
+  return buildSnapshot(details, MAX_ITEMS, OUTPUT_MAX);
+}
+
+/** 下钻视图变体：活动流不截 12 条（上限 400）、产出不截 2000 字（上限 60k，markdown 全文渲染用） */
+export function subagentSnapshotFull(details: unknown): SubagentSnapshot | null {
+  return buildSnapshot(details, FULL_ITEMS, FULL_OUTPUT_MAX);
+}
+
+function buildSnapshot(details: unknown, itemTail: number, outMax: number): SubagentSnapshot | null {
   if (!details || typeof details !== "object") return null;
   const d = details as Record<string, unknown>;
   const mode = d.mode;
@@ -208,7 +222,7 @@ export function subagentSnapshot(details: unknown): SubagentSnapshot | null {
   if (!Array.isArray(d.results)) return null;
   const tasks: SubagentTaskSnapshot[] = [];
   for (let i = 0; i < d.results.length; i++) {
-    const t = snapTask(d.results[i]);
+    const t = snapTask(d.results[i], itemTail, outMax);
     if (t) tasks.push(t);
   }
   return { mode, tasks };

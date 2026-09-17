@@ -129,6 +129,19 @@ details.think summary { cursor: pointer; user-select: none; }
 .sm-out { opacity: .85; font-size: 11.5px; margin: 4px 0 0 15px; padding: 4px 8px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-radius: 5px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 .sm-ico { flex: none; }
 .sm-ico.spin { animation: smspin 1.2s linear infinite; display: inline-block; }
+/* 工单 A：概览列表（已开启/完成分组）+ 下钻详情，Codex 同款交互 */
+.sm-group-title { opacity: .5; font-size: 10.5px; padding: 6px 10px 2px; user-select: none; }
+.sm-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
+.sm-row:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.16)); }
+.sm-row-main { flex: 1; min-width: 0; }
+.sm-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-row.failed .sm-name, .sm-row.failed .sm-status { color: var(--vscode-errorForeground, #f66); }
+.sm-status { opacity: .55; font-size: 10.5px; margin-top: 1px; }
+.sm-time { flex: none; opacity: .55; font-size: 10.5px; }
+.sm-back { padding: 6px 10px; cursor: pointer; opacity: .75; user-select: none; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
+.sm-back:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.16)); }
+.sm-empty { opacity: .5; padding: 14px 10px; text-align: center; }
+.sm-out-md { margin: 6px 10px 8px 15px; padding: 6px 9px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-radius: 5px; max-height: 260px; overflow-y: auto; font-size: 11.5px; word-break: break-word; }
 @keyframes smspin { to { transform: rotate(360deg); } }
 .sm-title { font-weight: bold; }
 .sm-mode { opacity: .5; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); }

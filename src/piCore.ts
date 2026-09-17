@@ -15,7 +15,7 @@ import { createHash } from "crypto";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
-import { subagentSnapshot } from "./subagentSnapshot";
+import { subagentSnapshot, subagentSnapshotFull } from "./subagentSnapshot";
 import { toolDetail } from "./toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
@@ -114,6 +114,26 @@ export class PiCore {
    *  只有 toolCallId/toolName/result/isError），patch 归档必须靠 start 时记下的映射。
    *  注：此修复曾随 5f30a51 后的未提交态被 11:24 的 checkout 连坐丢失，本次重打 */
   private toolCallPaths = new Map<string, string>();
+  /** 工单 A（下钻）：subagent 运行留存 —— id（toolCallId 或异步句柄）→ 最新全量 details + 计时。
+   *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
+   *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
+  private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number }>();
+
+  /** 留存/更新运行正本；超上限淘汰最早的（Map 迭代序即插入序） */
+  private trackSubagentRun(id: string, details: unknown): { startAt: number; endAt?: number } {
+    let rec = this.subagentRuns.get(id);
+    if (!rec) {
+      rec = { details, startAt: Date.now() };
+      this.subagentRuns.set(id, rec);
+      if (this.subagentRuns.size > 30) {
+        const oldest = this.subagentRuns.keys().next().value;
+        if (oldest !== undefined) this.subagentRuns.delete(oldest);
+      }
+    } else {
+      if (details !== undefined && details !== null) rec.details = details;
+    }
+    return rec;
+  }
   /** 字节通道附件：内容 md5 → 已落盘临时路径。同一内容复用同一路径，
    *  路径层去重天然成立（含 webview 按名判重覆盖不到的「a(1).txt」改名场景） */
   private byteAttachCache = new Map<string, string>();
@@ -438,6 +458,14 @@ export class PiCore {
 
   private async dispatchWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
+      case "subagentDetailRequest": {
+        // 工单 A 下钻：概览行点击 → 用留存的全量 details 构建 Full 快照（活动流 400 条、
+        // 产出 60k 字）；无留存（webview 重载后历史丢失）回空任务快照，前端显示无数据
+        const rec = this.subagentRuns.get(m.id);
+        const snap = subagentSnapshotFull(rec?.details) ?? { mode: "single" as const, tasks: [] };
+        this.post({ type: "subagentDetail", id: m.id, snapshot: snap });
+        break;
+      }
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
         // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险（真相重发已抽成 postUiState，刀5）
@@ -1358,7 +1386,10 @@ export class PiCore {
         // 的 details 形状）静默跳过，不许弄崩面板（subagentSnapshot.ts 头注释）
         if (e.toolName === "subagent") {
           const snap = subagentSnapshot(e.partialResult?.details);
-          if (snap) this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: snap, final: false });
+          if (snap) {
+            const rec = this.trackSubagentRun(e.toolCallId, e.partialResult?.details);
+            this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: snap, final: false, startAt: rec.startAt });
+          }
         }
         break;
 
@@ -1367,14 +1398,22 @@ export class PiCore {
         // 不进 LLM 上下文的旁路事件流；异步工具已返回，没有 tool_execution_update 可蹭，
         // 浮窗直播全靠这条。id 用句柄（sa-n）非 toolCallId——浮窗按 tab 缓存单例，无需对齐
         if (e.entry?.type === "custom" && e.entry?.customType === "subagent-async") {
-          const data = e.entry.data as { handle?: string; status?: string; detail?: unknown } | undefined;
+          const data = e.entry.data as
+            | { handle?: string; status?: string; detail?: unknown; startedAt?: number; endedAt?: number }
+          | undefined;
           const asyncSnap = data?.handle ? subagentSnapshot(data.detail) : null;
           if (asyncSnap && data!.handle) {
+            // 异步运行计时由扩展随 entry 带来（扩展侧 spawn 时起表，比宿主首见准）
+            const rec = this.trackSubagentRun(data!.handle, data!.detail);
+            if (typeof data!.startedAt === "number") rec.startAt = data!.startedAt;
+            if (typeof data!.endedAt === "number") rec.endAt = data!.endedAt;
             this.post({
               type: "subagentUpdate",
               id: data!.handle,
               snapshot: asyncSnap,
               final: data!.status !== "running",
+              startAt: rec.startAt,
+              endAt: rec.endAt,
             });
           }
         }
@@ -1402,7 +1441,18 @@ export class PiCore {
         // 先于 toolEnd 语义无差别——webview 两条都消费，顺序不敏感
         if (e.toolName === "subagent") {
           const finalSnap = subagentSnapshot(e.result?.details);
-          if (finalSnap) this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: finalSnap, final: true });
+          if (finalSnap) {
+            const rec = this.trackSubagentRun(e.toolCallId, e.result?.details);
+            rec.endAt = Date.now();
+            this.post({
+              type: "subagentUpdate",
+              id: e.toolCallId,
+              snapshot: finalSnap,
+              final: true,
+              startAt: rec.startAt,
+              endAt: rec.endAt,
+            });
+          }
         }
         break;
       }

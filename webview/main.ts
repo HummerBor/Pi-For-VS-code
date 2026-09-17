@@ -619,30 +619,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');
     scroll();
   }
-  // ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ──
-  // 分工：实时进度只进浮窗（不打断对话流）；final 才落内联卡片（历史重绘可复现）
+  // ── 子 agent 监控：浮窗（codex 风格）——概览列表 + 点击下钻（工单 A，对齐 Codex 交互）──
+  // 概览 = 已开启/完成 分组行（每任务一行：状态图标/名称/处理中/相对时间），点击行下钻
+  // 完整活动流 + markdown 产出（subagentDetailRequest → 宿主留存的全量 details）。
+  // 数据模型：每页签 runs（id → {snap, final, startAt, endAt}），id 是 toolCallId 或异步句柄
+  // sa-n；一个 parallel 运行拆多行（每任务一行，Codex 同款）
   var SM_ICONS: Record<string, string> = { running: '⏳', done: '✓', failed: '✗' };
-  function smTasksHtml(container: HTMLElement, snap: SubagentSnapshot, expanded: boolean) {
-    for (var ti = 0; ti < snap.tasks.length; ti++) {
-      var t = snap.tasks[ti];
-      var row = el('div', 'sm-task ' + t.status);
-      var line1 = el('div', 'sm-line');
-      line1.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
-      var nm = t.agent + (t.step ? ' #' + t.step : '');
-      line1.appendChild(el('span', 'sm-agent', nm));
-      if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
-      row.appendChild(line1);
-      if (t.task) { var tk = el('div', 'sm-task-desc', t.task); tk.title = t.task; row.appendChild(tk); }
-      var acts = expanded ? t.items : t.items.slice(-1);
-      for (var ai = 0; ai < acts.length; ai++) {
-        var act = el('div', 'sm-act', acts[ai]); act.title = acts[ai]; row.appendChild(act);
-      }
-      if (t.status === 'running' && t.activityCount > t.items.length)
-        row.appendChild(el('div', 'sm-more', L.smMore.replace('{n}', String(t.activityCount - t.items.length))));
-      if (t.output) { var op = el('div', 'sm-out', t.output); op.title = t.output; row.appendChild(op); }
-      container.appendChild(row);
-    }
-  }
   // 浮窗：单例。收起（subCollapsed）= 整块隐藏、头部 spinner 亮（运行中），codex 模型；
   // 拖过一次（dockDragged）后位置归用户，未拖则每次刷新回默认右上角（防漂移事故）
   var subdock: HTMLElement | null = null;
@@ -659,7 +641,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var subRunning = false;
   function updateSubInd() {
     // 图标跟页签走：只有活动页签有子 agent 数据时才显示（缓存判空，全局单例不串台）
-    var show = !!subdock && activeTabId !== null && !!subTabCache[activeTabId];
+    var show = !!subdock && activeTabId !== null && !!subRunsOf(activeTabId) && Object.keys(subRunsOf(activeTabId)!).length > 0;
     subindEl.style.display = show ? 'inline-flex' : 'none';
     subindEl.classList.toggle('spin', subRunning);
     subindEl.title = subCollapsed ? L.smReopen : L.smCollapse;
@@ -699,37 +681,167 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     subdock = d;
     return d;
   }
-  function dockShow(snap: SubagentSnapshot, final: boolean) {
+  /** ── 概览 + 下钻渲染（工单 A，Codex 同款交互）──────────────────── */
+  interface SubRunRec { snap: SubagentSnapshot; final: boolean; startAt?: number; endAt?: number }
+  var subRunsByTab: Record<string, Record<string, SubRunRec>> = {};
+  var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
+  var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
+
+  function subRunsOf(tab: string | null): Record<string, SubRunRec> | null {
+    if (tab === null) return null;
+    return subRunsByTab[tab] || null;
+  }
+  function anySubRunning(runs: Record<string, SubRunRec>): boolean {
+    for (var k in runs) {
+      var tasks = runs[k].snap.tasks;
+      for (var i = 0; i < tasks.length; i++) if (tasks[i].status === 'running') return true;
+    }
+    return false;
+  }
+  function fmtElapsed(ms: number): string {
+    var s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm' + (s % 60 < 10 ? '0' : '') + (s % 60) + 's';
+    var h = Math.floor(m / 60);
+    return h + 'h' + (m % 60 < 10 ? '0' : '') + (m % 60) + 'm';
+  }
+  function fmtRel(ts: number): string {
+    var s = Math.round((Date.now() - ts) / 1000);
+    if (s < 60) return L.smJustNow;
+    var m = Math.floor(s / 60);
+    if (m < 60) return L.smMinAgo.replace('{n}', String(m));
+    var h = Math.floor(m / 60);
+    if (h < 24) return L.smHourAgo.replace('{n}', String(h));
+    return L.smDayAgo.replace('{n}', String(Math.floor(h / 24)));
+  }
+  /** 录入/更新一条运行记录（页签维度；id 同 subagentUpdate.id） */
+  function updateSubRun(tab: string | null, id: string, snap: SubagentSnapshot, final: boolean, startAt?: number, endAt?: number) {
+    if (tab === null || !id) return;
+    var runs = subRunsByTab[tab] || (subRunsByTab[tab] = {});
+    var rec = runs[id] || (runs[id] = { snap: snap, final: final });
+    rec.snap = snap; rec.final = final;
+    if (startAt !== undefined) rec.startAt = startAt;
+    if (endAt !== undefined) rec.endAt = endAt;
+  }
+  function openSubDetail(runId: string, ti: number) {
+    subDetailView = runId + ':' + ti;
+    if (!subDetailCache[runId]) vscode.postMessage({ type: 'subagentDetailRequest', id: runId });
+    renderSubDock();
+  }
+  function renderSubDock() {
     var d = dockEnsure();
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
-    if (subCollapsed) { d.classList.add('hidden'); }
-    else { requestAnimationFrame(function () { d.classList.remove('hidden'); }); } // 触发从图标处缩放切出
+    if (subCollapsed) d.classList.add('hidden');
+    else requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 触发从图标处缩放切出
+    var runs = subRunsOf(activeTabId);
+    if (!runs) { updateSubInd(); return; }
+    subRunning = anySubRunning(runs);
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
-    head.innerHTML = ''; body.innerHTML = '';
-    // 头部（收起钮 + 关闭钮，都= 整块收起，头部 spinner 顶班）
-    var done = 0, failed = 0;
-    for (var i = 0; i < snap.tasks.length; i++) { if (snap.tasks[i].status === 'done') done++; else if (snap.tasks[i].status === 'failed') failed++; }
-    var allSettled = final || done + failed === snap.tasks.length;
-    head.appendChild(el('span', 'sm-ico' + (allSettled ? '' : ' spin'), failed > 0 ? '✗' : (allSettled ? '✓' : '⏳')));
+    head.innerHTML = '';
+    head.appendChild(el('span', 'sm-ico' + (subRunning ? ' spin' : ''), subRunning ? '⏳' : '✓'));
     head.appendChild(el('span', 'sm-title', L.smTitle));
-    head.appendChild(el('span', 'sm-mode', snap.mode));
-    if (snap.tasks.length > 1) head.appendChild(el('span', 'sm-count', L.smDoneCt.replace('{d}', String(done)).replace('{n}', String(snap.tasks.length))));
-    // 收起钮（× 已按用户要求移除：图标就是唯一开关，收起即缩回图标里）
     var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
     minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
     head.appendChild(minB);
-    smTasksHtml(body, snap, true);
-    d.classList.toggle('final', final);
+    body.innerHTML = '';
+    if (subDetailView) renderSubDetail(body);
+    else renderSubOverview(body, runs);
     linkify(body);
-    // 运行中才亮头部 loading；final 或全部任务收尾 → 熄灭（用户拍板：不跑就不转）
-    subRunning = !final && snap.tasks.some(function (t) { return t.status === 'running'; });
     updateSubInd();
   }
-  function subMonUpdate(id: string, snap: SubagentSnapshot, final: boolean) {
+  function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
+    // 展平：每任务一行（parallel 拆多行，Codex 同款）；运行中在上、收尾在下
+    var runningRows: any[] = []; var doneRows: any[] = [];
+    for (var runId in runs) {
+      var rec = runs[runId];
+      for (var ti = 0; ti < rec.snap.tasks.length; ti++) {
+        var t = rec.snap.tasks[ti];
+        (t.status === 'running' ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
+      }
+    }
+    if (runningRows.length === 0 && doneRows.length === 0) {
+      body.appendChild(el('div', 'sm-empty', L.smNoRuns));
+      return;
+    }
+    var groups = [runningRows, doneRows];
+    var titles = [L.smRunningGroup + ' · ' + runningRows.length, L.smDoneGroup + ' · ' + doneRows.length];
+    for (var g = 0; g < 2; g++) {
+      if (!groups[g].length) continue;
+      body.appendChild(el('div', 'sm-group-title', titles[g]));
+      for (var ri = 0; ri < groups[g].length; ri++) {
+        var r = groups[g][ri];
+        body.appendChild(renderSubRow(r));
+      }
+    }
+  }
+  function renderSubRow(row: any): HTMLElement {
+    var t = row.t;
+    var rowEl = el('div', 'sm-row ' + t.status);
+    rowEl.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    var main = el('div', 'sm-row-main');
+    main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '')));
+    if (t.status === 'running') main.appendChild(el('div', 'sm-status', L.smProcessing));
+    else if (t.status === 'failed') main.appendChild(el('div', 'sm-status fail', L.smFailedSt));
+    rowEl.appendChild(main);
+    // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）
+    var time = t.status === 'running'
+      ? (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : '')
+      : (row.rec.endAt ? fmtRel(row.rec.endAt) : '');
+    if (time) rowEl.appendChild(el('span', 'sm-time', time));
+    rowEl.addEventListener('click', function () { openSubDetail(row.runId, row.ti); });
+    return rowEl;
+  }
+  function renderSubDetail(body: HTMLElement) {
+    var parts = (subDetailView || '').split(':');
+    var runId = parts[0]; var ti = Number(parts[1]) || 0;
+    var back = el('div', 'sm-back', '‹ ' + L.smBack);
+    back.addEventListener('click', function () { subDetailView = null; renderSubDock(); });
+    body.appendChild(back);
+    var full = subDetailCache[runId];
+    if (!full) {
+      body.appendChild(el('div', 'sm-empty', L.smLoading));
+      vscode.postMessage({ type: 'subagentDetailRequest', id: runId }); // 缓存被逐出/丢失时重取
+      return;
+    }
+    var t = full.tasks[ti];
+    if (!t) { body.appendChild(el('div', 'sm-empty', L.smNoRuns)); return; }
+    var hd = el('div', 'sm-task ' + t.status);
+    var line1 = el('div', 'sm-line');
+    line1.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
+    if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
+    hd.appendChild(line1);
+    if (t.task) { var tk = el('div', 'sm-task-desc', t.task); tk.title = t.task; hd.appendChild(tk); }
+    body.appendChild(hd);
+    // 完整活动流（Full 快照，上限 400 条）
+    for (var ai = 0; ai < t.items.length; ai++) {
+      var act = el('div', 'sm-act', t.items[ai]); act.title = t.items[ai];
+      body.appendChild(act);
+    }
+    if (t.activityCount > t.items.length)
+      body.appendChild(el('div', 'sm-more', L.smMore.replace('{n}', String(t.activityCount - t.items.length))));
+    // 最终产出 markdown 全文渲染
+    if (t.output) {
+      var out = el('div', 'sm-out-md');
+      renderRich(out, t.output);
+      body.appendChild(out);
+    }
+  }
+  // 秒表：运行中有概览时每秒重绘（用时列跳动）；下钻视图不重绘（丢滚动位置），
+  // 用时在下钻头部静态展示。收起（hidden）时不绘
+  setInterval(function () {
+    if (!subdock || subdock.classList.contains('hidden') || subDetailView) return;
+    var runs = subRunsOf(activeTabId);
+    if (runs && anySubRunning(runs)) renderSubDock();
+  }, 1000);
+  function subMonUpdate(id: string, snap: SubagentSnapshot, final: boolean, startAt?: number, endAt?: number) {
     // 只进浮窗（用户拍板：消息流不留内联卡片，工具行 OUT 文本已是兑底）；
     // 结束不强制展开（不重蹴“点一下就消失”事故），浮窗收着就更新内容，图标常驻
-    dockShow(snap, final);
+    updateSubRun(activeTabId, id, snap, final, startAt, endAt);
+    if (subdock && !subCollapsed) dockResetPos(subdock);
+    renderSubDock();
     scroll();
   }
   function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); scroll(); }
@@ -1225,7 +1337,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
-    else if (m.type === 'subagentUpdate') subMonUpdate(m.id, m.snapshot, m.final);
+    // subagentUpdate/subagentDetail 已在 window message 入口截获（页签过滤前），不进 handleMsg
     else if (m.type === 'uiState') {
       // 工单十八：原子快照——tabId 不符直接丢弃（连切竞态：慢到的旧页签快照不得覆盖新活动页签）
       if (m.tabId !== activeTabId) return;
@@ -1294,15 +1406,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   /** 页签切换（刀5）：本地只换芯片高亮，内容现场由宿主 postUiState 重拉（pi 会话=唯一真相，
    *  webview 零影子状态——切回页签丢失现场在架构上不可能，因为根本不存在本地副本） */
-  // 子 agent 浮窗按页签绑定：每页签缓存最后快照与收起偏好（工单十五刀5 宿主不喂后台流，
-  // 故在消息丢弃前截获缓存；切回页签时浮窗/图标随该页签数据恢复，不串台）
-  var subTabCache: Record<string, { snap: SubagentSnapshot; final: boolean }> = {};
+  // 子 agent 浮窗按页签绑定：每页签 runs 列表（多次派发累积留档，工单十五刀5 宿主不喂
+  // 后台流，故在消息丢弃前截获；切回页签时概览随该页签数据恢复，不串台）
   var subCollapsedByTab: Record<string, boolean> = {};
   function applyTabSubState(tid: string) {
-    var cached = subTabCache[tid];
-    if (cached) {
+    subDetailView = null; // 页签切换退出下钻（详情缓存按 runId 全局，切回重开仍命中）
+    var runs = subRunsByTab[tid];
+    if (runs && Object.keys(runs).length) {
       subCollapsed = subCollapsedByTab[tid] === true;
-      subMonUpdate(tid, cached.snap, cached.final);
+      if (subdock && !subCollapsed) dockResetPos(subdock);
+      renderSubDock();
     } else {
       // 该页签没有子 agent 数据：浮窗收起隐藏、spinner 熄灭（图标随缓存判空自动隐藏）
       subRunning = false;
@@ -1375,8 +1488,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (m.type === 'subagentUpdate') {
       var stid = m.tabId !== undefined ? m.tabId : activeTabId;
       if (stid === null) return;
-      subTabCache[stid] = { snap: m.snapshot, final: m.final };
-      if (stid === activeTabId) subMonUpdate(stid, m.snapshot, m.final);
+      updateSubRun(stid, m.id, m.snapshot, m.final, m.startAt, m.endAt);
+      if (stid === activeTabId) { if (subdock && !subCollapsed) dockResetPos(subdock); renderSubDock(); }
+      return;
+    }
+    // 下钻响应同款截获（宿主 this.post 带发起时页签，若用户已切页签则不能丢——缓存全局）
+    if (m.type === 'subagentDetail') {
+      subDetailCache[m.id] = m.snapshot;
+      if (subDetailView && subDetailView.split(':')[0] === m.id) renderSubDock();
       return;
     }
     // tabId 路由：首条带标消息定初始标签；非活动标签的消息宿主已不喂（刀5），带双保险丢弃

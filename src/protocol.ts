@@ -145,6 +145,7 @@ export type WebviewToHost =
   | WvGetFilesMsg
   | WvMoreMsg
   | WvSettingsMsg
+  | WvSubagentDetailRequestMsg
   | WvPickModelMsg
   | WvPickThinkingMsg
   | WvPickThemeMsg
@@ -234,10 +235,25 @@ export interface ToolEndMsg {
 /** 子 agent 监控快照（流式 update 与最终 end 共用同一条消息，final 区分） */
 export interface SubagentUpdateMsg {
   type: "subagentUpdate";
-  /** toolCallId：与 toolStart/toolEnd 的 id 对齐，webview 靠它定位监控卡片 */
+  /** toolCallId（同步）或异步句柄 sa-n：webview 靠它定位监控运行 */
   id: string;
   snapshot: SubagentSnapshot;
   final: boolean;
+  /** 运行计时（宿主测量，概览用时列/下钻显示用）；异步路径来自扩展 entry */
+  startAt?: number;
+  endAt?: number;
+}
+/** 下钻请求：webview 点概览行 → 宿主用留存的全量 details 构建 Full 快照回给 webview */
+export interface WvSubagentDetailRequestMsg {
+  type: "subagentDetailRequest";
+  /** 运行 id（同 subagentUpdate.id） */
+  id: string;
+}
+export interface SubagentDetailMsg {
+  type: "subagentDetail";
+  id: string;
+  /** Full 快照（活动流上限 400 条、产出 60k 字，webview markdown 渲染） */
+  snapshot: SubagentSnapshot;
 }
 export interface BusyMsg {
   type: "busy";
@@ -486,6 +502,7 @@ export type HostToWebview =
   | ToolCallDeltaMsg
   | ToolEndMsg
   | SubagentUpdateMsg
+  | SubagentDetailMsg
   | BusyMsg
   | RenderMsg
   | QueueMsg
