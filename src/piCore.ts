@@ -488,34 +488,69 @@ export class PiCore {
         const buf = Buffer.alloc(len);
         await fh.read(buf, 0, len, stat.size - len);
         const lines = buf.toString("utf8").split("\n");
-        const finals = new Map<string, { data: Record<string, unknown>; order: number }>();
+        const finals = new Map<string, { frame: { detail: unknown; final: boolean; startAt?: number; endAt?: number }; order: number }>();
         let order = 0;
         for (const line of lines) {
-          if (!line.includes("subagent-async")) continue;
           let o: unknown;
-          try { o = JSON.parse(line); } catch { continue; } // 截断半条/非 JSON 行跳过
+          let isAsyncEntry = false;
+          if (line.includes("subagent-async")) {
+            isAsyncEntry = true;
+            try { o = JSON.parse(line); } catch { continue; } // 截断半条/非 JSON 行跳过
+          } else if (line.includes("toolResult") && line.includes('"details"')) {
+            try { o = JSON.parse(line); } catch { continue; }
+          } else {
+            continue;
+          }
           const rec = o as Record<string, unknown> | null;
-          if (!rec || rec.type !== "custom" || rec.customType !== "subagent-async") continue;
-          const d = rec.data as Record<string, unknown> | undefined;
-          const h = typeof d?.handle === "string" ? d.handle : null;
-          if (!h || !d) continue;
+          if (!rec) continue;
+          let h: string | null = null;
+          let frame: { detail: unknown; final: boolean; startAt?: number; endAt?: number } | null = null;
+          if (isAsyncEntry) {
+            if (rec.type !== "custom" || rec.customType !== "subagent-async") continue;
+            const d = rec.data as Record<string, unknown> | undefined;
+            h = typeof d?.handle === "string" ? d.handle : null;
+            if (!h || !d) continue;
+            frame = {
+              detail: d.detail,
+              final: d.status !== "running",
+              ...(typeof d.startedAt === "number" ? { startAt: d.startedAt as number } : {}),
+              ...(typeof d.endedAt === "number" ? { endAt: d.endedAt as number } : {}),
+            };
+          } else {
+            // 同步调用（工单26验收后续缺口，自然语言分流下同步才是默认）：toolResult.details
+            // 是全量正本。空壳防御：results 空或首任务 messages 为 0 = 异步返回值的冻结壳，跳过
+            const m = rec.message as Record<string, unknown> | undefined;
+            if (!m || m.role !== "toolResult") continue;
+            const det = m.details as Record<string, unknown> | undefined;
+            if (!det) continue;
+            const mode = det.mode;
+            if (mode !== "single" && mode !== "parallel" && mode !== "chain") continue;
+            const results = det.results as Record<string, unknown>[] | undefined;
+            if (!results || results.length === 0) continue;
+            const msgs = results[0]?.messages as unknown[] | undefined;
+            if (!msgs || msgs.length === 0) continue;
+            h = typeof m.id === "string" ? m.id : null;
+            if (!h) continue;
+            frame = { detail: det, final: true, ...(rec.timestamp ? { endAt: Date.parse(rec.timestamp as string) || undefined } : {}) };
+          }
           order++;
           const prev = finals.get(h);
-          const st = d.status;
-          if (!prev || st === "completed" || st === "failed") finals.set(h, { data: d, order });
+          if (!prev || frame.final) finals.set(h, { frame, order });
         }
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
-        for (const [h, { data }] of ordered) {
-          const snap = subagentSnapshot(data.detail);
+        for (const [h, { frame }] of ordered) {
+          const snap = subagentSnapshot(frame.detail);
           if (!snap) continue;
-          const rec = this.trackSubagentRun(h, data.detail);
-          if (typeof data.startedAt === "number") rec.startAt = data.startedAt;
-          if (typeof data.endedAt === "number") rec.endAt = data.endedAt;
+          // 快照里还有 running 任务的帧不投（异步壳冻结态/口径异常），防水久「处理中」假行
+          if (snap.tasks.some((t) => t.status === "running")) continue;
+          const rec = this.trackSubagentRun(h, frame.detail);
+          if (frame.startAt !== undefined) rec.startAt = frame.startAt;
+          if (frame.endAt !== undefined) rec.endAt = frame.endAt;
           this.post({
             type: "subagentUpdate",
             id: h,
             snapshot: snap,
-            final: data.status !== "running",
+            final: frame.final,
             startAt: rec.startAt,
             endAt: rec.endAt,
           });
