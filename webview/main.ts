@@ -713,7 +713,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
       e.preventDefault();
     });
-    head.addEventListener('click', function () { if (!dragMoved) dockSetCollapsed(true); });
+    head.addEventListener('click', function (e) {
+      var tg = e.target as HTMLElement;
+      if (tg && tg.closest && tg.closest('.sd-btn')) return; // 按钮自处理，别把点击吞成收起
+      if (!dragMoved) dockSetCollapsed(true);
+    });
     document.body.appendChild(d);
     subdock = d;
     return d;
@@ -780,6 +784,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (subDetailView) {
       // 下钻模式：返回并进标题行（2026-09-18 用户反馈：单独一行浪费且突兀）
       var backB = el('span', 'sd-btn sm-back-head', '‹ ' + L.smBack);
+      backB.addEventListener('mousedown', function (e) { e.stopPropagation(); }); // 拖拽/收起路径全断
       backB.addEventListener('click', function (e) { e.stopPropagation(); subDetailView = null; renderSubDock(); });
       head.appendChild(backB);
     } else {
