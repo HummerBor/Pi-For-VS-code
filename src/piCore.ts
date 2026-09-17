@@ -118,6 +118,9 @@ export class PiCore {
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
   private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number }>();
+  /** 历史重放已消费的会话文件（债务④）：每文件只放一次，此后 live 事件接管，
+   *  防切页签 uiState 反复重放同帧覆写 webview 较新状态 */
+  private subagentHistoryReplayedFor: string | null = null;
   /** 已终结的 subagent 工具调用 id。异步派发的同步壳在 end 之后还会收到 onUpdate 流（后台
    *  每个回合边界 emitUpdate，pi 照发 tool_execution_update），不拦的话 webview 会重建
    *  已关闭的行——2026-09-18 实测事故：4 次异步派发 = 4 条永转“处理中”幽灵行 */
@@ -455,8 +458,73 @@ export class PiCore {
         sessionFile: foot?.sessionFile ?? null,
         stats: foot?.stats ?? null,
       });
+      // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
+      // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行
+      if (!this.busy) void this.replaySubagentHistory();
     } catch {
       // ignore
+    }
+  }
+
+  /**
+   * 浮窗历史重放（债务④，2026-09-18）：subRunsByTab 只吃实时事件，重载即清——消息流
+   * 从 jsonl 重放、浮窗不翻旧账。数据源 = 会话文件里 subagent-async 自定义 entry 帧
+   * （detail 带全量 messages/startedAt/endedAt，实测持久）；**不能用 toolResult.details**——
+   * 异步场景它是工具返回瞬间冻结的空壳（messages 0、usage 全 0，当日实捞验证）。
+   * 只读尾部 2MB（会话文件可能很大，帧频率低尾部足够）；首行可能截断半条 JSON，丢弃。
+   * 同句柄跨纪元重用（扩展进程重启后 handle 从 sa-1 重计、同一 jsonl 追加）：取终态帧
+   * 优先于末帧。重放失败静默——这是增强不是链路必需。
+   */
+  private async replaySubagentHistory(): Promise<void> {
+    const file = this.lastSessionFile;
+    if (!file || file === this.subagentHistoryReplayedFor) return;
+    this.subagentHistoryReplayedFor = file;
+    try {
+      const stat = await fs.promises.stat(file).catch(() => null);
+      if (!stat || stat.size === 0) return;
+      const len = Math.min(stat.size, 2 * 1024 * 1024);
+      const fh = await fs.promises.open(file, "r");
+      try {
+        const buf = Buffer.alloc(len);
+        await fh.read(buf, 0, len, stat.size - len);
+        const lines = buf.toString("utf8").split("\n");
+        const finals = new Map<string, { data: Record<string, unknown>; order: number }>();
+        let order = 0;
+        for (const line of lines) {
+          if (!line.includes("subagent-async")) continue;
+          let o: unknown;
+          try { o = JSON.parse(line); } catch { continue; } // 截断半条/非 JSON 行跳过
+          const rec = o as Record<string, unknown> | null;
+          if (!rec || rec.type !== "custom" || rec.customType !== "subagent-async") continue;
+          const d = rec.data as Record<string, unknown> | undefined;
+          const h = typeof d?.handle === "string" ? d.handle : null;
+          if (!h || !d) continue;
+          order++;
+          const prev = finals.get(h);
+          const st = d.status;
+          if (!prev || st === "completed" || st === "failed") finals.set(h, { data: d, order });
+        }
+        const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
+        for (const [h, { data }] of ordered) {
+          const snap = subagentSnapshot(data.detail);
+          if (!snap) continue;
+          const rec = this.trackSubagentRun(h, data.detail);
+          if (typeof data.startedAt === "number") rec.startAt = data.startedAt;
+          if (typeof data.endedAt === "number") rec.endAt = data.endedAt;
+          this.post({
+            type: "subagentUpdate",
+            id: h,
+            snapshot: snap,
+            final: data.status !== "running",
+            startAt: rec.startAt,
+            endAt: rec.endAt,
+          });
+        }
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      // 会话文件不可读（新建未落盘/切换中）静默
     }
   }
 
