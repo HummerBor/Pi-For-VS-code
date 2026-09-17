@@ -135,12 +135,18 @@ function itemsFromMessages(messages: unknown): { items: string[]; total: number 
   return { items: out.slice(-MAX_ITEMS), total };
 }
 
-/** 结束态判定：对齐官方扩展 isFailedResult（exitCode!==0 / stopReason error|aborted） */
+/**
+ * 结束态判定。官方 isFailedResult（exitCode!==0 / stopReason error|aborted）只用于**最终结果**；
+ * 流式中间态不能照搬——扩展每回合结束都更新 stopReason，中间回合调工具时是 "toolCall"
+ * （正常收尾才是 "end"），照搬会把运行中误判成 done：浮窗 ✓、头部图标不转（0.111 实测事故，
+ * 用户看着图标全程没动）。修法："toolCall" 明确视为 running，未知收尾值保守回 running。
+ */
 function taskStatus(r: Record<string, unknown>): "running" | "done" | "failed" {
   const exitCode = r.exitCode;
   const stop = r.stopReason;
   if (exitCode !== 0 && typeof exitCode === "number") return "failed";
   if (stop === "error" || stop === "aborted") return "failed";
+  if (stop === "toolCall") return "running";
   if (typeof stop === "string" && stop) return "done";
   return "running";
 }

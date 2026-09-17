@@ -124,4 +124,19 @@ if (windowed) {
   eq("总量 20", windowed.tasks[0].activityCount, 20);
 }
 
+/* 第 7 组：流式中间态 stopReason（0.111 事故回归）——中间回合 toolCall 不是完成 */
+const midTurn = subagentSnapshot({
+  mode: "single",
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "toolCall", usage: {}, messages: [{ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: {} }] }] }],
+});
+ok("toolCall 中间态识别", midTurn !== null);
+if (midTurn) eq("toolCall → running", midTurn.tasks[0].status, "running");
+
+const endTurn = subagentSnapshot({
+  mode: "single",
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "end", usage: {}, messages: [{ role: "assistant", content: [{ type: "text", text: "完事" }] }] }],
+});
+ok("end 收尾识别", endTurn !== null);
+if (endTurn) eq("end → done", endTurn.tasks[0].status, "done");
+
 console.log(`subagentSnapshot: ${passed} 项全过`);
