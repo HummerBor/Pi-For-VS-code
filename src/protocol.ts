@@ -239,6 +239,8 @@ export interface SubagentUpdateMsg {
   id: string;
   snapshot: SubagentSnapshot;
   final: boolean;
+  /** 宿主关闭该运行：异步派发的同步壳行应删除（真进度走 sa-n 句柄行，别双份） */
+  closed?: boolean;
   /** 运行计时（宿主测量，概览用时列/下钻显示用）；异步路径来自扩展 entry */
   startAt?: number;
   endAt?: number;

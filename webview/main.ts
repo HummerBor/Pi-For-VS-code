@@ -787,8 +787,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rowEl.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     var main = el('div', 'sm-row-main');
     main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '')));
-    if (t.status === 'running') main.appendChild(el('div', 'sm-status', L.smProcessing));
-    else if (t.status === 'failed') main.appendChild(el('div', 'sm-status fail', L.smFailedSt));
+    // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
+    var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : '';
+    var taskSnip = (t.task || '').slice(0, 48);
+    main.appendChild(el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), stTxt ? stTxt + ' · ' + taskSnip : taskSnip));
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）
     var time = t.status === 'running'
@@ -1493,6 +1495,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (m.type === 'subagentUpdate') {
       var stid = m.tabId !== undefined ? m.tabId : activeTabId;
       if (stid === null) return;
+      // 宿主关壳：异步派发的同步壳行删除（真进度走 sa-n 句柄行）；正下钻着它就退回概览
+      if ((m as any).closed) {
+        var cruns = subRunsByTab[stid];
+        if (cruns) delete cruns[m.id];
+        if (subDetailView && subDetailView.split(':')[0] === m.id) subDetailView = null;
+        if (stid === activeTabId) renderSubDock();
+        return;
+      }
       updateSubRun(stid, m.id, m.snapshot, m.final, m.startAt, m.endAt);
       if (stid === activeTabId) { if (subdock && !subCollapsed) dockResetPos(subdock); renderSubDock(); }
       return;

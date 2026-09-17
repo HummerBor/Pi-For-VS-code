@@ -118,6 +118,10 @@ export class PiCore {
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
   private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number }>();
+  /** 已终结的 subagent 工具调用 id。异步派发的同步壳在 end 之后还会收到 onUpdate 流（后台
+   *  每个回合边界 emitUpdate，pi 照发 tool_execution_update），不拦的话 webview 会重建
+   *  已关闭的行——2026-09-18 实测事故：4 次异步派发 = 4 条永转“处理中”幽灵行 */
+  private subagentEndedCalls = new Set<string>();
 
   /** 留存/更新运行正本；超上限淘汰最早的（Map 迭代序即插入序） */
   private trackSubagentRun(id: string, details: unknown): { startAt: number; endAt?: number } {
@@ -1385,6 +1389,8 @@ export class PiCore {
         // pi 原生事件零轮询；非 subagent 工具无此需求，静默丢弃。快照构建失败（非本扩展
         // 的 details 形状）静默跳过，不许弄崩面板（subagentSnapshot.ts 头注释）
         if (e.toolName === "subagent") {
+          // 异步壳的后台 onUpdate：工具已 end，行已关——别复活幽灵
+          if (this.subagentEndedCalls.has(e.toolCallId)) break;
           const snap = subagentSnapshot(e.partialResult?.details);
           if (snap) {
             const rec = this.trackSubagentRun(e.toolCallId, e.partialResult?.details);
@@ -1440,6 +1446,12 @@ export class PiCore {
         // 子 agent 监控收尾：最终 details.results 快照（含各任务最终输出/状态），
         // 先于 toolEnd 语义无差别——webview 两条都消费，顺序不敏感
         if (e.toolName === "subagent") {
+          this.subagentEndedCalls.add(e.toolCallId);
+          if (this.subagentEndedCalls.size > 500) {
+            // 有界防泄漏：Set 迭代序即插入序，删最旧
+            const oldest = this.subagentEndedCalls.values().next().value;
+            if (oldest !== undefined) this.subagentEndedCalls.delete(oldest);
+          }
           const finalSnap = subagentSnapshot(e.result?.details);
           if (finalSnap) {
             const rec = this.trackSubagentRun(e.toolCallId, e.result?.details);
@@ -1451,6 +1463,15 @@ export class PiCore {
               final: true,
               startAt: rec.startAt,
               endAt: rec.endAt,
+            });
+          } else {
+            // 异步派发：工具即返无 details，壳行立即关掉（真进度走 sa-n 句柄行，不双份）
+            this.post({
+              type: "subagentUpdate",
+              id: e.toolCallId,
+              snapshot: { mode: "single", tasks: [] },
+              final: true,
+              closed: true,
             });
           }
         }
