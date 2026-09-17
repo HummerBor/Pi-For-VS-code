@@ -116,21 +116,43 @@ function toolCallFallback(a: Record<string, unknown>): string {
   return "";
 }
 
-/** 助手消息里提取展示项（对齐官方扩展 getDisplayItems：只取 text 与 toolCall，跳过 thinking）；tail<=0 不截 */
-function itemsFromMessages(messages: unknown, tail: number): { items: string[]; total: number } {
+/**
+ * 消息里提取展示项。概览口径（full=false）对齐官方扩展 getDisplayItems：只取 assistant 的
+ * text 与 toolCall，160 字单行（跳过 thinking 与 toolResult）。FULL 下钻口径（full=true，
+ * 2026-09-18 用户问「为什么不是完整会话信息」后拍板补全）：加收 toolResult（⮑ 前缀），
+ * 助手文本保留换行不截 160——completed 帧 messages 本就带全量历史（user/assistant/
+ * toolResult 实测验证），概览刀法只该活在概览。thinking 两边都跳（噪声，Codex 同）。
+ */
+const FULL_TEXT_MAX = 8000;
+const FULL_RESULT_MAX = 4000;
+function itemsFromMessages(messages: unknown, tail: number, full: boolean): { items: string[]; total: number } {
   const out: string[] = [];
   let total = 0;
   if (!Array.isArray(messages)) return { items: out, total };
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown> | null;
-    if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    if (!msg || !Array.isArray(msg.content)) continue;
     const content = msg.content as Record<string, unknown>[];
+    if (msg.role === "toolResult") {
+      if (!full) continue; // 概览口径不收工具输出
+      let text = "";
+      for (let j = 0; j < content.length; j++) {
+        const p = content[j];
+        if (p && typeof p === "object" && p.type === "text" && typeof p.text === "string") text += p.text;
+      }
+      text = text.replace(/\n+$/, "");
+      if (!text.trim()) continue;
+      total++;
+      out.push("⮑ " + (text.length > FULL_RESULT_MAX ? text.slice(0, FULL_RESULT_MAX) + " …(截断)" : text));
+      continue;
+    }
+    if (msg.role !== "assistant") continue;
     for (let j = 0; j < content.length; j++) {
       const part = content[j];
       if (!part || typeof part !== "object") continue;
       if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
         total++;
-        out.push(oneLine(part.text, ITEM_MAX));
+        out.push(full ? capText(part.text, FULL_TEXT_MAX) : oneLine(part.text, ITEM_MAX));
       } else if (part.type === "toolCall" && typeof part.name === "string") {
         total++;
         out.push(fmtToolCall(part.name, part.arguments));
@@ -138,6 +160,12 @@ function itemsFromMessages(messages: unknown, tail: number): { items: string[]; 
     }
   }
   return { items: tail > 0 ? out.slice(-tail) : out, total };
+}
+
+/** FULL 口径的文本保留换行，只掐尾部防撑爆协议 */
+function capText(s: string, max: number): string {
+  const t = s.replace(/\n+$/, "");
+  return t.length > max ? t.slice(0, max) + " …(截断)" : t;
 }
 
 /**
@@ -183,14 +211,14 @@ function finalOutput(r: Record<string, unknown>, max: number): string {
   return raw ? oneLine(raw, max) : "";
 }
 
-function snapTask(raw: unknown, itemTail: number, outMax: number): SubagentTaskSnapshot | null {
+function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean): SubagentTaskSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.agent !== "string") return null;
-  const { items, total } = itemsFromMessages(r.messages, itemTail);
+  const { items, total } = itemsFromMessages(r.messages, itemTail, full);
   return {
     agent: r.agent,
-    task: typeof r.task === "string" ? oneLine(r.task, TASK_MAX) : "",
+    task: typeof r.task === "string" ? (full ? capText(r.task, 2000) : oneLine(r.task, TASK_MAX)) : "",
     status: taskStatus(r),
     step: typeof r.step === "number" ? r.step : undefined,
     model: typeof r.model === "string" ? r.model : undefined,
@@ -209,12 +237,13 @@ export function subagentSnapshot(details: unknown): SubagentSnapshot | null {
   return buildSnapshot(details, MAX_ITEMS, OUTPUT_MAX);
 }
 
-/** 下钻视图变体：活动流不截 12 条（上限 400）、产出不截 2000 字（上限 60k，markdown 全文渲染用） */
+/** 下钻视图变体：完整转录口径——活动流不截条数（上限 400）、收工具输出、文本全文不截 160、
+ *  产出上限 60k（markdown 全文渲染用）。概览仍走 subagentSnapshot 紧凑口径，别混用 */
 export function subagentSnapshotFull(details: unknown): SubagentSnapshot | null {
-  return buildSnapshot(details, FULL_ITEMS, FULL_OUTPUT_MAX);
+  return buildSnapshot(details, FULL_ITEMS, FULL_OUTPUT_MAX, true);
 }
 
-function buildSnapshot(details: unknown, itemTail: number, outMax: number): SubagentSnapshot | null {
+function buildSnapshot(details: unknown, itemTail: number, outMax: number, full = false): SubagentSnapshot | null {
   if (!details || typeof details !== "object") return null;
   const d = details as Record<string, unknown>;
   const mode = d.mode;
@@ -222,7 +251,7 @@ function buildSnapshot(details: unknown, itemTail: number, outMax: number): Suba
   if (!Array.isArray(d.results)) return null;
   const tasks: SubagentTaskSnapshot[] = [];
   for (let i = 0; i < d.results.length; i++) {
-    const t = snapTask(d.results[i], itemTail, outMax);
+    const t = snapTask(d.results[i], itemTail, outMax, full);
     if (t) tasks.push(t);
   }
   return { mode, tasks };

@@ -751,8 +751,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
     head.appendChild(minB);
     body.innerHTML = '';
-    if (subDetailView) renderSubDetail(body);
-    else renderSubOverview(body, runs);
+    if (subDetailView) { body.classList.add('sm-detail'); renderSubDetail(body); } // sm-detail：css 放开 pre-wrap
+    else { body.classList.remove('sm-detail'); renderSubOverview(body, runs); }
     linkify(body);
     updateSubInd();
   }
