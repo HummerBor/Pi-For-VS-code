@@ -7,6 +7,7 @@
 import { STRINGS, type Lang } from "../src/i18n";
 import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/protocol";
 import { toolDetail } from "../src/toolDetail";
+import type { SubagentSnapshot } from "../src/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -29,6 +30,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // pi 会话对象就是唯一真相，切回页签时宿主 postUiState 全量重发（消息/busy/排队/横幅/模式），
   // 后台页签的消息宿主直接不喂。本地只剩：单一渲染上下文（root+全局态）+ 页签芯片清单
   var toolEls = {}; var queuedItems = [];
+  // 子 agent 监控卡片（subagentUpdate）：id(toolCallId) → { wrap, expanded }
+  // 子 agent 浮窗状态：subMons 内联卡片已整树退役（用户拍板消息流不留卡片）
   var liveMsg = null; var liveDiv = null; var pdet = null; var liveParts = null; var liveRTimer = null;
   var streaming = false; var busyTimer = null; var busyStart = 0; var queueN = 0;
   // 压缩进行中（宿主 compaction_start→end 驱动，真相随 uiState 快照）：压过 Working 标签，
@@ -51,14 +54,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var sendBtn = document.getElementById('send') as HTMLButtonElement;
   var statusEl = document.getElementById('status') as HTMLElement;
   var modeBadge = document.getElementById('modebadge') as HTMLElement;
-  var langEl = document.getElementById('lang') as HTMLElement;
+  // 语言/主题入口已收进 ⚙ 设置菜单（头部按钮移除，功能在 panel.buildSettingsItems）
   var codechipEl = document.getElementById('codechip') as HTMLElement;
   var codeCtx = null; var codeOn = true;
   var modelEl = document.getElementById('model') as HTMLElement;
   var thinkEl = document.getElementById('think') as HTMLElement;
   var sessionEl = document.getElementById('session') as HTMLElement;
   var moreEl = document.getElementById('more') as HTMLElement;
-  var themeEl = document.getElementById('theme') as HTMLElement;
+  var subindEl = document.getElementById('subind') as HTMLElement;
   var usageEl = document.getElementById('usage') as HTMLElement;
   var newChatEl = document.getElementById('newchat') as HTMLElement;
   var attachbarEl = document.getElementById('attachbar') as HTMLElement;
@@ -89,7 +92,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     trash: '<path d="M2.5 4.5h11"/><path d="M6.5 2.5h3"/><path d="M4.5 4.5l.7 9h5.6l.7-9"/><path d="M6.7 7.5v3.5M9.3 7.5v3.5"/>',
     chev: '<path d="M6 3.5L10.5 8 6 12.5"/>',
     check: '<path d="M3.2 8.6l3 3L12.8 4.4"/>',
-    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>'
+    at: '<circle cx="8" cy="8" r="2.2"/><path d="M10.2 8v.8a2 2 0 0 0 4 0V8a6.2 6.2 0 1 0-2.4 4.9"/>',
+    // codicon loading 同款：断弧圆环，旋转动效在 CSS（.ico-spin）
+    loading: '<circle cx="8" cy="8" r="5.5" stroke-dasharray="26 9"/>'
   };
   function ico(name: string, size?: number) {
     var s = size || 14;
@@ -153,7 +158,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   historyEl.innerHTML = ico('clock');
   newChatEl.innerHTML = ico('plus');
   moreEl.innerHTML = ico('gear');
-  themeEl.innerHTML = ico('theme');
+  subindEl.innerHTML = ico('loading', 15); // codicon loading 同款断弧圆环，旋转在 CSS
   attachEl.innerHTML = ico('image');
   pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';
   pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';
@@ -614,6 +619,119 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');
     scroll();
   }
+  // ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ──
+  // 分工：实时进度只进浮窗（不打断对话流）；final 才落内联卡片（历史重绘可复现）
+  var SM_ICONS: Record<string, string> = { running: '⏳', done: '✓', failed: '✗' };
+  function smTasksHtml(container: HTMLElement, snap: SubagentSnapshot, expanded: boolean) {
+    for (var ti = 0; ti < snap.tasks.length; ti++) {
+      var t = snap.tasks[ti];
+      var row = el('div', 'sm-task ' + t.status);
+      var line1 = el('div', 'sm-line');
+      line1.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+      var nm = t.agent + (t.step ? ' #' + t.step : '');
+      line1.appendChild(el('span', 'sm-agent', nm));
+      if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
+      row.appendChild(line1);
+      if (t.task) { var tk = el('div', 'sm-task-desc', t.task); tk.title = t.task; row.appendChild(tk); }
+      var acts = expanded ? t.items : t.items.slice(-1);
+      for (var ai = 0; ai < acts.length; ai++) {
+        var act = el('div', 'sm-act', acts[ai]); act.title = acts[ai]; row.appendChild(act);
+      }
+      if (t.status === 'running' && t.activityCount > t.items.length)
+        row.appendChild(el('div', 'sm-more', L.smMore.replace('{n}', String(t.activityCount - t.items.length))));
+      if (t.output) { var op = el('div', 'sm-out', t.output); op.title = t.output; row.appendChild(op); }
+      container.appendChild(row);
+    }
+  }
+  // 浮窗：单例。收起（subCollapsed）= 整块隐藏、头部 spinner 亮（运行中），codex 模型；
+  // 拖过一次（dockDragged）后位置归用户，未拖则每次刷新回默认右上角（防漂移事故）
+  var subdock: HTMLElement | null = null;
+  var subCollapsed = false;
+  var dockDragged = false;
+  function dockSetCollapsed(c: boolean) {
+    subCollapsed = c;
+    if (activeTabId !== null) subCollapsedByTab[activeTabId] = c; // 收起偏好按页签记忆，切回不串台
+    if (subdock) subdock.classList.toggle('hidden', c);
+    updateSubInd();
+  }
+  /** 头部 loading 图标：浮窗的锚点——首次有子 agent 后常驻（用户拍板：图标不消失）；
+   *  运行中旋转，全部停止停转但不隐藏，点它展开/收起浮窗 */
+  var subRunning = false;
+  function updateSubInd() {
+    // 图标跟页签走：只有活动页签有子 agent 数据时才显示（缓存判空，全局单例不串台）
+    var show = !!subdock && activeTabId !== null && !!subTabCache[activeTabId];
+    subindEl.style.display = show ? 'inline-flex' : 'none';
+    subindEl.classList.toggle('spin', subRunning);
+    subindEl.title = subCollapsed ? L.smReopen : L.smCollapse;
+  }
+  function dockResetPos(d: HTMLElement) {
+    if (dockDragged) return;
+    d.style.top = '48px'; d.style.right = '12px'; d.style.left = 'auto'; d.style.bottom = 'auto';
+  }
+  function dockEnsure(): HTMLElement {
+    if (subdock) return subdock;
+    var d = el('div', 'subdock hidden'); // 先隐后显：首帧从图标处缩放切出，不闪现
+    dockResetPos(d);
+    var head = el('div', 'sd-head');
+    var body = el('div', 'sd-body');
+    d.appendChild(head); d.appendChild(body);
+    // 拖动：按住头部移动（fixed 定位，offsetLeft/Top 即视口坐标）；位移超阈值才算拖，
+    // 否则 mouseup 视为点击 → 收起面板（拖动与点击分离，误晃不吞点击）
+    var dragMoved = false;
+    head.addEventListener('mousedown', function (e: MouseEvent) {
+      if ((e.target as HTMLElement).classList.contains('sd-btn')) return;
+      dragMoved = false;
+      var sx = e.clientX, sy = e.clientY, ol = d.offsetLeft, ot = d.offsetTop;
+      var mv = function (ev: MouseEvent) {
+        if (!dragMoved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) <= 3) return;
+        dragMoved = true;
+        dockDragged = true;
+        d.style.left = Math.max(4, ol + ev.clientX - sx) + 'px';
+        d.style.top = Math.max(4, ot + ev.clientY - sy) + 'px';
+        d.style.right = 'auto'; d.style.bottom = 'auto';
+      };
+      var up = function () { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
+      document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+      e.preventDefault();
+    });
+    head.addEventListener('click', function () { if (!dragMoved) dockSetCollapsed(true); });
+    document.body.appendChild(d);
+    subdock = d;
+    return d;
+  }
+  function dockShow(snap: SubagentSnapshot, final: boolean) {
+    var d = dockEnsure();
+    if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
+    if (subCollapsed) { d.classList.add('hidden'); }
+    else { requestAnimationFrame(function () { d.classList.remove('hidden'); }); } // 触发从图标处缩放切出
+    var head = d.firstElementChild as HTMLElement;
+    var body = d.lastElementChild as HTMLElement;
+    head.innerHTML = ''; body.innerHTML = '';
+    // 头部（收起钮 + 关闭钮，都= 整块收起，头部 spinner 顶班）
+    var done = 0, failed = 0;
+    for (var i = 0; i < snap.tasks.length; i++) { if (snap.tasks[i].status === 'done') done++; else if (snap.tasks[i].status === 'failed') failed++; }
+    var allSettled = final || done + failed === snap.tasks.length;
+    head.appendChild(el('span', 'sm-ico' + (allSettled ? '' : ' spin'), failed > 0 ? '✗' : (allSettled ? '✓' : '⏳')));
+    head.appendChild(el('span', 'sm-title', L.smTitle));
+    head.appendChild(el('span', 'sm-mode', snap.mode));
+    if (snap.tasks.length > 1) head.appendChild(el('span', 'sm-count', L.smDoneCt.replace('{d}', String(done)).replace('{n}', String(snap.tasks.length))));
+    // 收起钮（× 已按用户要求移除：图标就是唯一开关，收起即缩回图标里）
+    var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
+    minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
+    head.appendChild(minB);
+    smTasksHtml(body, snap, true);
+    d.classList.toggle('final', final);
+    linkify(body);
+    // 运行中才亮头部 loading；final 或全部任务收尾 → 熄灭（用户拍板：不跑就不转）
+    subRunning = !final && snap.tasks.some(function (t) { return t.status === 'running'; });
+    updateSubInd();
+  }
+  function subMonUpdate(id: string, snap: SubagentSnapshot, final: boolean) {
+    // 只进浮窗（用户拍板：消息流不留内联卡片，工具行 OUT 文本已是兑底）；
+    // 结束不强制展开（不重蹴“点一下就消失”事故），浮窗收着就更新内容，图标常驻
+    dockShow(snap, final);
+    scroll();
+  }
   function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); scroll(); }
   function textOf(content) {
     if (typeof content === 'string') return content;
@@ -664,7 +782,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     for (var k = 0; k < list.length; k++) {
       var rr = list[k];
       if (rr.role === 'toolResult') {
-        var entry = { text: textOf(rr.content), isError: !!rr.isError, used: false };
+        var entry = { text: textOf(rr.content), isError: !!rr.isError, used: false, details: rr.details };
         results[rr.toolCallId || ''] = entry;
         resultList.push(entry);
       }
@@ -755,6 +873,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
                 var res = (c.id && results[c.id]) || null;
                 if (!res) { for (var rp = 0; rp < resultList.length; rp++) { if (!resultList[rp].used) { res = resultList[rp]; break; } } }
                 if (res) { res.used = true; toolEnd(hid, c.name, res.isError, res.text, det); }
+                // 子 agent 历史重绘不建浮窗/卡片（用户拍板：消息流只留工具行，浮窗只属 LIVE）——
+                // 否则恢复会话时旧 run 的 final 快照会凭空弹出浮窗；历史看工具行 OUT 文本即可
               } else {
                 toolGroupRun(c.name, run, i);
               }
@@ -1006,8 +1126,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
   sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
-  themeEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickTheme' }); });
-  langEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickLang' }); });
+  // 语言/主题头部按钮已移除：功能保留（pickLang/pickTheme），入口收进 ⚙ 设置菜单
+  // 子 agent 监控浮窗收起（头部 spinner 顶班）时，点 spinner 重新展开
+  subindEl.addEventListener('click', function () { dockSetCollapsed(false); });
   // 头部 ＋ → 开新标签会话（工单十五入口收敛，用户拍板 2026-09-14）：多标签时代
   // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
@@ -1104,6 +1225,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
+    else if (m.type === 'subagentUpdate') subMonUpdate(m.id, m.snapshot, m.final);
     else if (m.type === 'uiState') {
       // 工单十八：原子快照——tabId 不符直接丢弃（连切竞态：慢到的旧页签快照不得覆盖新活动页签）
       if (m.tabId !== activeTabId) return;
@@ -1172,10 +1294,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   /** 页签切换（刀5）：本地只换芯片高亮，内容现场由宿主 postUiState 重拉（pi 会话=唯一真相，
    *  webview 零影子状态——切回页签丢失现场在架构上不可能，因为根本不存在本地副本） */
+  // 子 agent 浮窗按页签绑定：每页签缓存最后快照与收起偏好（工单十五刀5 宿主不喂后台流，
+  // 故在消息丢弃前截获缓存；切回页签时浮窗/图标随该页签数据恢复，不串台）
+  var subTabCache: Record<string, { snap: SubagentSnapshot; final: boolean }> = {};
+  var subCollapsedByTab: Record<string, boolean> = {};
+  function applyTabSubState(tid: string) {
+    var cached = subTabCache[tid];
+    if (cached) {
+      subCollapsed = subCollapsedByTab[tid] === true;
+      subMonUpdate(tid, cached.snap, cached.final);
+    } else {
+      // 该页签没有子 agent 数据：浮窗收起隐藏、spinner 熄灭（图标随缓存判空自动隐藏）
+      subRunning = false;
+      if (subdock) dockSetCollapsed(true);
+      updateSubInd();
+    }
+  }
   function activateTab(tid: string) {
     if (activeTabId === tid) { renderTabs(); return; }
     activeTabId = tid; tabId = tid;
     liveReset();
+    applyTabSubState(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
     // 工单十八：本地立即清场（零延迟）——原子快照在途时不再挂着上个页签的 Working/排队，
     // 窗口期串显消除；真相由 uiState 回填（B 有排队/横幅会重建，本地激进清安全）
@@ -1220,7 +1359,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 宿主标签清单（唯一事实源）：未读点由宿主记账（后台跑完置位，切回时清） */
   function handleTabs(m: TabsMsg) {
     tabsList = m.tabs || [];
-    if (activeTabId === null || m.activeTabId !== activeTabId) { activeTabId = m.activeTabId; tabId = m.activeTabId; }
+    if (activeTabId === null || m.activeTabId !== activeTabId) {
+      activeTabId = m.activeTabId; tabId = m.activeTabId;
+      applyTabSubState(activeTabId); // 宿主驱动换页签（关页签等）同款：浮窗随页签恢复
+    }
     renderTabs();
   }
 
@@ -1228,6 +1370,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var m = ev.data as HostToWebviewTagged;
     // 标签清单先于 tabId 过滤处理（宿主是事实源）
     if (m.type === 'tabs') { handleTabs(m); return; }
+    // 子 agent 快照在页签过滤前截获：后台页签的流虽不渲染但必须缓存，
+    // 否则切回时该页签的浮窗/图标状态丢失；活动页签则实时渲染
+    if (m.type === 'subagentUpdate') {
+      var stid = m.tabId !== undefined ? m.tabId : activeTabId;
+      if (stid === null) return;
+      subTabCache[stid] = { snap: m.snapshot, final: m.final };
+      if (stid === activeTabId) subMonUpdate(stid, m.snapshot, m.final);
+      return;
+    }
     // tabId 路由：首条带标消息定初始标签；非活动标签的消息宿主已不喂（刀5），带双保险丢弃
     if (m.tabId !== undefined) {
       if (activeTabId === null) { activeTabId = m.tabId; tabId = m.tabId; }

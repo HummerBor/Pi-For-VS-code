@@ -10,6 +10,8 @@
  * 新增/修改消息时三处同步：发送方、接收方、本文件。
  */
 
+import type { SubagentSnapshot } from "./subagentSnapshot";
+
 /* ══════════════ webview → 宿主 ══════════════ */
 
 export interface WvReadyMsg {
@@ -228,6 +230,14 @@ export interface ToolEndMsg {
   isError: boolean;
   text: string;
   detail?: string;
+}
+/** 子 agent 监控快照（流式 update 与最终 end 共用同一条消息，final 区分） */
+export interface SubagentUpdateMsg {
+  type: "subagentUpdate";
+  /** toolCallId：与 toolStart/toolEnd 的 id 对齐，webview 靠它定位监控卡片 */
+  id: string;
+  snapshot: SubagentSnapshot;
+  final: boolean;
 }
 export interface BusyMsg {
   type: "busy";
@@ -475,6 +485,7 @@ export type HostToWebview =
   | ToolCallStartMsg
   | ToolCallDeltaMsg
   | ToolEndMsg
+  | SubagentUpdateMsg
   | BusyMsg
   | RenderMsg
   | QueueMsg
@@ -571,6 +582,15 @@ export interface PiToolExecutionEndEvent {
     details?: { patch?: string; diff?: string; firstChangedLine?: number } | null;
   };
 }
+/** 工具执行中的流式部分结果（pi extensions/types.d.ts:615）——subagent 监控的数据源 */
+export interface PiToolExecutionUpdateEvent {
+  type: "tool_execution_update";
+  toolCallId: string;
+  toolName: string;
+  args?: unknown;
+  /** subagent 扩展在 onUpdate 里上报 AgentToolResult，进度在 .details.results（保守可选） */
+  partialResult?: { details?: unknown } | null;
+}
 export interface PiModelSelectEvent {
   type: "model_select";
 }
@@ -633,6 +653,7 @@ export type PiEvent =
   | PiMessageStartEvent
   | PiMessageUpdateEvent
   | PiToolExecutionStartEvent
+  | PiToolExecutionUpdateEvent
   | PiToolExecutionEndEvent
   | PiModelSelectEvent
   | PiThinkingLevelSelectEvent

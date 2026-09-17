@@ -12,11 +12,10 @@
       <img id="logo" src="{{duckUri}}" title="Pi For VSC">
       <span id="session" class="hdr-btn" title="{{t:sessionBtnTitle}}">{{t:sessionLabel}}—</span>
       <span class="spacer"></span>
+      <span id="subind" class="ico-btn" style="display:none" title="{{t:smReopen}}"></span>
       <span id="history" class="ico-btn" title="{{t:historyTitle}}"></span>
       <span id="newchat" class="ico-btn" title="{{t:newChatTitle}}"></span>
       <span id="more" class="ico-btn" title="{{t:moreTitle}}"></span>
-      <span id="lang" class="ico-btn" title="{{t:langBtnTitle}}">{{langBtn}}</span>
-      <span id="theme" class="ico-btn" title="{{t:themeTitle}}"></span>
     </div>
   </div>
   <div id="tabbar"></div>
@@ -54,7 +53,7 @@
     <span id="think" class="tb-btn" title="{{t:thinkTitle}}">{{t:thinkLabel}}—</span>
     <span id="modebadge" class="tb-btn" title="{{t:modeBadgeTitle}}"></span>
     <span id="usage"></span>
-    <span id="ver"></span>
+    <span id="ver">v{{version}}</span>
   </div>
   <script nonce="{{nonce}}">{{js}}</script>
 </body>

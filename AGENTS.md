@@ -55,6 +55,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 | `npm run compile` | 完整构建（webview 类型检查 → vite → tsc），提交前必跑 |
 | `npm run package` | 本地打测试 vsix（自动 bump patch；不动 git，版本号随下次提交入库。事故教训：同版本号覆盖打包 → 装旧包无法自证，2026-09-15） |
 | `npm run test:detail` | 跑 toolDetail 用例（scripts/toolDetail.test.mts，零依赖） |
+| `npm run test:subagent` | 跑 subagentSnapshot 快照用例（scripts/subagentSnapshot.test.mts） |
 | `npm run test:revert` | 跑 patchRevert 逆向还原用例（scripts/patchRevert.test.mts） |
 | `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
 
@@ -66,7 +67,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 src/            宿主侧（extension.ts 入口 / panel.ts VS Code adapter / piCore.ts 核心控制器 /
                 hostCapabilities.ts 宿主能力接口 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
                 protocol.ts 消息协议 / patchRevert.ts edit patch 逆向还原（工单七）/
-                toolDetail.ts 共享摘要 / i18n.ts / webview-html.ts 装配）
+                toolDetail.ts 共享摘要 / subagentSnapshot.ts 子 agent 监控快照 / i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）
 out/            tsc 产物（不进 git，进 vsix）

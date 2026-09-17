@@ -42,6 +42,8 @@ export function getHtml(
     theme,
     nonce,
     duckUri,
+    // 版本指纹（底栏 #ver 显示）：装了新包但 webview 跑旧资源时一眼可辨（浮窗位置事故）
+    version: JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")).version ?? "?",
     // 样式注入整体在 TS 侧拼装：模板里不放 CSS，避免编辑器把 {{css}} 占位符当真 CSS 报错
     headAssets:
       "<style>" + css + "</style>" +

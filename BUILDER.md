@@ -386,3 +386,50 @@ compactionSummary），原实现只刷页脚不重拉消息，折叠块不切页
 
 **验证**：compile 全绿；打包含入 0.0.95。**教训**：工单二十一回报里「settled 重绘同样出
 折叠块」系未实测推断，被用户实测证伪（settled 不重拉消息）——推断当实测写回报，罚记一次。
+
+---
+
+# 交接：子 agent 监控可视化（2026-09-18，全程未提交，接手先读）
+
+## 本轮做了什么（pi-vscode，工作区全部未 commit）
+
+子 agent 工具的实时监控 UI，从零到 0.0.111，**11 个 vsix 迭代全部在工作区**：
+
+- **数据链路**：pi 原生 `tool_execution_update` 事件（extensions/types.d.ts:615）→ piCore
+  订阅转发 → webview 浮窗。零轮询。快照构建器 `src/subagentSnapshot.ts`（纯函数，
+  宿主/webview 共用，30 项用例 `npm run test:subagent`）
+- **最终形态（用户逐轮拍板，别回退）**：消息流无内联卡片（0.110 退役）；
+  浮窗 codex 风格，住头部 loading 图标（codicon loading 断弧环）里——
+  出现→图标转→浮窗从图标处缩放切出（transform-origin top right，.18s）；
+  收起→倒放缩回图标；全部停止→图标停转不隐藏；×按钮已移除，图标是唯一开关
+- **页签绑定（0.111）**：快照按 tabId 缓存（在刀5 页签过滤前截获），图标/浮窗随活动
+  页签切换，收起偏好按页签记忆，后台页签进度不丢
+- **顺带**：头部 EN/◐ 按钮移除，功能收进 ⚙ 设置菜单（panel.buildSettingsItems 顶部两条）；
+  `#ver` 死元素接上=底栏版本指纹（排 webview 旧资源事故用的，留着）
+
+## 事故教训（已随代码注释，接手别再踩）
+
+1. **`:not(#bg-layer)` 特异性含 ID** 压过 `.subdock{position:fixed}` → 浮窗被拍回文档流
+   底部（0.100~0.103 三版无效的根因）。修法：`:not(.subdock)` 豁免。改 body 直属子元素
+   定位类规则前先查这条
+2. **0.103 内联 top/right 救不了**：被覆盖的是 position 属性本身，内联只能改偏移
+3. **防漂移**：浮窗位置只要用户没主动拖（>3px 阈值）每次刷新回默认位（48px/12px）
+
+## 挂账（接手清单）
+
+1. **全部工作未 commit**（13 改 2 新增，git status 可查）——DIRECTOR.md/归档.md 的改动
+   是本会话之外的，提交时分开
+2. i18n `smClose` 死键、style.css `.submon` 死样式段——内联卡片退役残留，顺手清
+3. 浮窗动画时长/曲线未用户确认过（.18s ease-out 是我定的），用户有意见再调
+
+## di-duck 侧（另一仓库，同样未提交）
+
+- `.pi/extensions/subagent/index.ts` spawn 修复（+35/-9）：**根因 = 进程内直连宿主里
+  `process.argv[1]` 是 VS Code 引导脚本不是 pi 入口**，子进程 spawn 成宿主自身静默退出 0
+  （"(no output)" 事故）。修法：argv1 路径含 pi-coding-agent 才信，否则从 cwd 向上找
+  项目内 pi 包 cli.js，已端到端验证（真 pi JSON 事件流正常吐）
+- AGENTS.md 已加铁律：调 subagent 必带 `agentScope: "project"`（扩展默认 user，
+  全局 agents 目录不存在，不带找不到 builder）
+- GLM（老总会话）停机待命；诊断日志 f334c57 已 commit（**用后即拆**，含后加的 8 处埋点）
+- 下一步：提交 spawn 修复 → di-duck 面板恢复会话派 builder 施工工单4 → 实测浮窗全链路
+  （装 0.0.111+）

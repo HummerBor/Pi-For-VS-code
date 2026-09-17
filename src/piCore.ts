@@ -15,6 +15,7 @@ import { createHash } from "crypto";
 import { PiClient } from "./piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
+import { subagentSnapshot } from "./subagentSnapshot";
 import { toolDetail } from "./toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
@@ -1351,6 +1352,16 @@ export class PiCore {
         });
         break;
 
+      case "tool_execution_update":
+        // 子 agent 监控：subagent 扩展经 onUpdate 上报流式进度（partialResult.details.results），
+        // pi 原生事件零轮询；非 subagent 工具无此需求，静默丢弃。快照构建失败（非本扩展
+        // 的 details 形状）静默跳过，不许弄崩面板（subagentSnapshot.ts 头注释）
+        if (e.toolName === "subagent") {
+          const snap = subagentSnapshot(e.partialResult?.details);
+          if (snap) this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: snap, final: false });
+        }
+        break;
+
       case "tool_execution_end": {
         // 工单七：edit 的 result.details.patch（jsdiff unified）按时间序累积——
         // 未跟踪文件逆序逆向还原的唯一依据（裁决 11③）；write 无 details，不可还原
@@ -1369,6 +1380,12 @@ export class PiCore {
           // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来
           detail: toolDetail(e.args),
         });
+        // 子 agent 监控收尾：最终 details.results 快照（含各任务最终输出/状态），
+        // 先于 toolEnd 语义无差别——webview 两条都消费，顺序不敏感
+        if (e.toolName === "subagent") {
+          const finalSnap = subagentSnapshot(e.result?.details);
+          if (finalSnap) this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: finalSnap, final: true });
+        }
         break;
       }
 

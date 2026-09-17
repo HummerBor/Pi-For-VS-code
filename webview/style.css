@@ -6,7 +6,8 @@ body { display: flex; flex-direction: column; font-family: var(--vscode-font-fam
 #header { padding: 6px 10px 5px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
 #hdr-row1 { display: flex; align-items: center; gap: 6px; }
 #bg-layer { position: fixed; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; z-index: 0; }
-body > :not(#bg-layer) { position: relative; z-index: 1; }
+/* :not(#bg-layer) 特异性含 ID，会压过 .subdock 的 position:fixed（浮窗被拍回文档流底部事故），豁免之 */
+body > :not(#bg-layer):not(.subdock) { position: relative; z-index: 1; }
 #logo { width: 18px !important; height: 18px !important; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; border: none; padding: 0; background: none; border-radius: 0; }
 #welcome { display: flex; flex-direction: column; align-items: center; padding-top: 18vh; }
 #welcome .w-duck { width: 96px !important; height: 96px !important; object-fit: contain; image-rendering: pixelated; border: none; padding: 0; background: none; border-radius: 0; }
@@ -18,6 +19,10 @@ body > :not(#bg-layer) { position: relative; z-index: 1; }
 #ctoolbar #usage { font-size: 11px; opacity: .6; margin-right: 8px; white-space: nowrap; }
 .ico-btn { cursor: pointer; padding: 3px 5px; border-radius: 4px; opacity: .8; display: inline-flex; align-items: center; line-height: 0; }
 .ico-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }
+/* 子 agent 监控入口（浮窗最小化/关闭且有子 agent 在跑时亮起）：codicon loading 同款转圈，
+   全部子 agent 停止 → JS 控制隐藏（不跑就不转） */
+#subind.spin svg { animation: icospin 1.1s linear infinite; color: var(--vscode-focusBorder, #0078d4); }
+@keyframes icospin { to { transform: rotate(360deg); } }
 .spacer { flex: 1; }
 .spacer-right { margin-left: auto; }
 .hdr-btn { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; max-width: 100%; }
@@ -97,6 +102,45 @@ details.think summary { cursor: pointer; user-select: none; }
 .tool-box .tb-row + .tb-row { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
 .tool-box .tb-tag { flex: none; opacity: .65; width: 26px; }
 .tool-box .tb-val { white-space: pre-wrap; word-break: break-all; opacity: .85; }
+
+/* ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ── */
+.subdock { position: fixed; right: 12px; top: 48px; width: 340px; max-width: 60%; z-index: 50; transform-origin: top right; transition: transform .18s ease-out, opacity .18s ease-out; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-focusBorder, #0078d4); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); overflow: hidden; font-size: 12px; }
+/* 收起=缩回头部图标处（倒放切出动效）；opacity+pointer-events 而非 display:none，过渡才能走完 */
+.subdock.hidden { opacity: 0; transform: scale(.25) translateY(-10px); pointer-events: none; }
+.subdock.final { border-color: var(--vscode-panel-border, rgba(128,128,128,.35)); opacity: .92; }
+.subdock.min { width: 220px; }
+.sd-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; cursor: move; background: var(--vscode-titleBar-activeBackground, rgba(128,128,128,.14)); user-select: none; font-weight: bold; }
+.sd-head .sm-mode { font-weight: normal; }
+.sd-head .sm-count { font-weight: normal; }
+.sd-btn { margin-left: auto; cursor: pointer; opacity: .55; padding: 0 4px; border-radius: 3px; font-size: 12px; }
+.sd-head .sm-count + .sd-btn, .sd-head .sm-mode + .sd-btn { margin-left: auto; }
+.sd-btn + .sd-btn { margin-left: 0; }
+.sd-btn:hover { opacity: 1; background: rgba(128,128,128,.25); }
+.sd-body { max-height: 300px; overflow-y: auto; padding: 2px 0; }
+.sm-task { padding: 5px 10px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
+.sm-task:first-child { border-top: none; }
+.sm-task.failed .sm-agent { color: var(--vscode-errorForeground, #f66); }
+.sm-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.sm-agent { font-weight: 600; flex: none; }
+.sm-usage { opacity: .55; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-task-desc { opacity: .6; font-size: 11.5px; margin: 3px 0 0 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-act { opacity: .75; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); margin: 2px 0 0 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-more { opacity: .4; font-size: 10.5px; margin: 2px 0 0 15px; }
+.sm-out { opacity: .85; font-size: 11.5px; margin: 4px 0 0 15px; padding: 4px 8px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-radius: 5px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+.sm-ico { flex: none; }
+.sm-ico.spin { animation: smspin 1.2s linear infinite; display: inline-block; }
+@keyframes smspin { to { transform: rotate(360deg); } }
+.sm-title { font-weight: bold; }
+.sm-mode { opacity: .5; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); }
+.sm-count { opacity: .65; font-size: 11px; }
+.sm-hint { margin-left: auto; opacity: .4; font-size: 10.5px; }
+
+/* ── 子 agent 监控内联卡片（final 后留在消息流，可展开看全部活动）── */
+.submon { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.submon.final { opacity: .8; }
+.sm-head { display: flex; align-items: center; gap: 7px; padding: 5px 10px; cursor: pointer; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); user-select: none; }
+.submon .sm-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.16)); }
+.submon .sm-task { padding: 5px 10px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
 
 /* ── 输入区（Claude Code 风格卡片）── */
 #composer { margin: 0 10px 8px; position: relative; display: flex; flex-direction: column; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 10px; background: var(--vscode-input-background); }

@@ -1197,6 +1197,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     const items: (vscode.QuickPickItem & { run?: () => Promise<void> })[] = [];
 
+    // 面板外观：语言/主题（原头部 EN/◐ 按钮的功能收编于此，头部只留监控/历史/新会话/菜单）
+    items.push({
+      label: this.L.sLang + (this.lang === "zh" ? "中文" : "English"),
+      run: async () => { await this.toggleLang(); },
+    });
+    items.push({
+      label: this.L.sTheme + (this.globalState.get<string>("piChat.theme") ?? "midnight"),
+      run: async () => { await this.pickTheme(); },
+    });
     items.push({
       label: this.L.sApiKey,
       run: async () => {
