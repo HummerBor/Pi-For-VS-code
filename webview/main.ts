@@ -424,7 +424,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     linkify(parent);
   }
 
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) { var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) {
+    // 子 agent 异步回报不渲染（2026-09-18 用户拍板：面板消息流一律不展示；浮窗下钻已有全文）。
+    // 只过滤展示、不动上下文——主会话验收依赖这条消息。前缀契约在 subagent 扩展的
+    // sendUserMessage 处（"[子 agent sa-N 完成|失败]"），扩展改格式此处必须同步。
+    if (/^\[子 agent \S+ (完成|失败)\]/.test(text || '')) return;
+    var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
