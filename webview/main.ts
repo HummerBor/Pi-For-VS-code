@@ -101,6 +101,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return '<svg viewBox="0 0 16 16" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
   }
   function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  // SVG 图标专用：el() 是 textContent 安全写入，塞 ico() 的标记会显示成源码（0.0.124 事故）
+  function elIco(cls: string, svg: string) { var n = el('span', cls); n.innerHTML = svg; return n; }
   // 超长名字中段省略（保头保尾）：CSS ellipsis 只能截尾，长文件名会把 chip 撑满一整行、
   // 还把 × 挤出可视区（overflow:hidden 裁掉）导致删不掉——JS 先截短才是根治；全名看 title
   function shorten(s: string, max: number) {
@@ -781,7 +783,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       backB.addEventListener('click', function (e) { e.stopPropagation(); subDetailView = null; renderSubDock(); });
       head.appendChild(backB);
     } else {
-      head.appendChild(el('span', 'sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
+      head.appendChild(elIco('sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
     }
     head.appendChild(el('span', 'sm-title', L.smTitle));
     var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
@@ -821,7 +823,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function renderSubRow(row: any): HTMLElement {
     var t = row.t;
     var rowEl = el('div', 'sm-row ' + t.status);
-    rowEl.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     var main = el('div', 'sm-row-main');
     main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '')));
     // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
@@ -850,7 +852,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!t) { body.appendChild(el('div', 'sm-empty', L.smNoRuns)); return; }
     var hd = el('div', 'sm-task ' + t.status);
     var line1 = el('div', 'sm-line');
-    line1.appendChild(el('span', 'sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    line1.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
     if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
     hd.appendChild(line1);
