@@ -474,6 +474,9 @@ export class PiCore {
    * 只读尾部 2MB（会话文件可能很大，帧频率低尾部足够）；首行可能截断半条 JSON，丢弃。
    * 同句柄跨纪元重用（扩展进程重启后 handle 从 sa-1 重计、同一 jsonl 追加）：取终态帧
    * 优先于末帧。重放失败静默——这是增强不是链路必需。
+   * 【0.0.126 修订】尾窗作废：长会话（大截图/长文本）尾部 2MB 只够装最后一个纪元，
+   * 历史运行被拦腰截断（用户实测「列表里只有一个调用记录」）。改全文件扫描——
+   * subagent-async 行稀疏，只 parse 命中行，一次性成本可接受。
    */
   private async replaySubagentHistory(): Promise<void> {
     const file = this.lastSessionFile;
@@ -482,12 +485,8 @@ export class PiCore {
     try {
       const stat = await fs.promises.stat(file).catch(() => null);
       if (!stat || stat.size === 0) return;
-      const len = Math.min(stat.size, 2 * 1024 * 1024);
-      const fh = await fs.promises.open(file, "r");
-      try {
-        const buf = Buffer.alloc(len);
-        await fh.read(buf, 0, len, stat.size - len);
-        const lines = buf.toString("utf8").split("\n");
+      const buf = await fs.promises.readFile(file);
+      const lines = buf.toString("utf8").split("\n");
         const finals = new Map<string, { frame: { detail: unknown; final: boolean; startAt?: number; endAt?: number }; order: number }>();
         let order = 0;
         for (const line of lines) {
@@ -555,9 +554,6 @@ export class PiCore {
             endAt: rec.endAt,
           });
         }
-      } finally {
-        await fh.close();
-      }
     } catch {
       // 会话文件不可读（新建未落盘/切换中）静默
     }
