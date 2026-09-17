@@ -1346,6 +1346,13 @@ export class PiCore {
         if ((e.message?.role ?? "assistant") === "assistant") {
           this.liveMessage = e.message; // 刀5b：新在途消息开始
           this.post({ type: "newLive" });
+        } else if (e.message?.role === "user") {
+          // 子 agent 回报实时上屏（2026-09-18 用户实测「先思考后卡片」倒序）：回报消息的
+          // message_start 此前被无视，卡片要等 settled 重绘才补，而思考是实时流——观感顺序
+          // 反了。只认回报前缀：面板自己发的消息在 sendPromptCore 已乐观上屏（displayText
+          // 与会话原文不含代码上下文块而不等），不能在这里重复渲染
+          const text = extractText((e.message as Record<string, unknown>).content);
+          if (/^\[子 agent \S+ (完成|失败)\]/.test(text)) this.post({ type: "user", text });
         }
         break;
       }
