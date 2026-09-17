@@ -242,3 +242,5 @@ body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { ba
 .subret.fail { border-left-color: var(--vscode-charts-red, #f14c4c); }
 .subret-head { font-size: 11px; opacity: .65; margin-bottom: 3px; }
 .subret-body { font-size: 12px; overflow-x: auto; }
+/* 子 agent 回报排队 pill（工单26）：与用户排队项同构，左缘紫条标识来源 */
+.q-item.q-native { border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding-left: 6px; }

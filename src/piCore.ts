@@ -1453,7 +1453,13 @@ export class PiCore {
             if (oldest !== undefined) this.subagentEndedCalls.delete(oldest);
           }
           const finalSnap = subagentSnapshot(e.result?.details);
-          if (finalSnap) {
+          // 异步壳判定（工单25，2026-09-18）：异步派发的返回值自带 asyncDetails(run)
+          // （扩展 index.ts:909，SubagentDetails 兼容、状态 running）——end 时快照里还有
+          // running 任务就是异步壳，伪装成最终结果；真进度走 sa-n 句柄行，壳行必须删。
+          // 同步调用 end 时不可能有 running，零回归。首版幽灵修复只拦「end 后无收尾」，
+          // 没验返回值载荷形状，故有第二轮（教训：归因不停在机制第一层）
+          const isAsyncShell = !!finalSnap && finalSnap.tasks.some((t) => t.status === "running");
+          if (finalSnap && !isAsyncShell) {
             const rec = this.trackSubagentRun(e.toolCallId, e.result?.details);
             rec.endAt = Date.now();
             this.post({
@@ -1465,7 +1471,7 @@ export class PiCore {
               endAt: rec.endAt,
             });
           } else {
-            // 异步派发：工具即返无 details，壳行立即关掉（真进度走 sa-n 句柄行，不双份）
+            // 异步派发壳：无 details，或 details 全 running（异步返回值载荷）——壳行关掉
             this.post({
               type: "subagentUpdate",
               id: e.toolCallId,

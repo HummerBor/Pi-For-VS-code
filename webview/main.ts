@@ -462,6 +462,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     queuedItems.push(q);
     addQueuedDom(q);
   }
+  // ── pi 原生队列里的子 agent 回报 pill（工单26，2026-09-18）──
+  // followUp 回报走 pi 原生队列，此前只有状态栏计数没有内容（“AI 自主感”信息差：
+  // 用户只见“排队 3 条”和凭空多出的回合）。queue_update 事件自带 followUp 文本数组
+  // （agent-session.d.ts:51 readonly string[]），命中回报前缀的渲染专用 pill。
+  // 只渲染命中项：用户经面板排队的消息已有 this.queued pill，全渲染会双份。
+  // 已知取舍：uiState 重建时清空缓存（uiState 不带 followUp 数组，无法跨页签对账），
+  // 下一次 queue_update 重建——切页签后 pill 可能短暂消失，计数仍在
+  var nativeQueuePills = [];
+  function renderNativeQueue() {
+    var qb = document.getElementById('queuebar');
+    var olds = qb.querySelectorAll('.q-item[data-native="1"]');
+    for (var i = 0; i < olds.length; i++) olds[i].parentNode.removeChild(olds[i]);
+    for (var j = 0; j < nativeQueuePills.length; j++) {
+      var fm = nativeQueuePills[j];
+      var nb = el('div', 'q-item q-native'); nb.setAttribute('data-native', '1');
+      var ni = el('span', 'q-ico'); ni.innerHTML = ico('clock', 12); nb.appendChild(ni);
+      nb.appendChild(el('span', 'q-text', '⮑ 子 agent ' + fm[1] + ' · ' + fm[2] + (fm[3] ? ' · ' + fm[3] : '') + ' · ' + L.subRetQueued));
+      qb.appendChild(nb);
+    }
+  }
   function removeQueued(qid) {
     queuedItems = queuedItems.filter(function(x) { return x.qid !== qid; });
     var els = document.getElementById('queuebar').querySelectorAll('[data-qid="' + qid + '"]');
@@ -1373,12 +1393,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       queuedItems = (m.queued || []).slice();
       document.getElementById('queuebar').innerHTML = '';
       for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
+      nativeQueuePills = []; renderNativeQueue(); // uiState 不带 followUp 数组，同上取舍
       applyState(m);
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
-    else if (m.type === 'queue') { queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus(); }
+    else if (m.type === 'queue') {
+      queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
+      nativeQueuePills = [];
+      if (m.followUp) for (var fi = 0; fi < m.followUp.length; fi++) {
+        var fm2 = String(m.followUp[fi] || '').match(/^\[子 agent (\S+) (完成|失败)\] ([^:\n]*): ?/);
+        if (fm2) nativeQueuePills.push(fm2);
+      }
+      renderNativeQueue();
+    }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { followingEnd = true; input.value = m.text || ''; input.focus(); scroll(); } // 主动动作回底（工单十七要点 3）
     else if (m.type === 'status') setStatus(m.text);
