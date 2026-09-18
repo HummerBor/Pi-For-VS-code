@@ -4,7 +4,49 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-18 直令施工回报（工单25/26 越队直修，待总监追认 + 用户实测）
+最后更新：2026-09-18 工单24 施工回报（快照期闸门+保序回放，待总监 review + 用户实测）
+
+## 工单24 施工回报（594bfcb，一笔提交，待总监 review + 用户实测）
+
+**改动面**（全部宿主侧，webview/main.ts 与跨边界消息零改动）：
+
+1. **post 出口闸门**（piCore）：postUiState 入口关闸，窗口内流式/状态事件 FIFO 入队不直发；
+   uiState 本身 + notice/status/交互应答类直发（GATE_PASS_TYPES 一处分流，不逐 case 打补丁）；
+   所有 this.post 调用点零改动（构造器包一层）
+2. **基线冻结**：闸门关闭瞬间读消息条数（新增 piClient.messageCount()）+ 真在途消息深拷贝。
+   新增 liveStreaming 标记（message_start 置位 / message_end·agent_start·settled 清除）——
+   liveMessage 引用在工具窗口期是 stale 的（指向已完成消息），直接信它会双画；
+   protocol 新增 PiMessageEndEvent（pi 在 finalized 消息入史后才发，agent-session.js:454，✅活 2 独立接口）
+3. **uiState 按基线截断**：在途消息占基线末位，它与其后窗口内新增消息全部剥离，由
+   基线 live + FIFO 回放重建；截断点之前已完成消息不可变，快照取晚也不失真
+4. **回放前 yield 20ms**：webview 对 uiState 的重绘本身延后一拍（flushRender setTimeout 0），
+   回放 delta 必须等重绘落地，否则被 renderAll 冲掉（基线@T0 不含它们）
+5. **postUiState 单飞**：窗口期再入标重跑（最新真相重拉），连切页签重叠快照互冲消失
+6. **回放分流**：toolStart 若其 toolCall 已在快照历史（行已绘出）跳过（防重复建行 +
+   toolEls 覆盖留僵尸行）；toolEnd 必回放（其 toolResult 必在剥离区，重放恰好把
+   renderAll 画出的运行中行收尾）；其余全量保序回放
+7. **实证日志**（工单验收要求，修完可留）：`gate replay: window=… buffered=… types=[…]`
+   dbg 行，窗口期捕获的事件清单全在这行
+
+**⚠ 一处执行偏差，请总监验收裁定**：工单修法原文「uiState 发出后解除缓冲按原序重放」，
+live 字段未指明取哪个时刻。施工推演发现：若 live 取拉快照时刻（T1，原实现取法），
+窗口内 delta 已 in-place 进了 liveMessage，回放它们就是同段内容画两遍——正好踩中
+工单十八「切页签整段内容×2」回归红线。故改为：**live 基线冻结在闸门关闭瞬间（T0）**，
+配套 uiState 按基线计数截断历史（剥离区恰好=窗口事件影响区，回放不重不漏，
+逐字满足「FIFO 不得去重合并」）。保序回放语义不变，settled 真相重绘自愈不变
+（重放的 settled/render 在快照之后执行）。请总监确认此偏差是否接受。
+
+**验证**：npm run compile 全链绿；toolDetail 27/27、subagentSnapshot 34、patchRevert 12/12；
+pi-for-vscode-0.1.13.vsix 已打包。单笔提交 594bfcb（DIRECTOR.md 总监签单 hunk 未混入）。
+
+**待实测（主验收，对齐验收标准）**：快流式模型生成中连切页签 ≥10 次，来回切、
+切走再切回，面板内容与 jsonl 对账无缺；空黑条不复发；回归红线：工单十八
+「切页签整段内容×2」不复发。dbg 日志开著，实测后可贴 gate replay 行佐证窗口事件被接住。
+
+**顺手发现（记档不混笔）**：①恢复会话（restoringSession）与流式重叠时，旧会话
+恢复窗口内的 delta 会回放到新会话渲染上——极窄且是恢复+后台续跑叠加的既存混沌场景，
+基线重取逻辑已把损害限制在一次性重绘，未立项；②窗口内触发压缩重建消息数组时
+slice 钳位不越界，代价由 settled 全量重绘自愈（代码注释随逻辑走）。
 
 ## 直令施工回报（2026-09-18，用户「你直接干」越队，✅活 6 留痕待追认）
 
