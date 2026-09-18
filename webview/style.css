@@ -183,8 +183,8 @@ details.think summary { cursor: pointer; user-select: none; }
 #suggest { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }
 .sg-item { display: flex; align-items: center; gap: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .sg-item.active, .sg-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
-.sg-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sg-detail { margin-left: auto; opacity: .45; font-size: 11px; white-space: nowrap; }
+.sg-label { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-detail { flex: 1; min-width: 0; text-align: right; margin-left: auto; opacity: .45; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sg-header { padding: 6px 10px 2px; font-size: 10px; font-weight: bold; opacity: .45; text-transform: uppercase; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); margin-top: 2px; }
 .sg-header:first-child { margin-top: 0; border-top: none; }
 #plusmenu { display: none; position: absolute; bottom: 42px; left: 8px; min-width: 170px; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; overflow: hidden; }

@@ -1222,11 +1222,14 @@ export class PiCore {
       description: c.desc,
       name: c.name,
     }));
+    // 技能的内部名是 "skill:xxx"（pi 展开用），列表标签剥前缀只显示技能短名——
+    // 长名被右侧长描述挤成 "/skill..." 啥也看不见（2026-09-18 用户实测）；
+    // item.name 保持原样，applySuggest 照旧填入完整 /skill:xxx，pi 识别不受影响
     const ext = cmds
       .filter((c: any) => !nativeNames.has(String(c.name)))
       .map((c: any) => ({
         group: this.L.grpCmds,
-        label: "/" + c.name,
+        label: "/" + String(c.name).replace(/^skill:/, ""),
         description: c.description || c.source || "",
         name: c.name,
       }));

@@ -25,7 +25,7 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-18 **签工单25/26**（子 agent 监控实测双缺陷：幽灵行第二轮 + 排队回报不可见）。
+> 最后更新：2026-09-18 **签工单27/28/29**（issue 建议二三四：追加提示词设置 + sticky 最后一问 + 工具行长输出收起）。
 > 前情：工单24 签发中（P0 切页签丢渲染）；工单23 判死迁归档。0.0.97 已 ship（对账见归档七）。
 
 ## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
@@ -171,6 +171,116 @@ final 分支。同步调用 end 时不可能有 running 任务，零回归；sub
 - 不动 webview/main.ts（修复完全住宿主侧）；若实证后发现必须动 webview，先请示
 - 不动 panel.pipeFromCore 的后台不喂语义；不动 getMessages/collectState 的拉取方式
 - 顺手发现的其他疑似竞态记 BUILDER.md，不混笔
+
+## 工单27：piChat.appendSystemPrompt——面板设置「追加系统提示词」（issue 建议二，无脑版）
+
+> **来源**：issue「一些建议 #1」第二条「可以设置追加系统提示词」，用户拍板做进插件，
+> 口径「默认给丫打开」——**不设 enabled 开关**：设置填了内容即生效，空 = 不追加，
+> 零认知成本。总监已实测 pi 原生 `.pi/APPEND_SYSTEM.md` 在面板自动生效（0918 探针✓），
+> 本单是把同一能力做成 VS Code 设置入口，属于「壳把 pi 原生能力做成无脑桥」，非重复造轮子。
+
+### 选型（总监预查已闭环，施工方勿重查）
+
+- **注入点**：`sdk.createAgentSessionServices({ resourceLoaderOptions: { appendSystemPrompt: [text] } })`。
+  `DefaultResourceLoaderOptions.appendSystemPrompt?: string[]` 是 pi 公开选项
+  （resource-loader.d.ts:83），与项目/全局 APPEND_SYSTEM.md 文件并列追加，同时生效无冲突
+- **生效时机**：services 建会话时装配；AgentSession 无公开中途重建 API
+  （`_rebuildSystemPrompt` private，勿碰私有字段）→ **改设置后新开页签生效**，
+  进行中会话不动。这是取舍不是缺陷，设置描述里写明即可
+- **取数路径**：piCore 经 `this.caps.getConfig("piChat", "appendSystemPrompt", "")` 读
+  （hostCapabilities 注入，核心不 import vscode，铁律）→ `client.start` 传给 PiClient
+
+### 施工步骤
+
+1. package.json configuration 加 `piChat.appendSystemPrompt`：string、default ""、
+   描述中文（同既有设置风格），写明「追加到 pi 系统提示词，每次对话生效；
+   改动后新开页签生效；与 .pi/APPEND_SYSTEM.md 叠加不冲突」
+2. piClient.start 增参（cwd, extraArgs, proxyUrl, appendSystemPrompt?: string），
+   init() 里非空时给 createAgentSessionServices 传 resourceLoaderOptions；
+   注意 createRuntime 闭包在 cwd 切换重建 services 时也要带上（从 startOpts 取，别只算一次丢闭包外）
+3. piCore 启动链路（client.start 调用处）读 caps.getConfig 透传
+4. i18n：本单纯宿主侧，webview 零改动；无新跨边界消息，protocol 不动
+
+### 边界（不许顺手改）
+
+- 不动提示词逻辑本身、不碰 AgentSession 私有字段（_systemPromptOverride 等是私有，
+  走公开 resourceLoaderOptions）
+- 不做面板内编辑 UI、不做 /appendSystem 类命令（设置面板是正路，超出即请示）
+- 不动 webview/main.ts；不动既有 start 参数映射语义（sessionMode 那套注释契约）
+
+### 验收
+
+- `npm run compile` 全绿；单笔提交
+- 总监验：grep 设置声明/透传链三处齐
+- 用户实测（主验收）：设置里填一行探针文字（如「回答第一行必须输出：追加提示词生效✓」）
+  → 新开页签提问，第一行命中；清空设置 → 新页签恢复正常；与 .pi/APPEND_SYSTEM.md
+  同时存在时两条都追加（可选验）
+
+## 工单28：P1 最后一问 sticky 悬浮——滚动出视口时钉在面板顶部（issue 建议三）
+
+> **来源**：issue「一些建议 #1」第三条「用户最后一个问题滚动时，要一直能看见，如果滚动出区域，
+> 则悬浮在最上方」。pi 三处查：公开 API 无（agent-session/resource-loader 无 UI 概念）、
+> TUI 无此行为、扩展生态无——壳 UI 职责，自研。标杆：Claude 面板同款交互。
+
+### 选型（总监预查已闭环，施工方勿重查）
+
+- 纯 CSS `position: sticky` 可达：最后一条 user bubble 加 sticky class（top:0 + 不透明背景 +
+  z-index），滚出顶部时浏览器自动钉住，零 JS 滚动监听
+- **只对最后一条 user 消息生效**：新 user 消息到达时把 class 迁移过去；assistant 回复不影响
+  （「最后一个问题」语义 = 最后一条 user 消息，不是最后一条消息）
+- 现有滚动跟随（工单十七 scroll()）不动：sticky 与 scrollIntoView 正交，跟随照常
+
+### 施工步骤
+
+1. webview/main.ts：addUser 渲染路径加「最后一条 user bubble」class 迁移逻辑
+   （新 user 到 → 旧 class 摘除、新 bubble 挂上；renderAll 历史重绘同样只标最后一条）
+2. webview/style.css：sticky 样式（top/背景/z-index，气泡上下留白遮挡处理，避免下方内容透出穿帮）
+3. main.ts 保持 ES5 var 风格、strict:false 零报错（门禁约定）
+
+### 边界（不许顺手改）
+
+- 不动 piCore/protocol（无新跨边界消息）；不动 scroll 跟随语义（工单十七口径）
+- 不动 busy/settled/重绘时序；sticky 只作用于 user bubble，不碰 assistant/tool 行
+- 顺手发现浮层遮挡类问题记 BUILDER.md，不混笔
+
+### 验收
+
+- `npm run compile` 全绿；单笔提交
+- 用户实测（主验收）：长会话滚动，最后一条提问滚过顶部后钉在面板顶端、不透明无穿帮；
+  新提问到达后钉的是新提问；自动滚动跟随行为不变
+
+## 工单29：P2 工具行长输出自动收起——读文件不刷屏，点开看全量（issue 建议四）
+
+> **来源**：issue「一些建议 #1」第四条「读取文件内容太多时，可以收起，只显示部分，用户可以点开」。
+> 现状（总监已实查代码）：历史重绘路径已达标（默认收起 + 80 字摘要，main.ts:993）；
+> **流式 live 路径是缺口**——toolStart 盒子默认展开（main.ts:634），toolEnd 后 OUT 已截
+> 1000 字但盒子保持展开（main.ts:668-675）→ 流式期间读大文件刷屏，即 issue 作者所见之乱。
+
+### 选型（总监预查已闭环，施工方勿重查）
+
+- toolEnd 时 OUT 文本超过阈值（500 字符）→ 盒子自动收起，行上留「已截断，点击展开」提示；
+  点击在 预览（前 1000 字）/ 全量（滚动容器，max-height + overflow:auto）间切换
+- 全量数据零新增成本：piCore 已全量下发 text（piCore.ts:1643-1650 既有链路），
+  webview 侧只是现在只敢显示 1000 字——展开时吐全量即可，protocol/piCore 零改动
+
+### 施工步骤
+
+1. webview/main.ts toolEnd：长 OUT 收起 + 截断提示（i18n 新 key，中英同步，i18n.ts 两处）
+2. 点击展开：tb-val 换全量文本进滚动容器（只对展开态生效，收起态保持 1000 字预览）
+3. 历史重绘（renderAll/toolGroupRun）不动——settled 后本来就地收起+短摘要，已达 issue 要求
+
+### 边界（不许顺手改）
+
+- 不动 piCore/protocol（toolEnd 载荷形状不变）；不动 toolStart 运行中展开语义
+  （运行时显示 IN 参数是既有行为）
+- 不动子 agent 监控卡片、edit/write patch 归档链路
+- main.ts ES5 var 风格、strict:false 零报错
+
+### 验收
+
+- `npm run compile` 全绿；单笔提交
+- 用户实测（主验收）：让模型读一个大文件（>500 字符），流式期间工具行收起不刷屏、
+  有截断提示；点开看全量可滚动；收/展可反复切换；小输出（<500 字符）行为与现在一致
 
 ## 事故修复账（2026-09-15，用户同场指挥下修复，非工单流程）——代码验收通过（总监 09-15）
 
