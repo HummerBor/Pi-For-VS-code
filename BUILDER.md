@@ -4,9 +4,60 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-18 工单24 施工回报（快照期闸门+保序回放，待总监 review + 用户实测）
+最后更新：2026-09-18 工单24 架构归位（用户直令推翻刀5，每页签一棵 DOM；待总监追认 + 用户实测）
 
-## 工单24 施工回报（594bfcb，一笔提交，待总监 review + 用户实测）
+## 工单24 第二刀：架构归位（4530c5d，用户直令「推翻这个设计」，✅活 6 待追认）
+
+**直令原话**：用户看穿「切页签机制不对，每次都在重新拉而不是累加」，问「一个会话一个 DOM
+容器不好吗？」→ 指令「推翻刀5 切回即重拉的设计」。此为刀5 设计决策的推翻，总监追认时请
+连同工单24 首版回放实现的偏差裁定（见下节）一并定。
+
+**实证前置（scripts/probe-inflight.mjs，保留备查）**：pi 探针实测——在途 assistant 消息
+在 message_start/update 期间**不在 session.messages**（state 尾条仍是上一条已完成消息），
+message_end 才入 state；事件 message 对象全量 in-place 递增。刀5b 注释「message_start 起
+就在 state 里」系讹传，是此前一切「剥末条」方案丢内容的总根。
+
+**改动面**（webview/main.ts 主体 + panel.ts 路由 + protocol WvTabSwitch.needState +
+style.css .offroot）：
+1. 每页签一棵 .msg-root 常驻 #messages，非活动 .offroot(display:none)；切页签=换可见性
+   O(1)，滚动位置天然保留；后台页签流式事件写进自己的隐藏树（现场累加，切回即现）
+2. TabCtx 记账 + 全局变量组降级为「当前换镜」（useTab 保存/恢复，后台处理完立即换回）；
+   页面控件只为活动页签渲染（bgMode 守卫族：setBusy/setCompacting/renderStatus/
+   renderBanner/addQueuedDom/removeQueued/renderNativeQueue/applyState/scroll）
+3. 定时器 ctx 安全：scheduleStream 换镜到发起页签再 tick；flushRender 按页签各清各的
+   待渲染，清完归位活动页签再放行延后队列（pendingStream 走 routeMsg 重路由）
+4. 切页签零重拉的唯一例外：webview 未建树页签随 tabSwitch 带 needState 要一次快照
+   （webview 重载恢复/重启恢复页签/新页签空态）；webviewReady 给所有已建核心各发快照
+5. panel.pipeFromCore 废止「后台不喂」，只挡 notice/status/fillInput；
+   handleTabSwitch/handleTabClose 删盲发快照；已关页签的树随手回收
+
+**验证**：compile 全链绿；27/34/12 用例全过；0.1.14 打包并已装（待重载实测）。
+
+**待实测（需重载窗口）**：①快流式生成中连切页签 ≥10 次，切回内容完整（根因已实证，
+应彻底治愈）②切页签速度感：O(1) 换根，不再卡几百毫秒 ③后台页签跑完，切回即见全程
+现场 ④每页签滚动位置/排队条/横幅/页脚各归各 ⑤关页签/新页签/重启恢复不串台。
+
+**已知取舍（记档）**：①编辑框附件/草稿仍页签共享（刀2 起既状，未扩scope）②页脚数据
+靠 applyState 记账，后台页签页脚在切换时按最后一条 state 消息渲染（state 到达频度足够）
+③已关页签树随手回收，但跨重载不恢复（与浮窗账本同口径）。
+
+## 工单24 第一刀（止血）：快照语义实证重写（3d6a448，已提交）
+
+**实证**：见上节探针。首版（594bfcb）的「T0 基线+全量回放」两处硬伤：①基线计数按
+「在途消息在 state 里」假设推的 stripFrom 全错（剥掉上一条完成消息=整条消失，即用户
+报的「啥也丢」）；②20ms yield 被长会话重绘顶穿（回放事件先落地再被 renderAll 冲掉）。
+**重写**：历史=session.messages 全量零剥离 + live=在途消息全量深拷贝（同一同步块取，
+事件插不进来）→ 不重不漏；窗口内事件丢弃（全部≤快照时刻已被覆盖，gate drop dbg 留
+清单）；快照之后的事件由 webview 侧「重绘期延后一拍」兑底（pendingStream，顺序保证
+落在消费端）。单飞保留。postUiState 此语义在架构刀后仍服务 webviewReady/压缩/换会话
+路径，两刀不冲突。
+
+**⚠ 工单24 首版（594bfcb）与工单字面的偏差报告（随架构刀一并作废，总监验收时请知悉）**：
+首版曾按工单字面实现「uiState 后按序重放」，实测丢得更狠（上逑②），已随 3d6a448 推翻。
+工单24 的「保序回放」修法以实测证伪告终，最终落地形态是①零剥离+②窗口丢弃+③消费端
+延后一拍，请总监在 DIRECTOR.md 定稿时以此为准。
+
+## 工单24 施工回报（594bfcb，首版，已被 3d6a448 实证推翻，存档对照）
 
 **改动面**（全部宿主侧，webview/main.ts 与跨边界消息零改动）：
 
