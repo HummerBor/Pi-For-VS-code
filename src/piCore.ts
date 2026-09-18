@@ -1645,24 +1645,36 @@ export class PiCore {
         // 压缩窗口关闭：先落状态再走显性化，busy:false/settled 重绘按非压缩真相清标签
         this.compacting = false;
         this.post({ type: "compacting", value: false });
-        // 自动压缩（threshold/overflow）成功 → 横幅显性化（工单六）。手动压缩已有
-        // compactDone 通知不重复；aborted/willRetry 属未完成或将重试，静默等下一次 end
-        if (e.reason !== "manual" && e.aborted !== true && e.willRetry !== true) {
+        // 压缩后占比大降 + 折叠块已入消息数组（pi 压缩完成即重建 agent.state.messages，
+        // agent-session.js: buildSessionContext 合成 compactionSummary）——postUiState 整体
+        // 重拉消息让折叠块立即上屏。事故教训：原先只 refreshState 刷页脚，DOM 留在压缩前，
+        // 折叠块不切页签不出现（BUILDER 报告「settled 重绘出折叠块」被实测证伪，settled 不重拉消息）
+        await this.postUiState();
+        // 压缩反馈统一发在 postUiState 之后——notice 是 root 一次性 DOM，postUiState 的
+        // 整体重绘（renderAll 清 root）会把先发的通知冲掉。事故教训：折叠块修复挂上
+        // postUiState 后，panel 的 compactDone/错误 notice 被这次重绘冲掉（用户实测
+        // /compact 压缩完零反馈，2026-09-18）；自动压缩失败提示同样中招。反馈从 panel
+        // 收敛到此（pi 侧保证：compact() 全部失败路径都会 emit compaction_end，
+        // agent-session.js compact() catch，aborted 时静默是有意为之）
+        if (e.aborted !== true && e.willRetry !== true) {
           const err = typeof e.errorMessage === "string" ? e.errorMessage : "";
           if (err) {
+            if (/Nothing to compact/i.test(err)) this.post({ type: "notice", text: this.L.compactTooSmall });
+            else if (/Already compacted/i.test(err)) this.post({ type: "notice", text: this.L.compactAlready });
             // 压缩失败不可见，后续请求会莫名超限——透传面板
-            this.post({ type: "notice", text: this.L.compactionFail + err.slice(0, 150) });
+            else this.post({ type: "notice", text: this.L.compactionFail + err.slice(0, 150) });
+          } else if (e.reason === "manual") {
+            const r = e.result as { tokensBefore?: unknown; estimatedTokensAfter?: unknown } | undefined;
+            this.post({
+              type: "notice",
+              text: r ? this.L.compactDone + (r.tokensBefore ?? "?") + " → ≈ " + (r.estimatedTokensAfter ?? "?") + " tokens" : this.L.compactEnded,
+            });
           } else {
             const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
             this.setBanner({ kind: "compacted", text: fmt(this.L.bannerCompacted, time) });
             this.dbg("banner: compacted (reason=" + (e.reason ?? "?") + ")");
           }
         }
-        // 压缩后占比大降 + 折叠块已入消息数组（pi 压缩完成即重建 agent.state.messages，
-        // agent-session.js: buildSessionContext 合成 compactionSummary）——postUiState 整体
-        // 重拉消息让折叠块立即上屏。事故教训：原先只 refreshState 刷页脚，DOM 留在压缩前，
-        // 折叠块不切页签不出现（BUILDER 报告「settled 重绘出折叠块」被实测证伪，settled 不重拉消息）
-        await this.postUiState();
         break;
       }
 

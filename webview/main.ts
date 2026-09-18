@@ -548,7 +548,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (p.tail && p.tail.parentNode) p.tail.parentNode.removeChild(p.tail);
       p.tail = el('div', 'md-p', ''); p.body.appendChild(p.tail); p.tailCode = false;
     }
-    p.tail.textContent = text;
+    // 含完整表格行时用 markdown 渲染（表格组退回尾巴区，见 streamTick 防劈叉注释）；
+    // 纯未完行仍走 textContent——半截 **bold 不闪样式，流式抖动最小
+    if (/^\s*\|.*\|\s*$/m.test(text)) { p.tail.innerHTML = ''; renderRich(p.tail, text); }
+    else p.tail.textContent = text;
   }
   function streamTick(p) {
     var rest = p.buf.slice(p.doneLen);
@@ -575,6 +578,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       p.tail = document.createElement('pre'); p.tail.className = 'code';
       p.body.appendChild(p.tail);
       p.tail.textContent = p.buf.slice(p.doneLen);
+      return;
+    }
+    // 表格防劈叉（2026-09-18）：行级定型会把一张表劈成多个单行表——表头行先定型成
+    // 单行表，分隔行 | --- | 后到时落在 ri===1 之外被当普通行渲染成「--- --- ---」，
+    // 之后每个数据行各成一张独立表，直到 settled 全量纠偏才愈合。判据：本次定型段
+    // 末尾的完整行是表格行（|...|），说明表格可能还在长，把所在表格组整体退回尾巴
+    // 区富文本渲染，等非表格行到货再定型（renderPlain 按连续 | 行分组，那时 ri===1
+    // 分隔行守卫才有效）
+    var ls = complete.slice(0, -1).split('\n');
+    var ts = ls.length;
+    while (ts > 0 && /^\s*\|.*\|\s*$/.test(ls[ts - 1])) ts--;
+    if (ts < ls.length) {
+      var cut = ts === 0 ? 0 : ls.slice(0, ts).join('\n').length + 1;
+      appendFinal(p, complete.slice(0, cut));
+      p.doneLen += cut;
+      setMdTail(p, p.buf.slice(p.doneLen));
       return;
     }
     appendFinal(p, complete);

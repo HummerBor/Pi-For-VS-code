@@ -29,6 +29,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 工单十五刀2：标签元数据（宿主是唯一事实源）：标题随各核心 state 记账、busy 随 busy 记账，
    *  未读随后台跑完记账（刀5：webview 零影子状态，未读点也归宿主） */
   private tabMeta = new Map<string, { title: string; busy: boolean; unread?: boolean }>();
+  /** 标签栏持久化（用户直令 09-18「按1」）：重启前聊在非 t1 标签、重启后标签栏整体消失，
+   *  活动标签退回 t1 → 恢复的是 t1 名下的陈旧会话记忆（lastSessionByWs2 按标签存），
+   *  把 -c 已接对的最近会话顶掉（用户实测：重启后打开的是上午的会话，不是重启前聊的）。
+   *  治本 = 标签栏（id/顺序/标题/活动标签）落 globalState，重启按原样重建；各标签沿用
+   *  自己的 tabKey 恢复各自记忆的会话，语义自然成立。busy/unread 是会话态不落盘；
+   *  freshTabs 绝不落盘——恢复的标签一律按既有记忆恢复，只有「＋新建」才开新会话 */
+  private static readonly TAB_BAR_KEY = "piChat.tabBar";
+  /** 重启时从持久化重建的标签 id：首次切到时尚无 pi 进程，要起新进程按该标签记忆恢复会话
+   *  （普通「没启动过的标签」切到只清空显示不起进程——那是新建/关剩补位的语义，见 handleTabSwitch） */
+  private readonly restoredTabs = new Set<string>();
   private sessionPickerShown = false;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
   private piCheckDone = false;
@@ -65,7 +75,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly version: string
   ) {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
+    // 标签栏重建必须先于一切 ensureCore/postTabs：活动标签 id 决定首个核心的 tabKey，
+    // 进而决定恢复哪个标签记忆的会话（顺序错了等于白存）
+    this.restoreTabBar();
     // 核心创建延迟到首次访问（ensureCore）：多标签时代每个标签各自组装，构造器不再预建单例
+  }
+
+  /** 从 globalState 重建标签栏（构造器调用一次）。形状不对整体放弃回单标签——
+   *  持久化数据不可信时，退回旧行为（单 t1）比半恢复安全 */
+  private restoreTabBar(): void {
+    const saved = this.globalState.get<
+      { tabs: { id: string; title: string }[]; active: string } | undefined
+    >(ChatPanelProvider.TAB_BAR_KEY, undefined);
+    if (!saved?.tabs?.length) return;
+    let maxSeq = 0;
+    for (const t of saved.tabs) {
+      if (typeof t?.id !== "string" || !/^t\d+$/.test(t.id)) return;
+      const n = parseInt(t.id.slice(1), 10);
+      if (n > maxSeq) maxSeq = n;
+      this.tabMeta.set(t.id, { title: t.title || this.L.tabUntitled, busy: false });
+      this.restoredTabs.add(t.id);
+    }
+    this.tabSeq = maxSeq;
+    // 活动标签失效（如跨版本手改）兑底到最后一个，不猜第一个
+    this.activeTabId = saved.tabs.some((t) => t.id === saved.active)
+      ? saved.active
+      : saved.tabs[saved.tabs.length - 1].id;
+  }
+
+  /** 标签栏落盘（id/顺序/标题/活动标签）。globalState 跨项目共享：换项目恢复的标签
+   *  标题是上一项目的陈词，等该核心 state 刷新即被 syncTabMeta 覆盖，可接受
+   *  （lang/theme 本就全局共享，同口径） */
+  private saveTabBar(): void {
+    const tabs = [...this.tabMeta.entries()].map(([id, m]) => ({ id, title: m.title }));
+    void this.globalState.update(ChatPanelProvider.TAB_BAR_KEY, { tabs, active: this.activeTabId });
   }
 
   /** 取（或创建）指定标签的核心控制器（工单十五刀1）。创建即接线：post 桥打 tabId 标、
@@ -390,13 +433,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.tabMeta.set(tabId, meta);
     }
     let changed = false;
+    let titleDirty = false;
     if (msg.type === "busy") {
       if (meta.busy !== msg.value) { meta.busy = msg.value; changed = true; }
     } else if (msg.type === "state") {
       const t = msg.sessionName || this.fmtSessionTitle(msg.sessionFile ?? null);
-      if (t && meta.title !== t) { meta.title = t; changed = true; }
+      if (t && meta.title !== t) { meta.title = t; changed = true; titleDirty = true; }
     }
     if (changed) this.postTabs();
+    // 标题变了才落盘：busy/unread 高频变化不碰 globalState
+    if (titleDirty) this.saveTabBar();
   }
 
   // ════════ 工单十五刀2：标签生命周期（panel 级，不过核心） ════════
@@ -408,6 +454,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.freshTabs.add(id); // 刀4：新标签=新持久会话（ensureCore 时置 core.freshTab）
     this.activeTabId = id;
     this.postTabs();
+    this.saveTabBar(); // 新标签立刻入册，中途崩进程也不丢标签栏
     // 刀5：单一渲染上下文，新页签的一切旧现场都得显式清（刀2 时代每页签自带欢迎页 DOM，
     // 这项真空是刀5 引入的——用户实测「新建了会话但内容还是上一个的」）
     this.postEmptyUiState(id);
@@ -445,12 +492,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const meta = this.tabMeta.get(tabId);
     if (meta) meta.unread = false;
     this.postTabs();
+    this.saveTabBar();
     const core = this.ensureCore(tabId);
     if (core.clientRef?.running) {
       void core.postUiState();
     } else {
       // 没启动过 pi 的标签（含新标签）：页脚清空 + 欢迎页，不串显上个标签
       this.postEmptyUiState(tabId);
+      // 标签栏持久化：重启恢复的标签首次切到时必须起进程——piCore.ensureClient 会按
+      // 该标签 tabKey 的会话记忆 switchSession 恢复历史（先清空再异步渲染，同 t1 启动口径）。
+      // 不起进程的话用户切回重启前聊天的标签只看到欢迎页，「恢复现场」名存实亡
+      if (this.restoredTabs.delete(tabId)) core.ensureClient();
     }
   }
 
@@ -466,6 +518,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     core?.dispose();
     this.cores.delete(tabId);
     this.tabMeta.delete(tabId);
+    this.restoredTabs.delete(tabId); // 关了就不算恢复现场（id 永不复用，纯卫生）
     if (tabId === this.activeTabId) {
       const rest = [...this.tabMeta.keys()];
       if (rest.length) {
@@ -486,6 +539,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     }
     this.postTabs();
+    this.saveTabBar(); // 标签增减/活动标签变化都要落盘，重启才还原得住
   }
 
   /** 计算当前编辑器的代码上下文（选区 → 选中行；无选区 → 整个文件）并推给 webview；
@@ -1064,26 +1118,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (inst === undefined) return;
     }
     this.post({ type: "status", text: this.L.compacting });
-    let r;
     try {
-      r = await client.compact(inst || undefined);
-    } catch (err: any) {
+      await client.compact(inst || undefined);
+    } catch {
       // pi 对过小/已压缩的会话直接抛错（agent-session.js: prepareCompaction 返回 null →
-      // "Nothing to compact"/"Already compacted"），不接住就是零反馈（2026-09-09 短会话实测）
-      this.post({ type: "status", text: "" });
-      const msg = String(err?.message ?? err);
-      if (/Nothing to compact/i.test(msg)) this.post({ type: "notice", text: this.L.compactTooSmall });
-      else if (/Already compacted/i.test(msg)) this.post({ type: "notice", text: this.L.compactAlready });
-      else this.post({ type: "notice", text: this.L.compactFail + msg });
-      return;
+      // "Nothing to compact"/"Already compacted"），不接住就是零反馈（2026-09-09 短会话实测）。
+      // 错误/完成通知都由 piCore compaction_end 在 postUiState 重绘之后发（2026-09-18 零反馈
+      // 事故收敛）——这里先发会被同一事件里的整体重绘冲掉，只剩状态标签清理职责；
+      // compact() 所有失败路径（含抛错前）都先 emit 过 compaction_end，通知不会丢
     }
     this.post({ type: "status", text: "" });
-    this.post({
-      type: "notice",
-      text: r?.result
-        ? this.L.compactDone + (r.result.tokensBefore ?? "?") + " → ≈ " + (r.result.estimatedTokensAfter ?? "?") + " tokens"
-        : this.L.compactEnded,
-    });
   }
 
   /** 导出会话为 HTML（⚡ 菜单与 /export 共用） */

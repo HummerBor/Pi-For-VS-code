@@ -533,3 +533,9 @@ steer 命令接受。坑：rpc 子进程任务跑完不退出，完成信号必�
 市场 publish 连续 8 次 ECONNRESET（push 通、gallery 上传被重置），发现本机代理
 127.0.0.1:10801 后 `HTTPS_PROXY=http://127.0.0.1:10801 npx @vscode/vsce publish` 成功。
 教训：这台机器 vsce publish 必须带该代理，后续发版直接带上。
+
+## 直令留痕（09-18）标签栏持久化——重启恢复现场
+
+- **直令**：用户实测重启后打开的是陈旧会话（t1 名下记忆），要求按方案 1 治本：标签栏（id/顺序/标题/活动标签）落 globalState（`piChat.tabBar`），重启按原样重建。
+- **改动面**：panel.ts——构造器 restoreTabBar()（先于一切 ensureCore，tabKey 决定会话记忆恢复目标）；saveTabBar() 挂在 新建/切换/关闭/标题变化 四处；restoredTabs 集合：重启恢复的标签首次切到时 ensureClient() 起进程按该标签记忆恢复会话（普通无进程标签维持欢迎页旧语义）。freshTabs 绝不落盘——恢复标签一律走记忆恢复，只有「＋新建」开新会话。
+- **验证**：npm run compile 全绿；package 0.1.4 打包成功。实测项：重启后标签栏按原序重建、活动标签=重启前活动标签、各标签恢复各自会话。

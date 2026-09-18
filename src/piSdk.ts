@@ -57,6 +57,12 @@ async function doLoad(): Promise<any> {
   if (!existsSync(entry)) {
     throw new PiNotFoundError("包目录存在但缺少 dist/index.js: " + root);
   }
+  // 【宿主指路契约】给子 agent 扩展（~/.pi/agent/extensions/subagent 的 getPiInvocation）
+  // 指明子进程入口。宿主里 argv[1] 不是 pi，子任务 cwd 也未必装了 pi（换项目就死，
+  // 2026-09-18 六连挂事故）；插件既然已经定位到包根，入口就该由宿主递下去，
+  // 而不是让扩展自己摸 PATH。env 会被子进程继承，嵌套派发同样命中
+  const cliEntry = join(root, "dist", "bundle", "cli.js");
+  if (existsSync(cliEntry)) process.env.PI_CLI_ENTRY = cliEntry;
   let sdk: any;
   try {
     sdk = await dynamicImport(pathToFileURL(entry).href);
