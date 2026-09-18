@@ -300,6 +300,8 @@ export class PiCore {
 
     const client = new PiClient();
     this.client = client;
+    // 包签名随运行时创建定格：菜单打开时对比 detect 新装/卸载（见 sendSlashCommands）
+    this.pkgsSig = this.readPkgsSig();
 
     client.onUiRequest = (req) => void this.handleUiRequest(req);
     client.onExit = (code, detail) => {
@@ -1118,6 +1120,9 @@ export class PiCore {
     }
     await this.refreshState();
     this.syncRenderKeepQueued();
+    // 重载后重发命令列表：webview 里的 slashCmds 是一次性懒加载缓存，不重发则
+    // 菜单里看不到新装的技能/命令（2026-09-18 实测尾巴）
+    await this.sendSlashCommands();
     this.post({ type: "notice", text: this.L.reloadDone });
   }
 
@@ -1164,6 +1169,18 @@ export class PiCore {
 
   /** 给 webview 提供 /命令列表（懒加载一次） */
   private async sendSlashCommands(): Promise<void> {
+    // 打开菜单时对比包签名：settings.json 的 packages 变了=有新装/卸载的包，自动重建
+    // 运行时让技能/扩展即时生效（2026-09-18 用户诉求「打开界面新装的技能就在里面」）。
+    // busy/ephemeral 时不自动重建（busy 截断在途流 / ephemeral 无落盘真相），列表照发
+    // 并提示用 /reload；reloadBackend 内部 ensureClient 会刷新签名，此处不会死循环
+    const sig = this.readPkgsSig();
+    if (sig !== null && this.pkgsSig !== null && sig !== this.pkgsSig) {
+      if (!this.busy && !this.clientNoSession) {
+        await this.reloadBackend();
+        return; // reloadBackend 内部已重发 slashList
+      }
+      this.post({ type: "notice", text: this.L.reloadHint });
+    }
     let cmds: any[] = [];
     try {
       const client = this.ensureClient();
@@ -1210,6 +1227,20 @@ export class PiCore {
       }));
     this.post({ type: "slashList", commands: [...builtin, ...native, ...ext] });
   }
+
+  /** settings.json 的 packages 签名：打开菜单时对比，变了=有新装/卸载的包。
+   *  读不到（文件缺失/解析失败）返回 null，调用方视为「无签名」跳过对比 */
+  private readPkgsSig(): string | null {
+    try {
+      const raw = fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "settings.json"), "utf8");
+      return JSON.stringify(JSON.parse(raw).packages ?? []);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 包签名缓存：运行时创建时定格，菜单打开时对比 detect 新装/卸载 */
+  private pkgsSig: string | null = null;
 
   /** 给 webview 提供工作区文件列表（相对路径 + 所在目录），供 @ 补全 */
   private async sendWorkspaceFiles(): Promise<void> {
