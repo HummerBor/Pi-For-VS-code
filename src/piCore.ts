@@ -141,6 +141,38 @@ export class PiCore {
     }
     return rec;
   }
+
+  /** 恢复重绘后重放子 agent 浮窗：runs 全是内存态，重载后不重放就「聊天里有卡片、浮窗
+   *  却空了」（2026-09-18 用户实测）。数据源=持久化 toolResult.details（磁盘真相），
+   *  final:true 原子回放并回填 subagentRuns（下钻视图重载后仍有全量 details）。
+   *  异步壳（end 时仍全 running，工单25）与活跑同口径剔除；endAt 用工具结果消息的
+   *  时间戳，浮窗「x分钟前」对齐聊天真实时序 */
+  private replaySubagentRuns(msgs: unknown[]): void {
+    for (const msg of msgs) {
+      const m = msg as
+        | { role?: string; toolCallId?: string; details?: unknown; timestamp?: unknown }
+        | null;
+      if (!m || m.role !== "toolResult" || !m.toolCallId) continue;
+      const snap = subagentSnapshot(m.details);
+      if (!snap || snap.tasks.some((t) => t.status === "running")) continue;
+      const rec = this.trackSubagentRun(m.toolCallId, m.details);
+      const ts =
+        typeof m.timestamp === "number"
+          ? m.timestamp
+          : typeof m.timestamp === "string"
+            ? Date.parse(m.timestamp)
+            : NaN;
+      if (isFinite(ts)) rec.endAt = ts;
+      this.post({
+        type: "subagentUpdate",
+        id: m.toolCallId,
+        snapshot: snap,
+        final: true,
+        startAt: rec.startAt,
+        endAt: rec.endAt,
+      });
+    }
+  }
   /** 字节通道附件：内容 md5 → 已落盘临时路径。同一内容复用同一路径，
    *  路径层去重天然成立（含 webview 按名判重覆盖不到的「a(1).txt」改名场景） */
   private byteAttachCache = new Map<string, string>();
@@ -337,6 +369,7 @@ export class PiCore {
         }
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
+        this.replaySubagentRuns(d?.messages ?? []);
       } catch {
         // 忽略
       } finally {
@@ -1189,6 +1222,7 @@ export class PiCore {
       if (r?.cancelled) return;
       const d = await client.getMessages();
       this.post({ type: "render", messages: d?.messages ?? [] });
+      this.replaySubagentRuns(d?.messages ?? []);
       this.post({ type: "notice", text: this.L.sessionRestored });
       await this.refreshState();
     } catch (err: any) {
@@ -1414,6 +1448,7 @@ export class PiCore {
         );
         this.post({ type: "queuedClear" });
         this.post({ type: "render", messages: msgs });
+        this.replaySubagentRuns(msgs);
       } catch {
         // ignore
       }
