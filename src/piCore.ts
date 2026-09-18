@@ -631,7 +631,6 @@ export class PiCore {
           "/name": this.L.tuiOnly,
           "/session": this.L.tuiOnly,
           "/scoped-models": this.L.tuiOnly,
-          "/reload": this.L.tuiOnly,
           "/trust": this.L.tuiOnly,
           "/changelog": this.L.tuiOnly,
           "/debug": this.L.tuiOnly,
@@ -1088,7 +1087,38 @@ export class PiCore {
       { name: "clone", desc: this.L.natClone, run: () => this.ui.cloneSession() },
       { name: "login", desc: this.L.natLogin, run: async () => this.ui.openTerminalLogin() },
       { name: "settings", desc: this.L.natSettings, run: () => this.ui.settings() },
+      { name: "reload", desc: this.L.natReload, run: () => this.reloadBackend() },
     ];
+  }
+
+  /** 面板版 /reload：重建 pi 运行时，让新装的包/技能/扩展立即生效（pi 原生 /reload 的
+   *  等价物）。此前被误归 tuiOnly 挡掉——装个技能就得重启插件，不合理（2026-09-18
+   *  用户指出）。持久会话从文件恢复、聊天不丢（会话文件就是真相）；ephemeral
+   *  （--no-session）无落盘真相可恢复，拒绝执行防聊天蒸发；busy 时拒绝（重建运行时
+   *  会把在途流拦腰截断）。-c 兑底：文件失效则停在 -c 恢复的最近会话 */
+  private async reloadBackend(): Promise<void> {
+    if (this.busy) {
+      this.post({ type: "notice", text: this.L.reloadBusy });
+      return;
+    }
+    if (this.clientNoSession) {
+      this.post({ type: "notice", text: this.L.reloadEphemeral });
+      return;
+    }
+    const st = await this.client?.getState().catch(() => null);
+    const file = st?.sessionFile ?? null;
+    this.disposeClient();
+    const client = this.ensureClient(false);
+    if (file) {
+      try {
+        await client.switchSession(file);
+      } catch {
+        // 会话文件失效则停在 -c 恢复的最近会话，不阻断重载
+      }
+    }
+    await this.refreshState();
+    this.syncRenderKeepQueued();
+    this.post({ type: "notice", text: this.L.reloadDone });
   }
 
   /** ⚙ 新建会话（⚡ /commands 与 webview 皆可触发）：会话恢复编排的一部分 */
