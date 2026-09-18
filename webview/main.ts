@@ -194,6 +194,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   messages.innerHTML = '';
   messages.appendChild(root);
   var sgList = []; var sgSel = 0; var sgKind = null;
+  // '/' 菜单打开状态：仅在打开瞬间向宿主要一次新列表。updateSuggest 在 slashList
+  // 到达时会再次执行，若每次都发 getSlash 就是乒乓死循环（列表不停重渲染把选中项
+  // 冲回第一行，方向键永远选不中——2026-09-18 实测）；hideSuggest 时复位，下次打开再拉新
+  var slashMenuOn = false;
   var slashCmds = null;
   var workspaceFiles = null;
   // 附件无感去重（重复拖入/粘贴直接跳过，不提示不报错）。图片按 base64 内容判重——
@@ -1225,7 +1229,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     attachbarEl.style.display = (pendingImages.length + pendingFiles.length) ? 'flex' : 'none';
   }
-  function hideSuggest() { suggestEl.style.display = 'none'; }
+  function hideSuggest() { suggestEl.style.display = 'none'; slashMenuOn = false; }
   function updateSuggest() {
     var t = input.value;
     var m = t.match(/(^|\s)([\/@])([^\s]*)$/);
@@ -1236,7 +1240,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 每次打开菜单都向宿主要新列表（缓存先渲染，新列表到了再刷新）：包变更自动检测
       // 挂在宿主的 getSlash 处理里，若只在 slashCmds===null 时请求，getSlash 一辈子只发
       // 一次，新装/卸载的技能永远进不了菜单（2026-09-18 实测：卸载后 probe 仍显示）
-      vscode.postMessage({ type: 'getSlash' });
+      if (!slashMenuOn) { slashMenuOn = true; vscode.postMessage({ type: 'getSlash' }); }
       if (slashCmds === null) { hideSuggest(); return; }
       var ql = q.toLowerCase();
       var list = slashCmds.filter(function(c) { return ((c.label || c.name || '') + ' ' + (c.description || '')).toLowerCase().indexOf(ql) !== -1; });
