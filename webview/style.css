@@ -33,6 +33,8 @@ body > :not(#bg-layer):not(.subdock) { position: relative; z-index: 1; }
  * 滚动职责移交给每标签的 .msg-root——滚动位置天然按标签保留 */
 #messages { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .msg-root { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 10px 4px; }
+/* 工单24 架构归位：每页签一棵 root 常驻 #messages，非活动页签隐藏（切页签=换可见性 O(1)，现场保留） */
+.msg-root.offroot { display: none; }
 /* ── 标签条（工单十五刀2）── */
 #tabbar { display: none; align-items: stretch; gap: 2px; padding: 4px 8px 0; overflow-x: auto; flex: none; }
 #tabbar.has-tabs { display: flex; }

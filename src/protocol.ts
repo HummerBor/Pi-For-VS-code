@@ -163,6 +163,8 @@ export type WebviewToHost =
 export interface WvTabSwitchMsg {
   type: "tabSwitch";
   tabId: string;
+  /** 工单24 架构归位：webview 该页签未建树时向宿主要一次快照（切页签零重拉的唯一例外路径） */
+  needState?: boolean;
 }
 export interface WvTabNewMsg {
   type: "tabNew";

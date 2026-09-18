@@ -313,13 +313,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (this.changesFiles.length) this.postChangesList();
         // 工单十五刀2：标签清单随握手下发（webview 启动即渲染标签条）
         this.postTabs();
+        // 工单24 架构归位：webview 重载后每页签的树都空了，给所有已建核心各发一次快照——
+        // 后台页签的流式事件要写进它们自己的隐藏树，没有历史底子就会从半截开始累积
+        for (const [, c] of this.cores) void c.postUiState();
         // 工单十三二刀-3：后台预热 listSessions → 填 mtime 缓存，首次点击也毫秒级出列。
         // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
         void listSessions().catch(() => {});
       }
       // 工单十五刀2：标签栏控制消息是 panel 级（不过核心），先于核心路由拦截
       if (m.type === "tabNew") { this.handleTabNew(); return; }
-      if (m.type === "tabSwitch") { this.handleTabSwitch(m.tabId); return; }
+      if (m.type === "tabSwitch") {
+        this.handleTabSwitch(m.tabId);
+        // 工单24 架构归位：webview 未建树的页签随切换要一次快照（切页签零重拉的唯一例外）
+        if ((m as { needState?: boolean }).needState) {
+          const c = this.ensureCore(m.tabId);
+          if (c.clientRef?.running) void c.postUiState();
+          else this.postEmptyUiState(m.tabId);
+        }
+        return;
+      }
       if (m.type === "tabClose") { void this.handleTabClose(m.tabId); return; }
       // 工单十五刀1：webview→宿主按 tabId 路由——消息带已知标签 id 走对应核心；
       // 未标（启动握手期）或带已关闭标签 id 的兑底落活动标签
@@ -485,7 +497,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  /** 切换活动标签（刀5：切回即拉真相——postUiState 原子快照全量重发消息/busy/排队/模式/横幅/页脚） */
+  /** 切换活动标签（工单24 架构归位：切页签零重拉——webview 每页签一棵 DOM，O(1) 换可见性；
+   *  未建树的页签由 webview 随 tabSwitch 带 needState 来要快照，这里是唯一例外路径） */
   private handleTabSwitch(tabId: string): void {
     if (!this.tabMeta.has(tabId) || tabId === this.activeTabId) return;
     this.activeTabId = tabId;
@@ -493,17 +506,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (meta) meta.unread = false;
     this.postTabs();
     this.saveTabBar();
-    const core = this.ensureCore(tabId);
-    if (core.clientRef?.running) {
-      void core.postUiState();
-    } else {
-      // 没启动过 pi 的标签（含新标签）：页脚清空 + 欢迎页，不串显上个标签
-      this.postEmptyUiState(tabId);
-      // 标签栏持久化：重启恢复的标签首次切到时必须起进程——piCore.ensureClient 会按
-      // 该标签 tabKey 的会话记忆 switchSession 恢复历史（先清空再异步渲染，同 t1 启动口径）。
-      // 不起进程的话用户切回重启前聊天的标签只看到欢迎页，「恢复现场」名存实亡
-      if (this.restoredTabs.delete(tabId)) core.ensureClient();
-    }
+    // 标签栏持久化：重启恢复的标签首次切到时必须起进程——piCore.ensureClient 会按
+    // 该标签 tabKey 的会话记忆 switchSession 恢复历史（先清空再异步渲染，同 t1 启动口径）。
+    // 不起进程的话用户切回重启前聊天的标签只看到欢迎页，「恢复现场」名存实亡。
+    // 恢复后的历史由 init 链路的 render/webviewReady 全量快照送进该页签自己的树
+    if (this.restoredTabs.delete(tabId)) this.ensureCore(tabId).ensureClient();
   }
 
   /** 关标签：进程在跑时必须确认（中断任务属破坏性动作，同 newSession 口径）；
@@ -532,11 +539,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.ensureCore(nid).ensureClient(true); // 同 handleTabNew：立即起会话恢复模型记忆
       }
       const next = this.cores.get(this.activeTabId);
-      if (next?.clientRef?.running) {
-        void next.postUiState(); // 刀5：切回即拉真相
-      } else {
-        this.postEmptyUiState(this.activeTabId);
-      }
+      // 工单24 架构归位：转移后的活动页签不再盲发快照——webview 树若未建，
+      // 会随 tabs 消息驱动的 activateTab 带 needState 来要（切页签零重拉）
+      if (next && !next.clientRef?.running) this.postEmptyUiState(this.activeTabId);
     }
     this.postTabs();
     this.saveTabBar(); // 标签增减/活动标签变化都要落盘，重启才还原得住
@@ -1667,9 +1672,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   // ════════ 工单七：pi 变更 Git diff 可视化（混合方案，裁决 11） ════════
 
-  /** 核心消息桥（工单十五刀1→5）：①记账标签元数据（busy/state → tabs 清单，含后台跑完
-   *  置未读）；②后台页签的消息**不喍 webview**（刀5：pi 会话即真相，切回时 postUiState
-   *  重拉——刀2 影子 DOM 状态机已整树回收）；③活动标签的 state 会话切换时清变更条 */
+  /** 核心消息桥（工单十五刀1 → 工单24 架构归位）：①记账标签元数据（busy/state → tabs 清单，
+   *  含后台跑完置未读）；②后台页签的消息**照喍 webview**——写进该页签自己的隐藏树，现场累加
+   *  （切回即现，零重拉；刀5 的「后台不喍」随重拉架构一并废止）；只挡页面控件/交互应答类：
+   *  ③活动标签的 state 会话切换时清变更条 */
   private pipeFromCore(msg: HostToWebview, tabId: string): void {
     this.syncTabMeta(msg, tabId);
     if (tabId !== this.activeTabId) {
@@ -1677,6 +1683,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const meta = this.tabMeta.get(tabId);
         if (meta && !meta.unread) { meta.unread = true; this.postTabs(); }
       }
+      // 交互应答/浮层类不投后台（notice 弹给谁看？输入框回填/状态行只属活动页签）
+      if (msg.type === "notice" || msg.type === "status" || msg.type === "fillInput") return;
+      this.post(msg, tabId);
       return;
     }
     if (msg.type === "state") {

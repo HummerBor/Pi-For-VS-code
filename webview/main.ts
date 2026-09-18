@@ -25,30 +25,87 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
 
-  // ── 工单十五刀5：页签只是展示层（用户定调：pi 本身就支持多会话并行，插件只管展示）──
-  // webview 不再自养影子状态（刀2 的 tabRenders/withInactive/applyingInactive 已整树回收）：
-  // pi 会话对象就是唯一真相，切回页签时宿主 postUiState 全量重发（消息/busy/排队/横幅/模式），
-  // 后台页签的消息宿主直接不喂。本地只剩：单一渲染上下文（root+全局态）+ 页签芯片清单
+  // ── 工单24 架构归位（用户直令 2026-09-18 推翻刀5「切回即重拉」）：每页签一棵 DOM ──
+  // 刀5 的「单一 root + 切回 postUiState 重拉」在流式场景是竞态温床：刀5 丢现场 → 工单十八
+  // ×2 → 工单24 丢内容，同一坑摔四次；且每次切换=整会话深拷贝+整棵重绘，长会话切一次卡几百毫秒。
+  // 回归每页签一棵 DOM（吸收两代教训）：
+  //  • 所有 root 常驻 #messages，非活动页签 .offroot(display:none)——切换=换可见性 O(1)，
+  //    零重拉零重建；后台页签的流式事件继续写进自己的隐藏树（现场累加，切回即现）
+  //  • 页面级控件（状态栏/queuebar/横幅/页脚）全局一份，数据按页签记账（TabCtx），
+  //    只为活动页签渲染；后台只记账不碰控件（bgMode 守卫）
+  //  • 下面这组全局变量是「当前换镜」：useTab 保存/恢复，后台处理完立即换回活动页签
   var toolEls = {}; var queuedItems = [];
-  // 子 agent 监控卡片（subagentUpdate）：id(toolCallId) → { wrap, expanded }
-  // 子 agent 浮窗状态：subMons 内联卡片已整树退役（用户拍板消息流不留卡片）
-  var liveMsg = null; var liveDiv = null; var pdet = null; var liveParts = null; var liveRTimer = null;
-  var streaming = false; var busyTimer = null; var busyStart = 0; var queueN = 0;
-  // 压缩进行中（宿主 compaction_start→end 驱动，真相随 uiState 快照）：压过 Working 标签，
-  // 且 busy:false 不清它——压缩中发消息被 preflight 拒收时 busy:false 不该抹掉压缩提示
+  var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
+  var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
   var lastElapsed: number | null = null;
   var modeText = 'Auto';
-  var pendingImages: any[] = []; var pendingFiles: any[] = [];
+  var pendingImages: any[] = []; var pendingFiles: any[] = []; // 编辑框附件：页签共享（刀2 起已知取舍，维持不变）
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
   var activeTabId: string | null = null;
   var tabsList: TabInfo[] = [];
   var tabbarEl = document.getElementById('tabbar') as HTMLElement;
   var messages = document.getElementById('messages') as HTMLElement;
-  // 单一渲染根：样式沿用 .msg-root 滚动根，全局只有一份，切页签=宿主重绘进同一棵树
-  // （DOM 插入在 welcomeHTML 快照之后——插入会清掉静态欢迎页，快照必须先行）
-  var root = document.createElement('div');
+  // 当前换镜的渲染根（useTab 维护；占位节点立即被首个 useTab 替换）
+  var root: HTMLElement = document.createElement('div');
   root.className = 'msg-root';
+  /** 页签渲染上下文：root + 流式状态 + 页面控件记账。全局变量组是它的「换镜」 */
+  interface TabCtx {
+    id: string; root: HTMLElement; built: boolean;
+    toolEls: any; liveMsg: any; liveDiv: any; pdet: any; liveParts: any; liveRTimer: number | null;
+    followingEnd: boolean; queuedItems: any[]; queueN: number; nativeQueuePills: any[];
+    streaming: boolean; busyStart: number; lastElapsed: number | null;
+    compacting: boolean; modeText: string; banner: BannerPayload | null; foot: any;
+    renderPending: any[] | null; liveSyncPending: any;
+  }
+  var tabCtx: Record<string, TabCtx> = {};
+  var curTabId: string | null = null;
+  var bgMode = false; // 后台页签处理中：只记账，页面控件不渲染（各控件函数自查）
+  function makeRoot(id: string): HTMLElement {
+    var r = document.createElement('div');
+    r.className = 'msg-root' + (id === activeTabId ? '' : ' offroot');
+    // 滚动跟随（工单十七）监听随根走；只有可见根会发 scroll 事件，写全局镜像即正确
+    r.addEventListener('scroll', function () {
+      if (suppressScroll) { suppressScroll = false; return; }
+      followingEnd = r.scrollHeight - r.scrollTop - r.clientHeight <= 48;
+    }, { passive: true });
+    messages.appendChild(r);
+    return r;
+  }
+  function getCtx(id: string): TabCtx {
+    var c = tabCtx[id];
+    if (!c) {
+      c = { id: id, root: makeRoot(id), built: false, toolEls: {}, liveMsg: null, liveDiv: null, pdet: null,
+        liveParts: null, liveRTimer: null, followingEnd: true, queuedItems: [], queueN: 0, nativeQueuePills: [],
+        streaming: false, busyStart: 0, lastElapsed: null, compacting: false, modeText: 'Auto', banner: null,
+        foot: null, renderPending: null, liveSyncPending: null };
+      tabCtx[id] = c;
+    }
+    return c;
+  }
+  /** 换镜：全局变量组 ↔ 页签账本。同步小块内用，出来前必须换回（路由器负责）。
+   *  followingEnd/suppressScroll 是滚动跟随镜像（监听只属可见根，写全局即正确） */
+  function useTab(tid: string) {
+    if (curTabId === tid) return;
+    var from = curTabId !== null ? tabCtx[curTabId] : null;
+    if (from) {
+      from.toolEls = toolEls; from.liveMsg = liveMsg; from.liveDiv = liveDiv; from.pdet = pdet;
+      from.liveParts = liveParts; from.liveRTimer = liveRTimer; from.followingEnd = followingEnd;
+      from.queuedItems = queuedItems; from.queueN = queueN; from.nativeQueuePills = nativeQueuePills;
+      from.streaming = streaming; from.busyStart = busyStart; from.lastElapsed = lastElapsed;
+      from.compacting = compacting; from.modeText = modeText; from.banner = banner;
+      from.renderPending = renderPending; from.liveSyncPending = liveSyncPending;
+    }
+    var c = getCtx(tid);
+    toolEls = c.toolEls; liveMsg = c.liveMsg; liveDiv = c.liveDiv; pdet = c.pdet;
+    liveParts = c.liveParts; liveRTimer = c.liveRTimer; followingEnd = c.followingEnd;
+    queuedItems = c.queuedItems; queueN = c.queueN; nativeQueuePills = c.nativeQueuePills;
+    streaming = c.streaming; busyStart = c.busyStart; lastElapsed = c.lastElapsed;
+    compacting = c.compacting; modeText = c.modeText; banner = c.banner;
+    renderPending = c.renderPending; liveSyncPending = c.liveSyncPending;
+    root = c.root;
+    curTabId = tid;
+  }
   var input = document.getElementById('input') as HTMLTextAreaElement;
   var stopBtn = document.getElementById('stop') as HTMLButtonElement;
   var sendBtn = document.getElementById('send') as HTMLButtonElement;
@@ -190,9 +247,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var TIPS = L.tips;
   function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }
   pickTip(welcomeEl);
-  // 工单十五刀5：静态欢迎页下岗（快照已存），此后一切渲染进唯一 root（空列表时 renderAll 重建欢迎页）
+  // 工单十五刀5：静态欢迎页下岗（快照已存），此后一切渲染进各页签自己的 root
+  // （root 随 makeRoot 建页签时创建并挂入 #messages，这里不再预挂单根）
   messages.innerHTML = '';
-  messages.appendChild(root);
   var sgList = []; var sgSel = 0; var sgKind = null;
   // '/' 菜单打开状态：仅在打开瞬间向宿主要一次新列表。updateSuggest 在 slashList
   // 到达时会再次执行，若每次都发 getSlash 就是乒乓死循环（列表不停重渲染把选中项
@@ -246,22 +303,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 非程序化滚动（用户拖滚动条/滚轮/触摸）才读一次布局判 followingEnd。流式时 delta
   // 改 DOM + 拉底全程零读布局，钉底同步无延迟；在底时误判定结果恒 true 无害
   var suppressScroll = false;
-  root.addEventListener('scroll', function () {
-    if (suppressScroll) { suppressScroll = false; return; }
-    followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
-  }, { passive: true });
+  // 滚动监听已随每页签 root 建（makeRoot）；只有可见根会发 scroll 事件，写全局镜像即正确
   // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
   function scroll() {
     if (!followingEnd) return;
+    if (bgMode) { root.scrollTop = root.scrollHeight; return; } // 隐藏根无 scroll 事件，无需压制标志
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
-  function renderStatus() { modeBadge.textContent = modeText; }
+  function renderStatus() { if (bgMode) return; modeBadge.textContent = modeText; }
 
   /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
    *  关闭/一键压缩都上报宿主，横幅状态机在 piCore（webview 重建不丢状态） */
   function renderBanner(b: BannerPayload | null) {
+    if (bgMode) return; // 后台页签：横幅已入账（banner 全局镜像随换镜保存），切换时按账本重渲
     if (!b) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; return; }
     bannerEl.innerHTML = '';
     var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = b.text;
@@ -305,17 +361,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 状态栏主标签：压缩中一律显示压缩提示（自动压缩发生在 run 中途，Working 会被它覆写；
   // 手动压缩的空闲会话本就没有 Working）
   function busyLabel(base) { return compacting ? '⏳ ' + L.compacting : base; }
-  function setBusy(v, elapsedMs) {
-    streaming = v;
-    if (v) {
-      // 计时起点对齐宿主真相：对账/纠回时 elapsedMs 是真实已过时长，回拨起点。
-      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
-      busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
-      lastElapsed = null;
-    }
-    stopBtn.style.display = v ? 'inline-flex' : 'none';
+  /** 状态栏 DOM 重渲（工单24 架构归位）：setBusy 的控件部分抽出，页签切换时按账本重建用 */
+  function renderBusyUi() {
+    stopBtn.style.display = streaming ? 'inline-flex' : 'none';
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    if (v) {
+    if (streaming) {
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
@@ -335,19 +385,39 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       } else
       // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
       // 同时入记录，切走再切回来能恢复 ⏱ 现场
-      if (elapsedMs != null) {
-        lastElapsed = elapsedMs;
-        statusEl.textContent = '⏱ ' + fmtDur(elapsedMs);
+      if (lastElapsed != null) {
+        statusEl.textContent = '⏱ ' + fmtDur(lastElapsed);
         statusEl.title = L.turnDuration;
       }
     }
+  }
+  function setBusy(v, elapsedMs) {
+    streaming = v;
+    if (v) {
+      // 计时起点对齐宿主真相：对账/纠回时 elapsedMs 是真实已过时长，回拨起点。
+      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
+      busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
+      lastElapsed = null;
+    } else if (elapsedMs != null) {
+      // 本轮实测耗时入记录（切走再切回来能恢复 ⏱ 现场）
+      lastElapsed = elapsedMs;
+    }
     if (!v) { finalizeLive(); liveReset(); }
+    if (bgMode) return; // 后台：只记账（账本随换镜保存），页面控件不动
+    renderBusyUi();
+  }
+  /** queuebar 按当前账本重建（页签切换时用；uiState 分支的同款逻辑收口到此） */
+  function renderQueuedBar() {
+    document.getElementById('queuebar').innerHTML = '';
+    for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
+    renderNativeQueue();
   }
   /** 压缩窗口开合（宿主 CompactingMsg）：true 直接接管状态栏——手动压缩是空闲会话里的
    *  RPC 调用，全程无 agent 事件，没有这条压缩期间零反馈。false 时不主动清：streaming 时
    *  busyTimer 会按新 flag 重写 Working，空闲时由后续 status/settled 流程收尾 */
   function setCompacting(v) {
     compacting = v;
+    if (bgMode) return; // 后台：只记账
     if (v) {
       statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
       statusEl.textContent = '⏳ ' + L.compacting;
@@ -447,6 +517,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
+    if (bgMode) return; // 后台页签：排队数据已入账（queuedItems 随换镜保存），queuebar 只属活动页签
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
     var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);
@@ -477,6 +548,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 下一次 queue_update 重建——切页签后 pill 可能短暂消失，计数仍在
   var nativeQueuePills = [];
   function renderNativeQueue() {
+    if (bgMode) return; // 后台页签：pill 数据已入账，queuebar 只属活动页签
     var qb = document.getElementById('queuebar');
     var olds = qb.querySelectorAll('.q-item[data-native="1"]');
     for (var i = 0; i < olds.length; i++) olds[i].parentNode.removeChild(olds[i]);
@@ -490,6 +562,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function removeQueued(qid) {
     queuedItems = queuedItems.filter(function(x) { return x.qid !== qid; });
+    if (bgMode) return; // 后台：数据已剔除，queuebar 不动
     var els = document.getElementById('queuebar').querySelectorAll('[data-qid="' + qid + '"]');
     for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);
   }
@@ -1086,10 +1159,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
     // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
-    // 职责）再追加一遍 = 翻倍。修法：先清再建，幂等——本循环与 uiState 分支谁先谁后都不叠加
-    var qb = document.getElementById('queuebar');
-    qb.innerHTML = '';
-    for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
+    // 职责）再追加一遍 = 翻倍。修法：先清再建，幂等——本循环与 uiState 分支谁先谁后都不叠加。
+    // 工单24：queuebar 只属活动页签，后台重绘（写进隐藏树）不碰它
+    if (!bgMode) {
+      var qb = document.getElementById('queuebar');
+      qb.innerHTML = '';
+      for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
+    }
     scroll();
   }
   function fmtSession(file, name) {
@@ -1100,6 +1176,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.split(/[\\/]/).pop() || L.ephemeralSession;
   }
   function applyState(m) {
+    // 工单24：后台页签的页脚数据记账（模型/会话/用量随页签走），切换时按账本重渲
+    if (bgMode) { if (tabCtx[curTabId]) tabCtx[curTabId].foot = m; return; }
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
     // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
@@ -1383,7 +1461,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function drainPendingStream() {
     if (!pendingStream.length) return;
     var q = pendingStream; pendingStream = [];
-    for (var i = 0; i < q.length; i++) handleMsg(q[i]);
+    for (var i = 0; i < q.length; i++) routeMsg(q[i]);
+  }
+  /** 消息路由（工单24 架构归位）：按 tabId 各归各的树；后台处理完立即换回活动页签 */
+  function routeMsg(m: HostToWebviewTagged) {
+    var tid = m.tabId !== undefined ? m.tabId : activeTabId;
+    if (tid === null || tid === undefined) return;
+    if (activeTabId === null) { activeTabId = tid; tabId = tid; }
+    if (tid !== activeTabId) {
+      // 后台页签：交互应答/浮层类不投（notice 弹给谁看？输入框回填/状态行只属活动页签）
+      if (m.type === 'notice' || m.type === 'status' || m.type === 'fillInput') return;
+      bgMode = true;
+      useTab(tid);
+      handleMsg(m);
+      useTab(activeTabId);
+      bgMode = false;
+      return;
+    }
+    useTab(tid);
+    handleMsg(m);
   }
   function flushRender() {
     renderTimer = null;
@@ -1440,8 +1536,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     // subagentUpdate/subagentDetail 已在 window message 入口截获（页签过滤前），不进 handleMsg
     else if (m.type === 'uiState') {
-      // 工单十八：原子快照——tabId 不符直接丢弃（连切竞态：慢到的旧页签快照不得覆盖新活动页签）
-      if (m.tabId !== activeTabId) return;
+      // 工单24：按 tabId 各归各的树（路由器已换镜），不再拒非活动快照——后台页签的树也要建/重建
+      // （webview 重载后全量重建、压缩/换会话真相推送都走这里）。每页签一棵 DOM 后
+      // 「慢到的旧页签快照覆盖新页签内容」这类竞态整类消失：快照只覆盖它自己的树
+      if (tabCtx[curTabId]) tabCtx[curTabId].built = true;
       // 状态栏排队计数随快照同页签对齐（原 queueN 是上个页签的 queue_update 残留值）
       queueN = (m.queued || []).length;
       banner = m.banner;
@@ -1451,15 +1549,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       setBusy(m.busy, m.elapsedMs);
       renderStatus();
       renderBanner(m.banner);
-      // queuebar 原子重建：先置数组再重建 DOM（不再走 addQueued——它 push 回数组，会翻倍）
+      // queuebar 原子重建：先置数组再重建 DOM（不再走 addQueued——它 push 回数组，会翻倍）。
+      // 工单24：queuebar 只属活动页签，后台页签快照只记账（切换时按账本重建）
       queuedItems = (m.queued || []).slice();
-      document.getElementById('queuebar').innerHTML = '';
-      for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
+      if (!bgMode) {
+        document.getElementById('queuebar').innerHTML = '';
+        for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
+      }
       nativeQueuePills = []; renderNativeQueue(); // uiState 不带 followUp 数组，同上取舍
       applyState(m);
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
-    else if (m.type === 'render') { renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'render') { if (tabCtx[curTabId]) tabCtx[curTabId].built = true; renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
@@ -1477,7 +1578,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
-    else if (m.type === 'queuedClear') { queuedItems = []; document.getElementById('queuebar').innerHTML = ''; }
+    else if (m.type === 'queuedClear') { queuedItems = []; if (!bgMode) document.getElementById('queuebar').innerHTML = ''; }
     else if (m.type === 'queuedRemove') removeQueued(m.qid); // 工单十八补刀：乐观入队失败回滚单条
     else if (m.type === 'queuedRetrieved') {
       // 工单十六：取回文本合入编辑框——已有内容时换行追加，不覆盖正在输入的内容
@@ -1533,22 +1634,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       updateSubInd();
     }
   }
+  /** 页签切换（工单24 架构归位）：换可见性 O(1) + 按账本重渲页面控件，零重拉零重建。
+   *  现场在各页签自己的树里常驻（后台流式照常累加）；未建树的页签向宿主要一次快照 */
   function activateTab(tid: string) {
     if (activeTabId === tid) { renderTabs(); return; }
     activeTabId = tid; tabId = tid;
-    liveReset();
-    applyTabSubState(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
+    bgMode = false;
+    useTab(tid);
+    for (var id in tabCtx) tabCtx[id].root.classList.toggle('offroot', id !== tid);
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    // 工单十八：本地立即清场（零延迟）——原子快照在途时不再挂着上个页签的 Working/排队，
-    // 窗口期串显消除；真相由 uiState 回填（B 有排队/横幅会重建，本地激进清安全）
-    statusEl.classList.remove('busy');
-    statusEl.textContent = '';
-    compacting = false; // 本地清场同款：压缩标签真相由宿主 uiState 回填
-    stopBtn.style.display = 'none';
-    queueN = 0;
-    queuedItems = [];
-    document.getElementById('queuebar').innerHTML = '';
+    // 页面控件按新活动页签的账本重渲（数据早随流式事件记好账，这里只是显示）
+    renderStatus();
+    renderBanner(banner);
+    renderQueuedBar();
+    renderBusyUi();
+    if (tabCtx[tid].foot) applyState(tabCtx[tid].foot);
+    applyTabSubState(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
     renderTabs();
+    // 未建树的页签向宿主要一次快照（webview 重载后未轮到的后台页签/重启恢复页签）；
+    // 已建树的不重拉——这正是本轮推翻刀5 的核心：切页签零快照窗口，竞态整类消失
+    if (!tabCtx[tid].built) vscode.postMessage({ type: 'tabSwitch', tabId: tid, needState: true });
   }
 
   /** 标签条渲染：宿主 tabs 消息是唯一事实源（id/title/busy/unread）；≤1 会话默认隐藏（用户定调） */
@@ -1583,10 +1688,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function handleTabs(m: TabsMsg) {
     tabsList = m.tabs || [];
     if (activeTabId === null || m.activeTabId !== activeTabId) {
-      activeTabId = m.activeTabId; tabId = m.activeTabId;
-      applyTabSubState(activeTabId); // 宿主驱动换页签（关页签等）同款：浮窗随页签恢复
+      // 宿主驱动换页签（新建/关标签转移/重启重建）：同款 O(1) 换根+账本重渲；
+      // 换的是非活动标签时 activateTab 内部直接返回
+      activateTab(m.activeTabId);
     }
     renderTabs();
+    // 工单24：已关闭页签的树随手清掉（宿主清单是事实源；镜若指向被关页签，下次换镜重建）
+    for (var id in tabCtx) {
+      var alive = false;
+      for (var ti = 0; ti < tabsList.length; ti++) { if (tabsList[ti].id === id) { alive = true; break; } }
+      if (!alive) {
+        var dead = tabCtx[id].root;
+        if (dead.parentNode) dead.parentNode.removeChild(dead);
+        delete tabCtx[id];
+        if (curTabId === id) curTabId = null;
+      }
+    }
   }
 
   window.addEventListener('message', function (ev: MessageEvent) {
@@ -1616,12 +1733,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (subDetailView && subDetailView.split(':')[0] === m.id) renderSubDock();
       return;
     }
-    // tabId 路由：首条带标消息定初始标签；非活动标签的消息宿主已不喂（刀5），带双保险丢弃
-    if (m.tabId !== undefined) {
-      if (activeTabId === null) { activeTabId = m.tabId; tabId = m.tabId; }
-      else if (m.tabId !== activeTabId) return;
-    }
-    handleMsg(m);
+    // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
+    // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
+    routeMsg(m);
   });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）
   vscode.postMessage({ type: 'webviewReady' });
