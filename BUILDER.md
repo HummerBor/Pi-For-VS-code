@@ -528,3 +528,8 @@ steer 命令接受。坑：rpc 子进程任务跑完不退出，完成信号必�
 2. 挂账：浮窗动画时长未用户确认（.18s ease-out）；跨重绘的 runs 留档（现为 live 期累积，
    webview 重载即清）；工单6（生命周期事件行，pi 原生无此机制，用户条件不满足，挂起）
 3. 两仓均未 push，等用户指令
+
+**0.1.0 发版留痕**（09-18 用户令「发」）：PI_VER=0.1.0 ship → commit `24d8454` 已推；
+市场 publish 连续 8 次 ECONNRESET（push 通、gallery 上传被重置），发现本机代理
+127.0.0.1:10801 后 `HTTPS_PROXY=http://127.0.0.1:10801 npx @vscode/vsce publish` 成功。
+教训：这台机器 vsce publish 必须带该代理，后续发版直接带上。
