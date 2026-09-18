@@ -1109,6 +1109,7 @@ export class PiCore {
     }
     const st = await this.client?.getState().catch(() => null);
     const file = st?.sessionFile ?? null;
+    this.dbg("reload: begin file=" + (file ?? "(none)"));
     this.disposeClient();
     const client = this.ensureClient(false);
     if (file) {
@@ -1118,6 +1119,7 @@ export class PiCore {
         // 会话文件失效则停在 -c 恢复的最近会话，不阻断重载
       }
     }
+    this.dbg("reload: runtime rebuilt, refetching commands");
     await this.refreshState();
     this.syncRenderKeepQueued();
     // 重载后重发命令列表：webview 里的 slashCmds 是一次性懒加载缓存，不重发则
@@ -1174,8 +1176,10 @@ export class PiCore {
     // busy/ephemeral 时不自动重建（busy 截断在途流 / ephemeral 无落盘真相），列表照发
     // 并提示用 /reload；reloadBackend 内部 ensureClient 会刷新签名，此处不会死循环
     const sig = this.readPkgsSig();
+    this.dbg("slash: getSlash sig=" + sig + " cached=" + this.pkgsSig);
     if (sig !== null && this.pkgsSig !== null && sig !== this.pkgsSig) {
       if (!this.busy && !this.clientNoSession) {
+        this.post({ type: "notice", text: this.L.reloadAuto });
         await this.reloadBackend();
         return; // reloadBackend 内部已重发 slashList
       }
@@ -1186,6 +1190,7 @@ export class PiCore {
       const client = this.ensureClient();
       const d = await client.getCommands();
       cmds = d?.commands ?? [];
+      this.dbg("slash: commands=" + cmds.length + " probe=" + cmds.some((c: { name?: string }) => c.name === "skill:probe-skill"));
     } catch {
       // pi 未就绪时给空列表
     }
