@@ -101,16 +101,11 @@ export class PiCore {
    *  「队列变短」会被既有转正逻辑误判成 agent 取走 → 保留集还没重排队就被转正成用户气泡。
    *  抑制期间只记账 lastQueueTotal；收口对账由 retrieveQueued 自己做（历史比对后 queuedDelivered） */
   private retrieving = false;
-  // ── 工单24：快照期事件闸门（保序回放）──
+  // ── 工单24：快照期事件闸门──
   /** 闸门开=快照窗口中：post 出口统一分流，流式/状态事件入队不直发（uiState 本身与
-   *  notice/交互应答类直发）。不逐事件 case 打补丁——漏一类就是新事故 */
+   *  notice/交互应答/subagentUpdate 直发）。不逐事件 case 打补丁——漏一类就是新事故 */
   private gateOpen = false;
   private gateQueue: HostToWebview[] = [];
-  /** 闸门关闭瞬间冻结的在途消息深拷贝（liveStreaming 为真才取，busy+stale liveMessage 不算）。
-   *  uiState 按「基线计数」截断历史，窗口内一切由「基线 live + FIFO 回放」重建——
-   *  剥离区恰好=窗口事件影响区，回放不重不漏，无需去重合并（去重=重新发明增量协议，必错）。
-   *  缓存：若窗口内压缩重建消息数组，slice 会钳位不越界，代价由 settled 全量重绘自愈 */
-  private gateLiveCopy: any = null;
   /** postUiState 单飞：窗口期再入只标重跑（用最新真相重拉），避免重叠快照互冲 */
   private uiStateRunning = false;
   private uiStateRerun = false;
@@ -475,54 +470,47 @@ export class PiCore {
 
   /** UI 真相全量重发（工单十五刀5）：webview 不自养影子状态，页签切回/重建时由核心把
    *  pi 会话真相一次推齐——消息重绘（session.messages）+ busy（真实耗时）+ 排队（queued
-   *  数组，先 queuedClear 再逐条重发，webview 零累积）+ 权限模式 + 压缩横幅。
-   *  webviewReady 与页签切换共用。
-   *  工单24：快照窗口（两跳 await）与流式事件的竞态用事件闸门修——入口关闸冻结基线，
-   *  窗口内流式事件入队，uiState 发出后回放队列（不重不漏）。单飞：窗口期再入标重跑，
-   *  连切页签时第二个 postUiState 用最新真相重拉，重叠快照互冲消失 */
+   *  数组）+ 权限模式 + 压缩横幅。webviewReady 与页签切换共用。
+   *
+   *  【工单24 实证重写（推翻首版回放实现）】探针 scripts/probe-inflight.mjs 实测：
+   *  在途 assistant 消息在 message_start/update 期间**不在 session.messages 里**
+   *  （state 尾条仍是上一条已完成消息），直到 message_end 才入 state——刀5b 注释
+   *  「message_start 起就在 agent.state.messages 里」是错的。后果：任何「剥末条+live
+   *  重定基」的方案，剥掉的都是上一条**已完成**消息（内容凭空消失），首版按工单字面做的
+   *  「T0 基线+全量回放」实测丢得更狠（20ms yield 被长会话重绘顶穿，回放事件先落地
+   *  再被 renderAll 冲掉）。正确形状：
+   *   ① 历史 = session.messages 全量（零剥离，天然不含在途消息）；
+   *   ② live = 在途消息全量深拷贝（事件对象 in-place 更新，实测内容递增）；
+   *   ③ ①②在**同一个同步块**里取（无 await，事件插不进来）→ 天然不重不漏；
+   *   ④ 快照窗口内到达的事件一律丢弃——全部 ≤ 快照时刻，已被①②覆盖，重放=同段两遍；
+   *   ⑤ 快照之后到达的事件由 webview 侧「重绘期流式事件延后一拍」兑底（main.ts
+   *      pendingStream），顺序保证落在消费端，不再赌宿主侧 sleep。
+   *  单飞保留：窗口期再入标重跑（最新真相重拉），连切页签重叠快照互冲消失 */
   async postUiState(): Promise<void> {
     if (this.uiStateRunning) {
       this.uiStateRerun = true;
       return;
     }
     this.uiStateRunning = true;
-    // 闸门入口（两跳 await 之前）：冻结基线。baseCount 必须在闸门关闭瞬间读——窗口内
-    // 任何动态（消息完成/新消息起步/工具起落）都落在剥离区由回放重建，不重不漏；
-    // liveCopy 只取真在途消息（liveStreaming）——stale 的 liveMessage 发出去会双画。
-    // 恢复中（restoringSession）基线跨会话无意义：liveCopy 置空，baseCount 标记 -1，
-    // 恢复完成后重取（新会话定型，窗口事件照常回放）
+    // 关闸（两跳 await 之前）：窗口内流式事件不直达 webview——直达会先画、再被快照重绘冲掉
     this.gateOpen = true;
-    this.gateLiveCopy = !this.restoringSession && this.busy && this.liveStreaming && this.liveMessage
-      ? JSON.parse(JSON.stringify(this.liveMessage))
-      : null;
-    let gateBaseCount = this.restoringSession ? -1 : this.client ? this.client.messageCount() : 0;
     const gateT0 = Date.now();
-    let msgs: any[] = [];
     try {
       // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
       if (this.restoringSession) await this.restoringSession.catch(() => {});
-      // 恢复场景基线重取：会话已换型，入口读的旧会话条数作废（liveCopy 已置空，
-      // 截断点=新基线计数，基线之后到达的事件全部由回放兑底）
-      if (gateBaseCount < 0) gateBaseCount = this.client ? this.client.messageCount() : 0;
-      const all = (await this.client?.getMessages())?.messages ?? [];
-      // 工单24 截断：在途消息（gateLiveCopy 非空）在 T0 必是末条，占基线计数末一位——
-      // 它与其后窗口内新增的消息全部剥离，由 基线 live + 回放队列 重建（不重不漏）；
-      // 截断点之前的消息在基线时刻已完成、不可变，快照取晚也不失真。无在途则只剥窗口内新增
-      const stripFrom = this.gateLiveCopy ? gateBaseCount - 1 : gateBaseCount;
-      msgs = all.slice(0, Math.max(0, stripFrom));
-      // 页脚数据（含既有副作用：会话记账/横幅 re-arm）与消息快照同源拉取——
-      // 原子化后不再发单独 state 消息，页脚字段直接进 uiState
+      // 页脚数据（含既有副作用：会话记账/横幅 re-arm）先拉——它有 await，快照必须在其后取
       const foot = await this.collectState();
-      // 工单十八：原子快照。原先连发 render/liveSync/busy/mode/banner/queuedClear/queuedAdd
-      // 七条消息，webview 各区域各自更新，切页签空分支漏发时中间态混搭被固化（串显/两套 DOM）。
+      // ——同步快照块（无 await，事件插不进来）：历史全量 + 在途消息深拷贝同拍取——
       // tabId 戳：webview 收到非活动页签快照直接丢弃（连切竞态：慢到的旧快照覆盖新页签内容）
-      // live 基线 = 闸门关闭瞬间（T0）的在途消息深拷贝，不是拉快照时的——窗口内 delta
-      // 全在回放队列里，基线再含它们就是 ×2（工单十八同根，回归红线）
+      const msgs = this.client ? this.client.messagesSync() : [];
+      const live = this.busy && this.liveStreaming && this.liveMessage
+        ? JSON.parse(JSON.stringify(this.liveMessage))
+        : null;
       this.post({
         type: "uiState",
         tabId: this.tabKey,
         messages: msgs,
-        ...(this.gateLiveCopy ? { live: this.gateLiveCopy } : {}),
+        ...(live ? { live } : {}),
         busy: this.busy,
         compacting: this.compacting,
         ...(this.busy && this.runStartTs > 0 ? { elapsedMs: Date.now() - this.runStartTs } : {}),
@@ -542,38 +530,28 @@ export class PiCore {
         stats: foot?.stats ?? null,
       });
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
-      // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行
+      // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行。
+      // subagentUpdate 走闸门直发（GATE_PASS_TYPES），不会被丢
       if (!this.busy) void this.replaySubagentHistory();
     } catch {
       // ignore
     }
-    // —— 回放（工单24）——闸门保持关闭跨过 yield：期间到达的事件继续入队，回放序完整。
-    // yield 必须先于回放：webview 对 uiState 的重绘本身延后一拍（flushRender setTimeout 0），
-    // 回放 delta 若先于重绘落地会被 renderAll 冲掉（基线@T0 冻结不含它们）——
-    // 等 renderAll 落地再回放，事件恰好补在重绘之后。闸门解除放在回放循环前：
-    // 回放是同步循环无事件交错，之后到达的事件直发，在管道里自然排在回放之后
-    try {
-      await new Promise((r) => setTimeout(r, 20));
-      const buffered = this.gateQueue;
-      this.gateQueue = [];
-      this.gateOpen = false;
-      if (buffered.length) {
-        // 实证日志（工单验收要求，修完可留）：窗口期捕获的事件清单——被冲/重放的全在这行
-        this.dbg(
-          `gate replay: window=${Date.now() - gateT0}ms buffered=${buffered.length}` +
-            ` types=[${buffered.map((m) => m.type).join(",")}]`
-        );
-        for (const m of buffered) {
-          if (m.type === "toolStart" && m.id && hasToolCallInMsgs(msgs, m.id)) continue;
-          this.rawPost(m);
-        }
-      }
-    } finally {
-      this.uiStateRunning = false;
-      if (this.uiStateRerun) {
-        this.uiStateRerun = false;
-        void this.postUiState();
-      }
+    // 释放闸门：窗口内事件全部 ≤ 同步快照时刻，已被快照（历史+live）覆盖——丢弃不重放
+    // （重放=同段内容两遍）。快照之后到达的事件由 webview 重绘期延后一拍兑底。
+    // 丢弃清单进 dbg（实证留痕：窗口接住了什么、丢了什么一目了然）
+    const dropped = this.gateQueue;
+    this.gateQueue = [];
+    this.gateOpen = false;
+    if (dropped.length) {
+      this.dbg(
+        `gate drop: window=${Date.now() - gateT0}ms dropped=${dropped.length}` +
+          ` types=[${dropped.map((m) => m.type).join(",")}]`
+      );
+    }
+    this.uiStateRunning = false;
+    if (this.uiStateRerun) {
+      this.uiStateRerun = false;
+      void this.postUiState();
     }
   }
 
@@ -1967,19 +1945,8 @@ const GATE_PASS_TYPES = new Set<string>([
   "banner",
   "queue",
   "compacting",
+  "subagentUpdate",
 ]);
-
-/** 工单24 回放分流：toolStart 幂等检查——工具行已由快照历史绘出（toolCall 消息在截断点
- *  之前的不可变区）则跳过重放，否则会重复建行并覆盖 toolEls 映射，留下永不收尾的僵尸行 */
-function hasToolCallInMsgs(msgs: any[], id: string): boolean {
-  for (const m of msgs) {
-    if (!m || m.role !== "assistant" || !Array.isArray(m.content)) continue;
-    for (const c of m.content) {
-      if (c && c.type === "toolCall" && c.id === id) return true;
-    }
-  }
-  return false;
-}
 
 /** 从消息 content 里抽纯文本（核心与 adapter 共用；adapter 的会话预览读取也用它） */
 export function extractText(content: any): string {

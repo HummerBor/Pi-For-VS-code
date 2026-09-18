@@ -1370,10 +1370,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var liveSyncPending: SessionMessage | null = null;
   var renderTimer: number | null = null;
   function scheduleRender() { if (!renderTimer) renderTimer = setTimeout(flushRender, 0); }
+  // 工单24：重绘期流式事件延后一拍——renderAll 清根重建，若事件先于延后一拍的重绘落地
+  // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
+  // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
+  // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
+  var pendingStream: HostToWebviewTagged[] = [];
+  function deferDuringRender(t: string): boolean {
+    return t === 'delta' || t === 'thinking' || t === 'newLive' || t === 'toolCallStart' ||
+      t === 'toolCallDelta' || t === 'toolStart' || t === 'toolEnd' || t === 'user' ||
+      t === 'queuedAdd' || t === 'queuedDelivered' || t === 'queuedRemove' || t === 'queuedClear';
+  }
+  function drainPendingStream() {
+    if (!pendingStream.length) return;
+    var q = pendingStream; pendingStream = [];
+    for (var i = 0; i < q.length; i++) handleMsg(q[i]);
+  }
   function flushRender() {
     renderTimer = null;
     if (renderPending) { var list = renderPending; renderPending = null; renderAll(list); }
     if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
+    drainPendingStream();
   }
   /** 续接重定基（刀5b，pi 原生姿势——TUI 的 message_update 拿全量在途消息 updateContent）：
    *  快照剥掉在途消息后，用它重建 live 气泡并把 buf/doneLen 对齐到已生成内容，
@@ -1404,6 +1420,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   /** 单条宿主消息的渲染处理（刀5：宿主已不喂后台页签消息，这里只处理活动标签的流） */
   function handleMsg(m: HostToWebviewTagged) {
+    // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
+    if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     else if (m.type === 'delta') appendDelta(m.text, m.ci);

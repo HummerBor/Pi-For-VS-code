@@ -268,10 +268,11 @@ export class PiClient {
     return JSON.parse(JSON.stringify(v));
   }
 
-  /** 工单24 快照期闸门基线：闸门关闭瞬间读消息条数（T0 真相）。uiState 按 baseCount 截断——
-   *  窗口内新增/完成的消息全部由缓冲事件回放重建；截断区内的已完成消息不可变，快照取晚也不失真 */
-  messageCount(): number {
-    return this.session ? this.session.messages.length : 0;
+  /** 工单24：同步消息快照。session.messages 只含已完成消息（在途 assistant 在 message_end
+   *  才入 state，探针 probe-inflight.mjs 实测）——与 piCore 的在途消息深拷贝在**同一个同步块**
+   *  里取，两者合起来才是完整真相（不重不漏）。getMessages 的 async 版本仍供他处使用 */
+  messagesSync(): any[] {
+    return PiClient.snapshot(this.session?.messages ?? []);
   }
 
   getMessages(): Promise<GetMessagesResult> {
