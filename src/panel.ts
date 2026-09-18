@@ -1197,6 +1197,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     const items: (vscode.QuickPickItem & { run?: () => Promise<void> })[] = [];
 
+    // 版本指纹（原底栏 #ver，09-18 用户要求搬进设置）：读运行中宿主的 package.json 版本，
+    // 装/没装对包一眼可辨；静态展示无 run，点选仅关闭菜单
+    items.push({ label: this.L.sVersion + this.version, description: "pi for VS Code" });
+
     // 面板外观：语言/主题（原头部 EN/◐ 按钮的功能收编于此，头部只留监控/历史/新会话/菜单）
     items.push({
       label: this.L.sLang + (this.lang === "zh" ? "中文" : "English"),
