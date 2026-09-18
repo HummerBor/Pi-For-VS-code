@@ -576,6 +576,12 @@ export interface PiMessageStartEvent {
   type: "message_start";
   message?: { role: string };
 }
+/** 消息终结（工单24）：pi 在 finalized 消息入 state 之后才发（agent-session.js:454 注释）——
+ *  此刻起该消息完整且不再变，piCore 用它清在途标记（liveStreaming） */
+export interface PiMessageEndEvent {
+  type: "message_end";
+  message?: { role: string };
+}
 export interface PiMessageUpdateEvent {
   type: "message_update";
   assistantMessageEvent?: AssistantMessageEvent;
@@ -676,6 +682,7 @@ export type PiEvent =
   | PiAgentStartEvent
   | PiMessageStartEvent
   | PiMessageUpdateEvent
+  | PiMessageEndEvent
   | PiToolExecutionStartEvent
   | PiToolExecutionUpdateEvent
   | PiEntryAppendedEvent

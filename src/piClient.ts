@@ -268,6 +268,12 @@ export class PiClient {
     return JSON.parse(JSON.stringify(v));
   }
 
+  /** 工单24 快照期闸门基线：闸门关闭瞬间读消息条数（T0 真相）。uiState 按 baseCount 截断——
+   *  窗口内新增/完成的消息全部由缓冲事件回放重建；截断区内的已完成消息不可变，快照取晚也不失真 */
+  messageCount(): number {
+    return this.session ? this.session.messages.length : 0;
+  }
+
   getMessages(): Promise<GetMessagesResult> {
     return this.ready().then(() => ({ messages: PiClient.snapshot(this.session.messages) }));
   }
