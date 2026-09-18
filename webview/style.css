@@ -204,6 +204,9 @@ details.think summary { cursor: pointer; user-select: none; }
 #stop { display: none; background: var(--vscode-inputValidation-errorBackground, #b91c1c); }
 
 /* ── 底部状态栏 ── */
+/* 版本指纹（原 opacity:.45 常显，09-18 用户要求隐藏）。留着 DOM 钩子：
+   查「装了新包但跑旧资源」类事故时把 display 改回 opacity 即可显形 */
+#bottombar #ver { display: none; }
 #bottombar { display: flex; align-items: center; gap: 10px; padding: 0 12px 6px; font-size: 11px; opacity: .8; }
 #bottombar #usage { margin-left: auto; white-space: nowrap; opacity: .8; }
 #statusline { display: flex; align-items: center; min-height: 16px; padding: 0 14px 2px; font-size: 11px; }

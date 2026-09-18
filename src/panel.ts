@@ -1331,10 +1331,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
     });
 
-    // 版本指纹（原底栏 #ver，09-18 用户要求搬进设置）：读运行中宿主的 package.json 版本，
-    // 装/没装对包一眼可辨。用 Separator 收尾——QuickPick 普通行天然可选中，
-    // 只有 Separator 是纯展示不可点（09-18 用户实测：版本行可点不合理）
-    items.push({ label: this.L.sVersion + this.version + "  ·  pi for VS Code", kind: vscode.QuickPickItemKind.Separator });
     return items;
   }
 
