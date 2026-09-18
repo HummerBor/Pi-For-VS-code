@@ -1233,7 +1233,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var trigger = m[2], q = m[3];
     if (trigger === '/') {
       sgKind = 'slash';
-      if (slashCmds === null) { vscode.postMessage({ type: 'getSlash' }); hideSuggest(); return; }
+      // 每次打开菜单都向宿主要新列表（缓存先渲染，新列表到了再刷新）：包变更自动检测
+      // 挂在宿主的 getSlash 处理里，若只在 slashCmds===null 时请求，getSlash 一辈子只发
+      // 一次，新装/卸载的技能永远进不了菜单（2026-09-18 实测：卸载后 probe 仍显示）
+      vscode.postMessage({ type: 'getSlash' });
+      if (slashCmds === null) { hideSuggest(); return; }
       var ql = q.toLowerCase();
       var list = slashCmds.filter(function(c) { return ((c.label || c.name || '') + ' ' + (c.description || '')).toLowerCase().indexOf(ql) !== -1; });
       var rows = []; var lastGroup = null;
