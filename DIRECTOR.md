@@ -25,7 +25,7 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-18 **签工单27/28/29**（issue 建议二三四：追加提示词设置 + sticky 最后一问 + 工具行长输出收起）。
+> 最后更新：2026-09-18 验收循环：工单24 代码验收通过（执行偏差裁定接受）、25 直令追认、26 实测通过——全记录迁 归档.md 9.17；待施工 27/28/29。
 > 前情：工单24 签发中（P0 切页签丢渲染）；工单23 判死迁归档。0.0.97 已 ship（对账见归档七）。
 
 ## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
@@ -51,126 +51,6 @@
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
-
-## 工单24：P0 切页签丢渲染内容——快照期流式事件被冲且永不重发（宿主侧保序回放修复）
-
-> **症状（用户 2026-09-17 实测报）**：切页签后面板渲染丢内容，切走再切回/看真会话
-> （jsonl）内容完好——丢的是渲染层，不是数据。截图特征：在途 assistant 消息的
-> thinking 块句子截断、正文出现空黑条，截断处正是切页签瞬间正在生成的段落。
-
-### 根因（总监预查已闭环，施工方勿重查，直接按此修）
-
-1. 切页签 → panel.handleTabSwitch 置 activeTabId → 新活动 core 调 postUiState()
-2. **postUiState 是 async**（piCore.ts:387）：`await getMessages()` +
-   `await collectState()` 两跳异步——这就是快照窗口（几十~几百 ms）
-3. 窗口内，该 core 的流式事件**绕过快照直接 this.post**（piCore.ts:1324-1331
-   message_update 分支：delta/thinking/toolCallStart/toolCallDelta），经
-   panel.pipeFromCore（活动页签直通）立即喂到 webview
-4. webview 先画了这些 delta（liveBlock/appendDelta 作用于刚 liveReset 的空现场）；
-   随后 uiState（快照@T1）抵达 → renderAll(快照) + applyLiveSync(live@T1) 把窗口内
-   已画的 delta **全部冲掉**（webview/main.ts:1107-1114 → flushRender）
-5. delta 是增量事件，pi 侧永不重发 → **窗口内生成的内容永久丢失**；jsonl 在 pi 侧
-   完好 → 与症状完全吻合（空黑条 = 窗口内起的 text 块被冲剩空壳）
-
-> **认知沉淀**：工单十八修的是同一竞态的另一面（双画：剥 live 与下发原子化），
-> 但「窗口期事件被快照冲掉且不重发」这面当时没修——双画和丢失是同一竞态的两面，
-> 当时只按用户实测到的那面修。本轮补齐。
-
-### 修法（单点，保序回放）
-
-piCore.ts 加**快照期事件闸门**：postUiState 入口（两跳 await 之前）置缓冲态，
-活动 core 的流式事件改为入队不直发；uiState 发出后解除缓冲、**按原序重放**队列。
-要点：
-- 闸门盖住 webview 消费的全部流式事件类型（newLive/delta/thinking/toolStart/
-  toolCallStart/toolCallDelta/message_update 派生事件/busy/settled 等）——最稳做法
-  是在 core 的 post 出口统一分流（uiState 本身与 notice 等非流式消息不缓冲），
-  别在 1324-1331 逐个 case 打补丁（漏一类就是新事故）
-- 重放保序 = settled 真相重绘自愈语义不变（若窗口内会话恰好结束，重放的 settled
-  在快照之后执行，全量重绘自愈，不会退回旧快照）
-- webviewReady 触发的 postUiState（piCore.ts:443）同闸门覆盖——重建窗口同款竞态
-- 缓冲上限不设也行（窗口内事件量有限），但队列必须是 FIFO 数组，不得去重合并
-  （去重 = 重新发明增量协议，必错）
-
-### 施工与验收
-
-- 先实证再修：回报里贴出窗口期事件被冲的证据（在 postUiState 两跳 await 前后
-  打时间戳日志 + 窗口内捕获到的 delta 事件列表，一处 dbg 日志即可，修完可留）
-- `npm run compile` 全绿；`npm run test:detail` / `test:revert` 全绿
-- 回归红线：工单十八「切页签整段内容×2」不复发（保序回放下快照先画、事件后补，
-  不产生重放）
-- 用户实测（主验收场）：快流式模型（glm-5.3）生成中连切页签≥10 次，来回切、
-  切走再切回，面板内容与 jsonl 对账无缺；空黑条不复发
-- 单笔提交，提交信息写清根因
-
-## 工单25：P1 异步壳行幽灵第二轮——end 收到伪装成最终结果的 running 快照，closed 握手条件失效
-
-> **症状（用户 2026-09-18 面板实测）**：异步派 2 个子 agent，跑完后「已开启」组各留一条永转
-> 「处理中」（1m34s+），与「完成」组同任务双行并存。0.0.118 已含第一轮幽灵修复（5f1d32a
-> subagentEndedCalls 终结账）仍复发——修的条件就不对。
-
-### 根因（总监预查已闭环，施工方勿重查）
-
-1. subagent 扩展 index.ts:909：异步派发的**工具返回值自带** `details: asyncDetails(run)`——
-   形状兼容 SubagentDetails（注释原话“面板 subagentSnapshot() 直接可吃”），任务状态 running
-2. piCore tool_execution_end 的 subagent 分支：closed 分支条件是 `finalSnap == null`——
-   异步返回的 finalSnap **非空**（running 快照）→ 走“正常收尾”分支，post final:true + running
-   任务 → webview 行永不收尾（final 行无删除路径）
-3. 完成组行来自 entry_appended 帧（句柄 sa-n 键），toolCallId 行来自 end 的 running 快照
-   → 同任务双行，与截图完全吻合
-4. 教训：5f1d32a 修的是「end 后无收尾」，真因是「end 时收到的 details 就是 running 的」——
-   对报修现象的归因停在机制第一层，没验证异步返回值载荷形状
-
-### 修法（单点）
-
-piCore tool_execution_end subagent 分支：`finalSnap.tasks` 任一 `status === "running"` →
-判定为异步壳 → 发 `closed: true` 删行（沿用 5f1d32a 协议，webview 已支持）；否则走既有
-final 分支。同步调用 end 时不可能有 running 任务，零回归；subagentEndedCalls 终结账保留。
-
-### 边界（不许顺手改）
-
-- 不动扩展（用户侧安装件，.pi/agents 域）；不动 subagentSnapshot 状态判定口径
-  （stopReason/toolCall 中间态判定是 0.111 事故沉淀，见该文件头注释）
-- 不动概览/下钻渲染；不动队列相关代码（那是工单26）
-
-### 验收
-
-- `npm run compile` + 三个脚本用例全绿
-- 用户实测（主验收）：异步派 2 任务 → 跑完后「已开启」清空、每任务恰一行于「完成」组；
-  同步 subagent 调用快照行照常出现并正常收尾（回归点）
-- 单笔提交
-
-## 工单26：P2 排队回报不可见——“AI 自主感”信息差
-
-> **现象（用户 2026-09-18 实测）**：主会话忙时多个子 agent 回报排队，状态栏“排队 3 条”
-> 但面板无处可见是啥在排；回报触发的新回合起点不可见（用户见“两个思考中间什么都没有，
-> 然后莫名其妙多出第二个思考”）。
-
-### 背景预查（总监已做，施工方从第二步接着查）
-
-- piCore `this.queued` 只记**用户经面板排队**的消息（queuedAdd 两处：直发排队/对账重建）；
-- 扩展 followUp 回报走 **pi 原生队列**，不进 this.queued → queuebar 无它；
-- 状态栏计数来自 pi 原生队列信息 → 计数有、内容无，即信息差本体。
-
-### 施工步骤
-
-1. **先实证**（勿跳过）：主会话忙时手动触发一条 followUp 排队，dbg 日志抓 piClient 侧
-   queue_update/队列事件帧，确认队尾消息文本是否可辨认（含“[子 agent sa-N”前缀即可命中）
-2. 可辨认 → queuebar 对这类排队项渲染专用样式「⮑ 子 agent 回报（排队中）」（i18n 两语同步）
-3. 不可辨认 → 负结论记档入 BUILDER.md，本单降级：仅在回报卡片交付时在其头部补
-   「（由排队回报触发）」标注（i18n 同步），工单随后可结
-
-### 边界与验收
-
-- 不动扩展投递机制（followUp 语义是 0.0.113 实测沉淀）；单笔提交
-- 验收：主会话忙时排队回报在面板有可见踪迹（queuebar 或交付标注二选一，按实证结果）；
-  compile + 用例全绿
-
-### 不许顺手改的边界
-
-- 剥 live 原子性（刀5b/工单十八口径）、stripLive 条件、tabId 丢弃逻辑一个不动
-- 不动 webview/main.ts（修复完全住宿主侧）；若实证后发现必须动 webview，先请示
-- 不动 panel.pipeFromCore 的后台不喂语义；不动 getMessages/collectState 的拉取方式
-- 顺手发现的其他疑似竞态记 BUILDER.md，不混笔
 
 ## 工单27：piChat.appendSystemPrompt——面板设置「追加系统提示词」（issue 建议二，无脑版）
 
@@ -325,6 +205,9 @@ final 分支。同步调用 end 时不可能有 running 任务，零回归；sub
 - ✅活 14 **直令修复留痕硬要求**（三犯升格，09-15）：此后一切用户直令修复，提交同时必须在
   BUILDER.md 留痕（一句改动面+一句验证即可），总监验收时无留痕一律记违规并打回补痕——
   这不是文牍主义，是验收对账的唯一入口
+- ✅活 15 **工单24 执行偏差裁定（T0 基线冻结，接受，09-18）**：修法原文未指明 live 取
+  时刻；T1 取法必双画踩工单十八红线，T0 冻结+基线计数截断使剥离区恰=窗口影响区
+  （不重不漏），FIFO 保序逐字满足。同批追认直令工单25/26（7466f9c，✅活 6）
 
 > 机制：pi 请示写在 BUILDER.md → 总监在此裁决 → pi 以此为准执行并从请示区清除。
 > 标记：✅活 = 仍约束后续施工；✅史 = 已执行完（存 归档.md）。
