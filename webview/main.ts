@@ -356,7 +356,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       root.appendChild(card); followingEnd = true; scroll();
       return;
     }
-    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (stickyQ) { stickyQ.classList.remove('sticky-q'); } stickyQ = b; b.classList.add('sticky-q'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
+    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user');
+    // 工单28 追加（用户直令 2026-09-20）：sticky 默认限两行（面积太大），点击展开/再点折叠；
+    // 迁移时旧 bubble 连 sticky-open 状态一起摘，新 bubble 永远从折叠态起步
+    if (stickyQ) { stickyQ.classList.remove('sticky-q'); stickyQ.classList.remove('sticky-open'); }
+    stickyQ = b; b.classList.add('sticky-q');
+    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
@@ -1148,6 +1153,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'toolStart') {
       finalizeLive();
       var olds = root.querySelectorAll('.prow'); for (var oi = 0; oi < olds.length; oi++) olds[oi].parentNode.removeChild(olds[oi]);
+      // 空占位 bubble 一并移除（2026-09-20 用户实测两案同根因）：纯工具调用回合里 liveEnsure 会
+      // 为每次 toolCallStart 建一个 assistant bubble（liveDiv），toolStart 时 prow 清了但空壳
+      // bubble 留在 root——插在上一工具盒与下一工具行之间，既穿帮（截图空圆角色条）又破坏
+      // 成组的 DOM 相邻判定（表现为「会话结束才合并」——settled 后 renderAll 重建成组）
+      if (liveDiv && !liveDiv.textContent && !liveDiv.querySelector('img')) liveDiv.parentNode.removeChild(liveDiv);
       liveReset(); toolStart(m.id, m.name, m.detail);
     }
     else if (m.type === 'toolCallStart') {
