@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-20 回收裁决：工单27 判回收（用户终审「完全没必要」，pi 原生三入口实证后拆除），拆除工单30 已签；同日验收循环（三）：09-18~09-20 直令施工组代码验收全过待用户实测（0.1.22 装机包）。下一单 28，30 纯拆除小刀可插队。
-> 前情：09-18 验收循环（二）：工单24 终版全结（用户实测「非常完美」），25/26 结单，0.1.15 随行，全记录迁 归档.md 9.17。
+> 最后更新：2026-09-20 验收循环（四）：0.1.22 后直令施工组后半场代码验收全过（工单28/29、压缩三笔、per-tab 化、重试去毁伤、0.1.27~0.1.33 工具组合六连刀，逐笔验证命中见下表）；工单28/29 结单迁归档；0.1.33 双画修复用户实测通过、同名合并方案定稿。下一单 30（拆除 appendSystemPrompt）。
+> 前情：09-20 验收循环（三）：直令施工账（09-18~09-20 前半场）代码验收全过；工单27 判回收，拆除单 30 已签。
 
 ## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
 
@@ -57,7 +57,29 @@
 | 537de78 | **工单27**（已判回收）：piChat.appendSystemPrompt 设置入口——代码验收通过但产品层面被用户终审否决，拆除单工单30 已签，存档见 归档.md「工单27 回收」 | package.json:102-105 声明✓ / piClient.ts:57,100-103 resourceLoaderOptions 透传✓ / piCore.ts:351-352 caps.getConfig 读值✓（验收证据保留，历史不抹） |
 | 120e324 | 攒包小刀：BUILDER.md 头注释纠偏（「不提交进 git」与 94ff28d 入库事实相反） | 一行 docs 独立笔，攒包清单该项销账✓ |
 
-**混笔记档（不返工，既定口径）**：897ce40 fix 提交混入版本号 bump（package.json+lock）；1d0fe28/da3199e 版本号入库随「package 自动 bump」机制，合规。
+### 直令施工账（二）：09-20 后半场（0.1.23~0.1.33，用户同场指挥，验收循环四）——代码验收通过（总监 09-20）
+
+| commit | 内容 | 验证命中 |
+| --- | --- | --- |
+| c48e39c | **工单28**：最后一问 sticky 悬浮（issue 建议三），纯 CSS sticky + addUser class 迁移（0.1.23） | addUser stickyQ 迁移逻辑 + style.css .sticky-q（top:-10px 与 padding 同步，注释留痕）✓；**用户实测三项全过（c8c3a27 留痕）** |
+| 441f69f | 压缩 toast 跨重渲存续：lastNotice 按存档重挂、发新消息即清（0.1.24） | notice 写 lastNotice + renderAll 重挂点✓；**混笔记档**：fix 混版本 bump（不返工） |
+| d6d642b | 压缩完成后定位+高亮折叠块：.compaction 可寻址类 + 居中定位 + 2s 高亮 | main.ts:710 .think.compaction 类✓ |
+| 77849c3 | 压缩浮动条替代自动跳顶（用户拍板交互）：compactBarShownAt 防重弹 + 「查看压缩」定位 | main.ts:682/820-833 条逻辑✓；首渲立基线（恢复旧会话不弹条）✓ |
+| 062cb3c | 改动追踪 per-tab 化：changesFiles/Detail/Dismissed/runStartStatusP/lastStateFile 按 tabId 隔离 | panel.ts:71-77 五字段入 per-tab state✓ |
+| 014e838 | **工单29**扩权四项（用户直令）：完成即收 / 长 OUT 截断全量 / 思考块限高 / 连续同名成组（0.1.27） | toolEnd 完成即收 + ref.full 只持引用首展才落 DOM✓；.think-body max-height 240px（style.css:107）✓；i18n toolTruncated 中英✓ |
+| f900f2c / 91d0e18 / ebc105a | sticky 限两行→0.1.30 pinned/3 行/chip 重设计；空占位 bubble 移除（穿帮+断组同根因） | pinned IO + data-st chip + _fullH 量一次✓；toolStart 空壳移除（零文字无 img 才删）注释留痕✓ |
+| bf28a8b | 0.1.31 跨消息合组根因修（探针实锤：pi 每 toolCall 一条独立 assistant 消息） | probe-toolblocks.mjs 留档✓（方案后经 0.1.32 收敛） |
+| 094fc84 | **0.1.32 定稿**：0.1.30/31「不分名大折叠块」被用户实测否掉，回归 0.1.29 同名连续合并，留跨消息根因修复 | 组容器标识符（toolGroup/tool-grp/crossRun/endToolGroup/makeToolGroupShell）grep 三文件**零残留**✓；lastToolGroup 同名合并 + t-count ×N 在位✓ |
+| 468cd0f | 0.1.33 双画修复：renderAll 旧 think/text 段没删净（0.1.32 多刀 edit 残留，语法合法编译器不报） | makeThink 渲染点 grep=1（1 定义+1 调用）✓；**用户实测通过（fd143fb 留痕，同名合并方案定稿）** |
+| 8b495d8 | 思考块两修：贴底才滚（atBottom 容差 30px）+ finalizeLive 收 thinking 时自折 | 在位（0.1.29）✓ |
+| 11a6a77 | 错误重试去毁伤：修改后重试不再 fork 回退（用户拍板） | 3 文件小刀独立笔✓ |
+
+**决策链记档（工具组合 UI）**：0.1.30/31 大折叠块方案被用户实测否掉（丑/没状态/整复杂了），
+0.1.32 回归同名连续合并为定稿——最终口径以 0.1.32+0.1.33 为准，决策过程留 BUILDER。
+**教训（0.1.33，与 bindViewEvents「合法存在但没人调」同族）**：多刀 edit 改 renderAll 这类
+长 else-if 链，收尾必须渲染点计数对账，compile 查不出逻辑重复。
+
+**混笔记档（不返工，既定口径）**：897ce40/441f69f fix 提交混入版本号 bump（package.json+lock）；1d0fe28/da3199e 版本号入库随「package 自动 bump」机制，合规。
 
 **三期搬迁账（记档）**：0.1.20 装机包实为坏包（壳胶水漏调用），用户实测抓出——「合法存在但没人调」类缺陷第二次入账（bindViewEvents 先例，AGENTS.md 大文件改造条已收），机械搬迁的验收清单必须逐项核对「定义与调用点成对」。
 
@@ -97,72 +119,6 @@
 
 - `npm run compile` 全绿；`grep -ri appendSystemPrompt src/ package.json` **零命中**；单笔提交
 - 行为对账：默认空 = 无操作，拆除后行为与 0.1.21 完全一致（无设置过渡期风险）
-
-## 工单28：P1 最后一问 sticky 悬浮——滚动出视口时钉在面板顶部（issue 建议三）
-
-> **来源**：issue「一些建议 #1」第三条「用户最后一个问题滚动时，要一直能看见，如果滚动出区域，
-> 则悬浮在最上方」。pi 三处查：公开 API 无（agent-session/resource-loader 无 UI 概念）、
-> TUI 无此行为、扩展生态无——壳 UI 职责，自研。标杆：Claude 面板同款交互。
-
-### 选型（总监预查已闭环，施工方勿重查）
-
-- 纯 CSS `position: sticky` 可达：最后一条 user bubble 加 sticky class（top:0 + 不透明背景 +
-  z-index），滚出顶部时浏览器自动钉住，零 JS 滚动监听
-- **只对最后一条 user 消息生效**：新 user 消息到达时把 class 迁移过去；assistant 回复不影响
-  （「最后一个问题」语义 = 最后一条 user 消息，不是最后一条消息）
-- 现有滚动跟随（工单十七 scroll()）不动：sticky 与 scrollIntoView 正交，跟随照常
-
-### 施工步骤
-
-1. webview/main.ts：addUser 渲染路径加「最后一条 user bubble」class 迁移逻辑
-   （新 user 到 → 旧 class 摘除、新 bubble 挂上；renderAll 历史重绘同样只标最后一条）
-2. webview/style.css：sticky 样式（top/背景/z-index，气泡上下留白遮挡处理，避免下方内容透出穿帮）
-3. main.ts 保持 ES5 var 风格、strict:false 零报错（门禁约定）
-
-### 边界（不许顺手改）
-
-- 不动 piCore/protocol（无新跨边界消息）；不动 scroll 跟随语义（工单十七口径）
-- 不动 busy/settled/重绘时序；sticky 只作用于 user bubble，不碰 assistant/tool 行
-- 顺手发现浮层遮挡类问题记 BUILDER.md，不混笔
-
-### 验收
-
-- `npm run compile` 全绿；单笔提交
-- 用户实测（主验收）：长会话滚动，最后一条提问滚过顶部后钉在面板顶端、不透明无穿帮；
-  新提问到达后钉的是新提问；自动滚动跟随行为不变
-
-## 工单29：P2 工具行长输出自动收起——读文件不刷屏，点开看全量（issue 建议四）
-
-> **来源**：issue「一些建议 #1」第四条「读取文件内容太多时，可以收起，只显示部分，用户可以点开」。
-> 现状（总监已实查代码）：历史重绘路径已达标（默认收起 + 80 字摘要，main.ts:993）；
-> **流式 live 路径是缺口**——toolStart 盒子默认展开（main.ts:634），toolEnd 后 OUT 已截
-> 1000 字但盒子保持展开（main.ts:668-675）→ 流式期间读大文件刷屏，即 issue 作者所见之乱。
-
-### 选型（总监预查已闭环，施工方勿重查）
-
-- toolEnd 时 OUT 文本超过阈值（500 字符）→ 盒子自动收起，行上留「已截断，点击展开」提示；
-  点击在 预览（前 1000 字）/ 全量（滚动容器，max-height + overflow:auto）间切换
-- 全量数据零新增成本：piCore 已全量下发 text（piCore.ts:1643-1650 既有链路），
-  webview 侧只是现在只敢显示 1000 字——展开时吐全量即可，protocol/piCore 零改动
-
-### 施工步骤
-
-1. webview/main.ts toolEnd：长 OUT 收起 + 截断提示（i18n 新 key，中英同步，i18n.ts 两处）
-2. 点击展开：tb-val 换全量文本进滚动容器（只对展开态生效，收起态保持 1000 字预览）
-3. 历史重绘（renderAll/toolGroupRun）不动——settled 后本来就地收起+短摘要，已达 issue 要求
-
-### 边界（不许顺手改）
-
-- 不动 piCore/protocol（toolEnd 载荷形状不变）；不动 toolStart 运行中展开语义
-  （运行时显示 IN 参数是既有行为）
-- 不动子 agent 监控卡片、edit/write patch 归档链路
-- main.ts ES5 var 风格、strict:false 零报错
-
-### 验收
-
-- `npm run compile` 全绿；单笔提交
-- 用户实测（主验收）：让模型读一个大文件（>500 字符），流式期间工具行收起不刷屏、
-  有截断提示；点开看全量可滚动；收/展可反复切换；小输出（<500 字符）行为与现在一致
 
 ## 事故修复账（2026-09-15，用户同场指挥下修复，非工单流程）——代码验收通过（总监 09-15）
 
