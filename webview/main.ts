@@ -1154,6 +1154,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }
     else if (m.type === 'tabs') handleTabs(m);
   }
+    // 滚动跟随监听随根走（工单十七）：用户滚动才判定（suppressScroll 跳过程序化拉底）
+    root.addEventListener('scroll', function () {
+      if (suppressScroll) { suppressScroll = false; return; }
+      followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
+    }, { passive: true });
+    bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
       refreshBusy: renderBusyUi, // 白 Working 兑底：切回页签按本页签真相重渲状态行（激活时调）
