@@ -25,8 +25,8 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-18 验收循环（二）：工单24 实测打回后终版全结——止血刀 3d6a448（快照语义按探针实证重写）+ 架构归位 4530c5d（用户直令推翻刀5，✅活 16 追认），用户实测「非常完美」；版本 0.1.15 随行。全记录迁 归档.md 9.17；待施工 27/28/29 不变，下一单 27。
-> 前情：09-18 首轮验收：24 首版代码通过（后被实测证伪，教训入 总监.md 验收方法论 7）、25 直令追认、26 实测通过。0.0.97 已 ship（对账见归档七）。
+> 最后更新：2026-09-20 回收裁决：工单27 判回收（用户终审「完全没必要」，pi 原生三入口实证后拆除），拆除工单30 已签；同日验收循环（三）：09-18~09-20 直令施工组代码验收全过待用户实测（0.1.22 装机包）。下一单 28，30 纯拆除小刀可插队。
+> 前情：09-18 验收循环（二）：工单24 终版全结（用户实测「非常完美」），25/26 结单，0.1.15 随行，全记录迁 归档.md 9.17。
 
 ## 发版前终验（总监 2026-09-16，0.0.93 后 30 commit 全量 review）——✅ 放行 ship
 
@@ -41,6 +41,26 @@
 - **随版内容**：事故修复四笔 + 工单二十/二十一 + 十八/十九回归终版 + README 重写。
   下一版 0.0.96（ship 自动 bump）
 
+## 直令施工账（2026-09-18~09-20，用户同场指挥三期搬迁与事故修复，非工单流程）——代码验收通过（总监 09-20）
+
+> 主验收 = 用户真机实测（0.1.22 装机包，实测点清单见 BUILDER.md 交接 4/5）；实测通过才可全结迁归档。验收证据为 grep+compile+三用例实证（27/34/12 全过，复核于 09-20），非 commit message。
+
+| commit | 内容 | 验证命中 |
+| --- | --- | --- |
+| 93a96ee | 切会话后页签自选模型被顶掉：补回收口 piCore.applyModelMemory，启动恢复/切历史×2/新建/reload 四条链路统一在 switchSession **之后**调用（✅活 14 留痕✓） | piCore.ts:1148 定义 + 388/1192/1229/panel.ts:813/828 调用点成对✓；旧 fire-and-forget 竞态 IIFE 已删✓ |
+| 738ca6e | 二期：#session-area 每页签一棵 .session-view（横幅/消息流/排队/状态行/输入区/页脚全随页签走），切页签=换 display O(1) | main.ts:112 view.className 构造 + index.html:27 原型 + style.css:37 .offview 三处齐✓ |
+| 889452b | 停止键/计时复活（镜像落账）+ 标签栏按工作区分桶（piChat.tabBarByWs 治串项目） | diff 复核：setter 写 ctx 字段统一 + 分桶 key 小写cwdKey✓ |
+| b59ee4c | 双写者事故：busy 中点历史选到**当前会话**，占用守卫漏盖 busy 分支→同 jsonl 开进第二棵页签。修法：活动标签自持有且 busy → 提示 sessionOpenHere 即收 | panel.ts:790-798 守卫分支结构实证✓；i18n 中英✓（52/467） |
+| 897ce40 | 白 Working：busyTicker 闭包写全局镜像 statusEl（漂移写别的页签且无 .busy 类永不清理）。修法：ticker 只写自己视图闭包 statusEl + !streaming 自愈自杀（清自己捕获的 myTimer） | main.ts:278-294 实证：myTimer 自清、注释含事故背景；statusEl 已是工厂闭包局部（119 行，makeSessionView 内）✓ |
+| b872eff | 三期整树搬迁：换镜机制（useTab/assignMirrors/saveMirrors/curTabId/bgMode）整体退役，每页签 makeSessionView 工厂闭包（1802→1685 行），routeMsg 缩三行直达，函数体逐字符机械搬运 | 换镜标识符 grep 零残留（仅存事故背景注释）✓；makeSessionView(110)/viewFor(1180) 齐✓；routeMsg 后台 fillInput 拒收保留✓；死代码 busyLabel/subMonUpdate grep 零残留✓ |
+| abb482a | 0.1.20 全控件死：机械搬运漏掉「建视图即调 bindViewEvents()」+ root 滚动跟随监听——函数定义合法存在但没人调，编译器查不出。修复+调用点注释留痕 | main.ts:1162 bindViewEvents() 调用✓ 135 定义成对✓；root scroll passive 监听随根走✓ |
+| 537de78 | **工单27**（已判回收）：piChat.appendSystemPrompt 设置入口——代码验收通过但产品层面被用户终审否决，拆除单工单30 已签，存档见 归档.md「工单27 回收」 | package.json:102-105 声明✓ / piClient.ts:57,100-103 resourceLoaderOptions 透传✓ / piCore.ts:351-352 caps.getConfig 读值✓（验收证据保留，历史不抹） |
+| 120e324 | 攒包小刀：BUILDER.md 头注释纠偏（「不提交进 git」与 94ff28d 入库事实相反） | 一行 docs 独立笔，攒包清单该项销账✓ |
+
+**混笔记档（不返工，既定口径）**：897ce40 fix 提交混入版本号 bump（package.json+lock）；1d0fe28/da3199e 版本号入库随「package 自动 bump」机制，合规。
+
+**三期搬迁账（记档）**：0.1.20 装机包实为坏包（壳胶水漏调用），用户实测抓出——「合法存在但没人调」类缺陷第二次入账（bindViewEvents 先例，AGENTS.md 大文件改造条已收），机械搬迁的验收清单必须逐项核对「定义与调用点成对」。
+
 ## 施工工单（按序执行）
 
 > ⚠️ **状态标记约定**（用户三次纠偏后钉死）：结单工单**全文迁 归档.md，DIRECTOR.md 零残留**——
@@ -52,49 +72,31 @@
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
 
-## 工单27：piChat.appendSystemPrompt——面板设置「追加系统提示词」（issue 建议二，无脑版）
+## 工单30：回收工单27——拆除 piChat.appendSystemPrompt 设置入口（纯拆除小刀，可插队于 28 前）
 
-> **来源**：issue「一些建议 #1」第二条「可以设置追加系统提示词」，用户拍板做进插件，
-> 口径「默认给丫打开」——**不设 enabled 开关**：设置填了内容即生效，空 = 不追加，
-> 零认知成本。总监已实测 pi 原生 `.pi/APPEND_SYSTEM.md` 在面板自动生效（0918 探针✓），
-> 本单是把同一能力做成 VS Code 设置入口，属于「壳把 pi 原生能力做成无脑桥」，非重复造轮子。
+> **回收依据**：用户 2026-09-20 终审「完全没必要」。总监实证 pi 系统提示词四层结构
+> （system-prompt.js:90 + resource-loader.js:809）：①内置基底 ②APPEND_SYSTEM.md 追加层
+> ③AGENTS.md 项目上下文层 ④SYSTEM.md 整体替换层——用户想加规矩，pi 原生入口一条不缺，
+> 工单27 只是给②加了个体面设置框，认知负担 > 增益，回收。工单27 全文存 归档.md。
 
-### 选型（总监预查已闭环，施工方勿重查）
+### 施工步骤（逐处对应 537de78 反向拆除）
 
-- **注入点**：`sdk.createAgentSessionServices({ resourceLoaderOptions: { appendSystemPrompt: [text] } })`。
-  `DefaultResourceLoaderOptions.appendSystemPrompt?: string[]` 是 pi 公开选项
-  （resource-loader.d.ts:83），与项目/全局 APPEND_SYSTEM.md 文件并列追加，同时生效无冲突
-- **生效时机**：services 建会话时装配；AgentSession 无公开中途重建 API
-  （`_rebuildSystemPrompt` private，勿碰私有字段）→ **改设置后新开页签生效**，
-  进行中会话不动。这是取舍不是缺陷，设置描述里写明即可
-- **取数路径**：piCore 经 `this.caps.getConfig("piChat", "appendSystemPrompt", "")` 读
-  （hostCapabilities 注入，核心不 import vscode，铁律）→ `client.start` 传给 PiClient
-
-### 施工步骤
-
-1. package.json configuration 加 `piChat.appendSystemPrompt`：string、default ""、
-   描述中文（同既有设置风格），写明「追加到 pi 系统提示词，每次对话生效；
-   改动后新开页签生效；与 .pi/APPEND_SYSTEM.md 叠加不冲突」
-2. piClient.start 增参（cwd, extraArgs, proxyUrl, appendSystemPrompt?: string），
-   init() 里非空时给 createAgentSessionServices 传 resourceLoaderOptions；
-   注意 createRuntime 闭包在 cwd 切换重建 services 时也要带上（从 startOpts 取，别只算一次丢闭包外）
-3. piCore 启动链路（client.start 调用处）读 caps.getConfig 透传
-4. i18n：本单纯宿主侧，webview 零改动；无新跨边界消息，protocol 不动
+1. package.json：删 `piChat.appendSystemPrompt` 设置声明（原 102-105 行）
+2. src/piClient.ts：删 start 第 4 参 appendSystemPrompt、startOpts 里对应字段、
+   init() 里 resourceLoaderOptions 注入及工单27 注释
+3. src/piCore.ts：删 ensureClient 里 getConfig 读值与透传（原 351-352 行）
+4. 版本号随 package 自动 bump，不手改
 
 ### 边界（不许顺手改）
 
-- 不动提示词逻辑本身、不碰 AgentSession 私有字段（_systemPromptOverride 等是私有，
-  走公开 resourceLoaderOptions）
-- 不做面板内编辑 UI、不做 /appendSystem 类命令（设置面板是正路，超出即请示）
-- 不动 webview/main.ts；不动既有 start 参数映射语义（sessionMode 那套注释契约）
+- 只拆上列三处；pi 原生 APPEND_SYSTEM.md 发现逻辑本来就没碰过，确认没误伤即可
+- 不动 start 其余参数映射（sessionMode 注释契约）、不碰 webview/protocol/i18n
+- 回报按直令规格在 BUILDER.md 留痕
 
 ### 验收
 
-- `npm run compile` 全绿；单笔提交
-- 总监验：grep 设置声明/透传链三处齐
-- 用户实测（主验收）：设置里填一行探针文字（如「回答第一行必须输出：追加提示词生效✓」）
-  → 新开页签提问，第一行命中；清空设置 → 新页签恢复正常；与 .pi/APPEND_SYSTEM.md
-  同时存在时两条都追加（可选验）
+- `npm run compile` 全绿；`grep -ri appendSystemPrompt src/ package.json` **零命中**；单笔提交
+- 行为对账：默认空 = 无操作，拆除后行为与 0.1.21 完全一致（无设置过渡期风险）
 
 ## 工单28：P1 最后一问 sticky 悬浮——滚动出视口时钉在面板顶部（issue 建议三）
 
@@ -185,9 +187,7 @@
 > 本节暂空：QuickPick 热路径慢观察项已销（2026-09-15 用户确认无复现，账目见 归档.md 七）；
 > renderAll 死循环隐患已吸收进工单十八（P0 越序）。
 >
-> - **BUILDER.md 头注释过时（09-18 验收发现，一行 docs 小刀）**：头写「不提交进 git
->   （与 DIRECTOR.md 同）」，实际两文件均随 94ff28d 入库、1b9ca69 又提交一笔——pi 顺手
->   把头注释改成「随台账入库」。可随任意工单顺带，纯 docs 独立一笔亦可
+> - ~~BUILDER.md 头注释过时~~ **✅ 已销（120e324，2026-09-20）**
 
 ## 排队（未签发，勿提前施工）
 
