@@ -409,12 +409,24 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var fi = 0;
       var myStart = busyStart; // 捕获局部：ticker 触发时全局 busyStart 可能已是别人的
       statusEl.textContent = (compacting ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
-      busyTimer = setInterval(function () {
+      var myTimer: any = setInterval(function () {
         fi = (fi + 1) % frames.length;
         var me = tabCtx[tid]; if (!me) return;
+        // 白 Working 事故（2026-09-20 用户实测）：本 ticker 只写文本不动 class——镜像漂移时
+        // 会把 Working 写进**别的页签**的状态行（无 .busy 类=白字，且那个页签不 busy
+        // 便永远没人清它 → 会话结束后白 Working 永久残留走秒）。修法：只写自己页签的
+        // statusEl（元素引用随 ctx 走，不碰漂移中的全局镜像）；并加自愈——本页签
+        // streaming 已结束时若 timer 未被正常清（busyTimer 随换镜走，可能漏清），自杀停摆。
+        // clearInterval 只清自己的 myTimer（全局 busyTimer 此刻可能已是别人的，碰不得）
+        if (!me.streaming) {
+          clearInterval(myTimer);
+          if (me.busyTimer === myTimer) me.busyTimer = null;
+          return;
+        }
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = (me.compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (me.queueN > 0 ? L.queuedCount.replace('{n}', me.queueN) : ''));
+        me.statusEl.textContent = (me.compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (me.queueN > 0 ? L.queuedCount.replace('{n}', me.queueN) : ''));
       }, 120);
+      busyTimer = myTimer;
     } else {
       statusEl.classList.remove('busy');
       statusEl.textContent = '';
@@ -1690,6 +1702,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (tabsList[ti].id === tid) { sessionEl.textContent = L.sessionLabel + tabsList[ti].title; break; }
     }
     renderCodeChip(); // codeCtx 是页面级数据，新视图的 chip 可能还是原型态
+    // 残留清扫（白 Working 事故兑底）：后台期间别的页签 ticker 漂移写进本视图的
+    // 状态行（白字，无人清），切回来按本页签真相重渲一次，不残留别页签的 Working
+    renderBusyUi();
     // 后台视图期间内容在长而滚不动（display:none 无布局），跟随标志为真则切回后补拉底
     if (followingEnd) { suppressScroll = true; root.scrollTop = root.scrollHeight; }
     applyTabSubState(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
