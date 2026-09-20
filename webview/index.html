@@ -19,41 +19,49 @@
     </div>
   </div>
   <div id="tabbar"></div>
-  <div id="banner" style="display:none"></div>
-  <div id="changesbar" style="display:none"></div>
-  <div id="messages">
-    <div id="welcome">
-      <img class="w-duck" src="{{duckUri}}" width="96" height="96">
-      <div class="w-title">{{t:welcomeTitle}}</div>
-      <div class="w-tip"></div>
-      <div class="w-sub">{{t:welcomeSub}}</div>
+  <!-- 工单24 架构归位二期（用户定调「下面整个一坨是一个 DOM」）：下区整体是会话域——
+       横幅/变更条/消息流/排队条/状态行/输入区/页脚全部随页签走。此处的 .session-view
+       是原型，JS 启动时按页签克隆整棵，后台页签的每个控件都在自己的隐藏视图里活渲染，
+       切页签=换可见性，零重渲零重拉 -->
+  <div id="session-area">
+    <div class="session-view" data-tab="t1">
+      <div id="banner" style="display:none"></div>
+      <div id="changesbar" style="display:none"></div>
+      <div class="msg-root">
+        <div id="welcome">
+          <img class="w-duck" src="{{duckUri}}" width="96" height="96">
+          <div class="w-title">{{t:welcomeTitle}}</div>
+          <div class="w-tip"></div>
+          <div class="w-sub">{{t:welcomeSub}}</div>
+        </div>
+      </div>
+      <div id="queuebar"></div>
+      <div id="statusline"><span id="status"></span></div>
+      <div id="composer">
+        <div id="suggest"></div>
+        <div id="plusmenu">
+          <div class="pm-item" id="pm-upload"></div>
+          <div class="pm-item" id="pm-at"></div>
+        </div>
+        <input type="file" id="file" multiple style="display:none">
+        <div id="attachbar"></div>
+        <textarea id="input" placeholder="{{t:inputPlaceholder}}"></textarea>
+        <div id="ctoolbar">
+          <span id="attach" class="tb-btn" title="{{t:attachTitle}}"></span>
+          <span id="codechip" style="display:none"></span>
+          <span class="tb-spacer"></span>
+          <button id="stop" title="{{t:stopTitle}}"></button>
+          <button id="send" title="{{t:sendTitle}}"></button>
+        </div>
+      </div>
+      <div id="bottombar">
+        <span id="model" class="tb-btn" title="{{t:modelTitle}}">—</span>
+        <span id="think" class="tb-btn" title="{{t:thinkTitle}}">{{t:thinkLabel}}—</span>
+        <span id="modebadge" class="tb-btn" title="{{t:modeBadgeTitle}}"></span>
+        <span id="usage"></span>
+        <span id="ver">v{{version}}</span>
+      </div>
     </div>
-  </div>
-  <div id="queuebar"></div>
-  <div id="statusline"><span id="status"></span></div>
-  <div id="composer">
-    <div id="suggest"></div>
-    <div id="plusmenu">
-      <div class="pm-item" id="pm-upload"></div>
-      <div class="pm-item" id="pm-at"></div>
-    </div>
-    <input type="file" id="file" multiple style="display:none">
-    <div id="attachbar"></div>
-    <textarea id="input" placeholder="{{t:inputPlaceholder}}"></textarea>
-    <div id="ctoolbar">
-      <span id="attach" class="tb-btn" title="{{t:attachTitle}}"></span>
-      <span id="codechip" style="display:none"></span>
-      <span class="tb-spacer"></span>
-      <button id="stop" title="{{t:stopTitle}}"></button>
-      <button id="send" title="{{t:sendTitle}}"></button>
-    </div>
-  </div>
-  <div id="bottombar">
-    <span id="model" class="tb-btn" title="{{t:modelTitle}}">—</span>
-    <span id="think" class="tb-btn" title="{{t:thinkTitle}}">{{t:thinkLabel}}—</span>
-    <span id="modebadge" class="tb-btn" title="{{t:modeBadgeTitle}}"></span>
-    <span id="usage"></span>
-    <span id="ver">v{{version}}</span>
   </div>
   <script nonce="{{nonce}}">{{js}}</script>
 </body>

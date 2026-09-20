@@ -29,9 +29,12 @@ body > :not(#bg-layer):not(.subdock) { position: relative; z-index: 1; }
 .hdr-btn:hover { opacity: 1; text-decoration: underline; }
 
 /* ── 消息区 ── */
-/* 工单十五刀2：#messages 退化为纯容器（换标签时整棵 DOM 树换入换出），
- * 滚动职责移交给每标签的 .msg-root——滚动位置天然按标签保留 */
-#messages { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* 工单24 架构归位二期（用户定调「下区整块是一个 DOM」）：#session-area 每页签一个
+ * .session-view（横幅/变更条/消息流/排队条/状态行/输入区/页脚整棵），后台整块隐藏但活渲染，
+ * 切页签=换可见性 O(1)；.msg-root 仍是消息滚动根，滚动位置天然按页签保留 */
+#session-area { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.session-view { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.session-view.offview { display: none; }
 .msg-root { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 10px 4px; }
 /* 工单24 架构归位：每页签一棵 root 常驻 #messages，非活动页签隐藏（切页签=换可见性 O(1)，现场保留） */
 .msg-root.offroot { display: none; }

@@ -28,63 +28,105 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // ── 工单24 架构归位（用户直令 2026-09-18 推翻刀5「切回即重拉」）：每页签一棵 DOM ──
   // 刀5 的「单一 root + 切回 postUiState 重拉」在流式场景是竞态温床：刀5 丢现场 → 工单十八
   // ×2 → 工单24 丢内容，同一坑摔四次；且每次切换=整会话深拷贝+整棵重绘，长会话切一次卡几百毫秒。
-  // 回归每页签一棵 DOM（吸收两代教训）：
-  //  • 所有 root 常驻 #messages，非活动页签 .offroot(display:none)——切换=换可见性 O(1)，
-  //    零重拉零重建；后台页签的流式事件继续写进自己的隐藏树（现场累加，切回即现）
-  //  • 页面级控件（状态栏/queuebar/横幅/页脚）全局一份，数据按页签记账（TabCtx），
-  //    只为活动页签渲染；后台只记账不碰控件（bgMode 守卫）
-  //  • 下面这组全局变量是「当前换镜」：useTab 保存/恢复，后台处理完立即换回活动页签
+  // 回归每页签一棵 DOM，二期（用户定调「下区整块是一个 DOM」）：整个下区（横幅/变更条/
+  // 消息流/排队条/状态行/输入区/页脚）每页签一整棵 .session-view，后台页签整块隐藏但
+  // **每个控件都活渲染**（模型切换/排队变化/横幅开合全在自己的隐藏视图里实时发生），
+  // 切页签=换可见性，零重渲零重拉。下面这组全局变量是「当前换镜」：useTab 保存/恢复
   var toolEls = {}; var queuedItems = [];
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
   var lastElapsed: number | null = null;
   var modeText = 'Auto';
-  var pendingImages: any[] = []; var pendingFiles: any[] = []; // 编辑框附件：页签共享（刀2 起已知取舍，维持不变）
+  var pendingImages: any[] = []; var pendingFiles: any[] = [];
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
   var activeTabId: string | null = null;
   var tabsList: TabInfo[] = [];
   var tabbarEl = document.getElementById('tabbar') as HTMLElement;
-  var messages = document.getElementById('messages') as HTMLElement;
-  // 当前换镜的渲染根（useTab 维护；占位节点立即被首个 useTab 替换）
+  // 下区原型：启动时按页签克隆（元素 ID 在各视图内重复，查询一律 scope 到视图）
+  var sessionArea = document.getElementById('session-area') as HTMLElement;
+  var protoView = sessionArea.querySelector('.session-view') as HTMLElement;
+  var protoHTML = protoView.outerHTML;
+  sessionArea.innerHTML = '';
+  // 当前换镜的渲染根与下区控件（useTab 维护）
   var root: HTMLElement = document.createElement('div');
   root.className = 'msg-root';
-  /** 页签渲染上下文：root + 流式状态 + 页面控件记账。全局变量组是它的「换镜」 */
+  /** 页签上下文：整个下区视图 + 控件元素引用 + 流式/页面状态。全局变量组是它的「换镜」 */
   interface TabCtx {
-    id: string; root: HTMLElement; built: boolean;
+    id: string; view: HTMLElement; root: HTMLElement; built: boolean;
+    input: HTMLTextAreaElement; stopBtn: HTMLElement; sendBtn: HTMLElement; statusEl: HTMLElement;
+    modeBadge: HTMLElement; codechipEl: HTMLElement; modelEl: HTMLElement; thinkEl: HTMLElement;
+    usageEl: HTMLElement; attachbarEl: HTMLElement; attachEl: HTMLElement; fileInput: HTMLInputElement;
+    suggestEl: HTMLElement; plusmenuEl: HTMLElement; pmUpload: HTMLElement; pmAt: HTMLElement;
+    bannerEl: HTMLElement; changesBarEl: HTMLElement; queuebarEl: HTMLElement;
     toolEls: any; liveMsg: any; liveDiv: any; pdet: any; liveParts: any; liveRTimer: number | null;
     followingEnd: boolean; queuedItems: any[]; queueN: number; nativeQueuePills: any[];
-    streaming: boolean; busyStart: number; lastElapsed: number | null;
-    compacting: boolean; modeText: string; banner: BannerPayload | null; foot: any;
+    pendingImages: any[]; pendingFiles: any[];
+    streaming: boolean; busyTimer: any; busyStart: number; lastElapsed: number | null;
+    compacting: boolean; modeText: string; banner: BannerPayload | null;
     renderPending: any[] | null; liveSyncPending: any;
   }
   var tabCtx: Record<string, TabCtx> = {};
   var curTabId: string | null = null;
-  var bgMode = false; // 后台页签处理中：只记账，页面控件不渲染（各控件函数自查）
-  function makeRoot(id: string): HTMLElement {
-    var r = document.createElement('div');
-    r.className = 'msg-root' + (id === activeTabId ? '' : ' offroot');
+  var bgMode = false; // 后台页签处理中（换镜临时态；控件都活渲染进隐藏视图，守卫仅余焦点类）
+  var input: HTMLTextAreaElement; var stopBtn: HTMLElement; var sendBtn: HTMLElement;
+  var statusEl: HTMLElement; var modeBadge: HTMLElement; var codechipEl: HTMLElement;
+  var modelEl: HTMLElement; var thinkEl: HTMLElement; var usageEl: HTMLElement;
+  var attachbarEl: HTMLElement; var attachEl: HTMLElement; var fileInput: HTMLInputElement;
+  var suggestEl: HTMLElement; var plusmenuEl: HTMLElement; var pmUpload: HTMLElement; var pmAt: HTMLElement;
+  var bannerEl: HTMLElement; var changesBarEl: HTMLElement; var queuebarEl: HTMLElement;
+  function makeView(id: string): TabCtx {
+    var view = document.createElement('div');
+    view.className = 'session-view' + (id === activeTabId ? '' : ' offview');
+    view.innerHTML = protoHTML;
+    sessionArea.appendChild(view);
+    var q = function (sel: string) { return view.querySelector(sel) as HTMLElement; };
+    var r = q('.msg-root');
     // 滚动跟随（工单十七）监听随根走；只有可见根会发 scroll 事件，写全局镜像即正确
     r.addEventListener('scroll', function () {
       if (suppressScroll) { suppressScroll = false; return; }
       followingEnd = r.scrollHeight - r.scrollTop - r.clientHeight <= 48;
     }, { passive: true });
-    messages.appendChild(r);
-    return r;
-  }
-  function getCtx(id: string): TabCtx {
-    var c = tabCtx[id];
-    if (!c) {
-      c = { id: id, root: makeRoot(id), built: false, toolEls: {}, liveMsg: null, liveDiv: null, pdet: null,
-        liveParts: null, liveRTimer: null, followingEnd: true, queuedItems: [], queueN: 0, nativeQueuePills: [],
-        streaming: false, busyStart: 0, lastElapsed: null, compacting: false, modeText: 'Auto', banner: null,
-        foot: null, renderPending: null, liveSyncPending: null };
-      tabCtx[id] = c;
-    }
+    var c = { id: id, view: view, root: r, built: false,
+      input: q('#input') as HTMLTextAreaElement, stopBtn: q('#stop'), sendBtn: q('#send'),
+      statusEl: q('#status'), modeBadge: q('#modebadge'), codechipEl: q('#codechip'),
+      modelEl: q('#model'), thinkEl: q('#think'), usageEl: q('#usage'),
+      attachbarEl: q('#attachbar'), attachEl: q('#attach'), fileInput: q('#file') as HTMLInputElement,
+      suggestEl: q('#suggest'), plusmenuEl: q('#plusmenu'), pmUpload: q('#pm-upload'), pmAt: q('#pm-at'),
+      bannerEl: q('#banner'), changesBarEl: q('#changesbar'), queuebarEl: q('#queuebar'),
+      toolEls: {}, liveMsg: null, liveDiv: null, pdet: null, liveParts: null, liveRTimer: null,
+      followingEnd: true, queuedItems: [], queueN: 0, nativeQueuePills: [],
+      pendingImages: [], pendingFiles: [],
+      streaming: false, busyTimer: null, busyStart: 0, lastElapsed: null,
+      compacting: false, modeText: 'Auto', banner: null,
+      renderPending: null, liveSyncPending: null };
+    tabCtx[id] = c;
+    assignMirrors(c);
+    bindViewEvents();
     return c;
   }
-  /** 换镜：全局变量组 ↔ 页签账本。同步小块内用，出来前必须换回（路由器负责）。
-   *  followingEnd/suppressScroll 是滚动跟随镜像（监听只属可见根，写全局即正确） */
+  function getCtx(id: string): TabCtx {
+    return tabCtx[id] || makeView(id);
+  }
+  /** 镜像指向指定页签（makeView 与 useTab 共用，保证建视图时控件引用已就位） */
+  function assignMirrors(c: TabCtx) {
+    toolEls = c.toolEls; liveMsg = c.liveMsg; liveDiv = c.liveDiv; pdet = c.pdet;
+    liveParts = c.liveParts; liveRTimer = c.liveRTimer; followingEnd = c.followingEnd;
+    queuedItems = c.queuedItems; queueN = c.queueN; nativeQueuePills = c.nativeQueuePills;
+    pendingImages = c.pendingImages; pendingFiles = c.pendingFiles;
+    streaming = c.streaming; busyTimer = c.busyTimer; busyStart = c.busyStart; lastElapsed = c.lastElapsed;
+    compacting = c.compacting; modeText = c.modeText; banner = c.banner;
+    renderPending = c.renderPending; liveSyncPending = c.liveSyncPending;
+    root = c.root;
+    input = c.input; stopBtn = c.stopBtn; sendBtn = c.sendBtn; statusEl = c.statusEl;
+    modeBadge = c.modeBadge; codechipEl = c.codechipEl; modelEl = c.modelEl; thinkEl = c.thinkEl;
+    usageEl = c.usageEl; attachbarEl = c.attachbarEl; attachEl = c.attachEl; fileInput = c.fileInput;
+    suggestEl = c.suggestEl; plusmenuEl = c.plusmenuEl; pmUpload = c.pmUpload; pmAt = c.pmAt;
+    bannerEl = c.bannerEl; changesBarEl = c.changesBarEl; queuebarEl = c.queuebarEl;
+    curTabId = c.id;
+  }
+  /** 换镜：全局变量组（含下区控件元素引用）↔ 页签上下文。同步小块内用，
+   *  出来前必须换回（路由器负责）。followingEnd/suppressScroll 是滚动跟随镜像 */
   function useTab(tid: string) {
     if (curTabId === tid) return;
     var from = curTabId !== null ? tabCtx[curTabId] : null;
@@ -92,45 +134,47 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       from.toolEls = toolEls; from.liveMsg = liveMsg; from.liveDiv = liveDiv; from.pdet = pdet;
       from.liveParts = liveParts; from.liveRTimer = liveRTimer; from.followingEnd = followingEnd;
       from.queuedItems = queuedItems; from.queueN = queueN; from.nativeQueuePills = nativeQueuePills;
-      from.streaming = streaming; from.busyStart = busyStart; from.lastElapsed = lastElapsed;
+      from.pendingImages = pendingImages; from.pendingFiles = pendingFiles;
+      from.streaming = streaming; from.busyTimer = busyTimer; from.busyStart = busyStart; from.lastElapsed = lastElapsed;
       from.compacting = compacting; from.modeText = modeText; from.banner = banner;
       from.renderPending = renderPending; from.liveSyncPending = liveSyncPending;
     }
     var c = getCtx(tid);
-    toolEls = c.toolEls; liveMsg = c.liveMsg; liveDiv = c.liveDiv; pdet = c.pdet;
-    liveParts = c.liveParts; liveRTimer = c.liveRTimer; followingEnd = c.followingEnd;
-    queuedItems = c.queuedItems; queueN = c.queueN; nativeQueuePills = c.nativeQueuePills;
-    streaming = c.streaming; busyStart = c.busyStart; lastElapsed = c.lastElapsed;
-    compacting = c.compacting; modeText = c.modeText; banner = c.banner;
-    renderPending = c.renderPending; liveSyncPending = c.liveSyncPending;
-    root = c.root;
-    curTabId = tid;
+    assignMirrors(c);
   }
-  var input = document.getElementById('input') as HTMLTextAreaElement;
-  var stopBtn = document.getElementById('stop') as HTMLButtonElement;
-  var sendBtn = document.getElementById('send') as HTMLButtonElement;
-  var statusEl = document.getElementById('status') as HTMLElement;
-  var modeBadge = document.getElementById('modebadge') as HTMLElement;
-  // 语言/主题入口已收进 ⚙ 设置菜单（头部按钮移除，功能在 panel.buildSettingsItems）
-  var codechipEl = document.getElementById('codechip') as HTMLElement;
-  var codeCtx = null; var codeOn = true;
-  var modelEl = document.getElementById('model') as HTMLElement;
-  var thinkEl = document.getElementById('think') as HTMLElement;
-  var sessionEl = document.getElementById('session') as HTMLElement;
-  var moreEl = document.getElementById('more') as HTMLElement;
-  var subindEl = document.getElementById('subind') as HTMLElement;
-  var usageEl = document.getElementById('usage') as HTMLElement;
-  var newChatEl = document.getElementById('newchat') as HTMLElement;
-  var attachbarEl = document.getElementById('attachbar') as HTMLElement;
-  var attachEl = document.getElementById('attach') as HTMLElement;
-  var fileInput = document.getElementById('file') as HTMLInputElement;
-  var suggestEl = document.getElementById('suggest') as HTMLElement;
-  var plusmenuEl = document.getElementById('plusmenu') as HTMLElement;
-  var pmUpload = document.getElementById('pm-upload') as HTMLElement;
-  var pmAt = document.getElementById('pm-at') as HTMLElement;
-  var historyEl = document.getElementById('history') as HTMLElement;
-  var bannerEl = document.getElementById('banner') as HTMLElement;
-  var changesBarEl = document.getElementById('changesbar') as HTMLElement;
+  /** 每视图绑定事件 + 注入图标（克隆树不带监听；交互只发生在可见视图，
+   *  闭包里读全局镜像即正确——镜像在该视图可见时恒指向它） */
+  function bindViewEvents() {
+    attachEl.innerHTML = ico('image');
+    pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';
+    pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';
+    modelEl.innerHTML = ico('cpu') + ' —';
+    stopBtn.innerHTML = ico('stop', 11);
+    sendBtn.innerHTML = ico('up', 14);
+    // ── ＋菜单：上传图片 / 引用文件 ──
+    attachEl.addEventListener('click', function (e) {
+      e.stopPropagation();
+      plusmenuEl.style.display = plusmenuEl.style.display === 'block' ? 'none' : 'block';
+    });
+    pmUpload.addEventListener('click', function () { plusmenuEl.style.display = 'none'; fileInput.click(); });
+    pmAt.addEventListener('click', function () {
+      plusmenuEl.style.display = 'none';
+      var v = input.value.replace(/[\s/@]+$/, ''); // 去掉尾部残留的斜杠/@/空格（斜杠菜单触发符、重复点击）
+      input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）
+      input.focus(); updateSuggest();
+    });
+    sendBtn.addEventListener('click', send);
+    stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });
+    fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
+    modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });
+    thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });
+    modeBadge.addEventListener('click', function () { vscode.postMessage({ type: 'pickMode' }); });
+    codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChip(); });
+    input.addEventListener('input', function () { updateSuggest(); autoSize(); });
+    input.addEventListener('keydown', inputKeydown);
+    input.addEventListener('paste', inputPaste);
+    renderCodeChip();
+  }
 
   // ── 统一 SVG 图标集（16 网格描边风，currentColor 跟随主题）──
   var ICON_PATHS = {
@@ -202,9 +246,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
   }
   // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）
-  messages.addEventListener('click', function (e) {
+  // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）；
+  // 工单24 二期：委托到 #session-area（消息流在各页签视图内，都是它的子孙）
+  sessionArea.addEventListener('click', function (e) {
     var t = e.target as HTMLElement | null;
-    while (t && t !== messages) {
+    while (t && t !== sessionArea) {
       if (t.classList && t.classList.contains('fp')) {
         e.stopPropagation(); vscode.postMessage({ type: 'openPath', path: t.getAttribute('data-p') });
         return;
@@ -213,43 +259,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
   }, true);
 
-  // ── 头部/工具条图标注入（统一 SVG）──
+  // ── 头部/工具条图标注入（统一 SVG）── 头部是页面级（不随页签克隆）
+  var sessionEl = document.getElementById('session') as HTMLElement;
+  var moreEl = document.getElementById('more') as HTMLElement;
+  var subindEl = document.getElementById('subind') as HTMLElement;
+  var newChatEl = document.getElementById('newchat') as HTMLElement;
+  var historyEl = document.getElementById('history') as HTMLElement;
+  var codeCtx = null; var codeOn = true;
   historyEl.innerHTML = ico('clock');
   newChatEl.innerHTML = ico('plus');
   moreEl.innerHTML = ico('gear');
-  subindEl.innerHTML = ico('cpu', 15); // 芯片图标 = 子 agent 锚点（⏳/✓/断弧圆环被用户评'意义不明'，09-18）
-  attachEl.innerHTML = ico('image');
-  pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';
-  pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';
-  modelEl.innerHTML = ico('cpu') + ' —';
-  stopBtn.innerHTML = ico('stop', 11);
-  sendBtn.innerHTML = ico('up', 14);
+  subindEl.innerHTML = ico('cpu', 15); // 芯片图标 = 子 agent 锚点
 
-  // ── ＋菜单：上传图片 / 引用文件 ──
-  attachEl.addEventListener('click', function (e) {
-    e.stopPropagation();
-    plusmenuEl.style.display = plusmenuEl.style.display === 'block' ? 'none' : 'block';
-  });
-  pmUpload.addEventListener('click', function () { plusmenuEl.style.display = 'none'; fileInput.click(); });
-  pmAt.addEventListener('click', function () {
-    plusmenuEl.style.display = 'none';
-    var v = input.value.replace(/[\s/@]+$/, ''); // 去掉尾部残留的斜杠/@/空格（斜杠菜单触发符、重复点击）
-    input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）
-    input.focus(); updateSuggest();
-  });
   document.addEventListener('click', function (e) { var tgt = e.target as Node; if (!plusmenuEl.contains(tgt) && tgt !== attachEl) plusmenuEl.style.display = 'none'; });
-
   // ── 历史会话：点 ⏱ 直接打开原生会话菜单（QuickPick）──
   historyEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
-  // ── 欢迎页：存快照 + 随机小贴士（新建会话时重新出现，每次换一条）──
-  var welcomeEl = document.getElementById('welcome');
+  // ── 欢迎页：从原型取快照 + 随机小贴士（新建会话时重新出现，每次换一条）──
+  var welcomeEl = protoView.querySelector('#welcome');
   var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';
   var TIPS = L.tips;
   function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }
   pickTip(welcomeEl);
-  // 工单十五刀5：静态欢迎页下岗（快照已存），此后一切渲染进各页签自己的 root
-  // （root 随 makeRoot 建页签时创建并挂入 #messages，这里不再预挂单根）
-  messages.innerHTML = '';
   var sgList = []; var sgSel = 0; var sgKind = null;
   // '/' 菜单打开状态：仅在打开瞬间向宿主要一次新列表。updateSuggest 在 slashList
   // 到达时会再次执行，若每次都发 getSlash 就是乒乓死循环（列表不停重渲染把选中项
@@ -307,17 +337,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 仅跟随时拉底：用户上滑读历史（followingEnd=false）后，流式 tick/notice 等所有调用点不再拽人
   function scroll() {
     if (!followingEnd) return;
-    if (bgMode) { root.scrollTop = root.scrollHeight; return; } // 隐藏根无 scroll 事件，无需压制标志
+    // 后台视图 display:none 无布局，scrollTop 写不进去——切回时由 activateTab 按跟随标志补拉底
+    if (bgMode) return;
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
-  function renderStatus() { if (bgMode) return; modeBadge.textContent = modeText; }
+  function renderStatus() { modeBadge.textContent = modeText; }
 
   /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
    *  关闭/一键压缩都上报宿主，横幅状态机在 piCore（webview 重建不丢状态） */
   function renderBanner(b: BannerPayload | null) {
-    if (bgMode) return; // 后台页签：横幅已入账（banner 全局镜像随换镜保存），切换时按账本重渲
+    // 工单24 二期：横幅随页签视图走，后台直接渲进隐藏视图（切回即现，无需账本重渲）
     if (!b) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; return; }
     bannerEl.innerHTML = '';
     var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = b.text;
@@ -362,32 +393,35 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 手动压缩的空闲会话本就没有 Working）
   function busyLabel(base) { return compacting ? '⏳ ' + L.compacting : base; }
   /** 状态栏 DOM 重渲（工单24 架构归位）：setBusy 的控件部分抽出，页签切换时按账本重建用 */
+  /** 状态栏 DOM 重渲（工单24 架构归位二期）：闭包必须捕**自己页签的上下文字段**——
+   *  后台页签的计时器在镜像已指向别处时触发，读写全局镜像会写错别人的状态栏 */
   function renderBusyUi() {
-    stopBtn.style.display = streaming ? 'inline-flex' : 'none';
-    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    if (streaming) {
-      statusEl.classList.add('busy');
+    var my = tabCtx[curTabId]; if (!my) return;
+    my.stopBtn.style.display = my.streaming ? 'inline-flex' : 'none';
+    if (my.busyTimer) { clearInterval(my.busyTimer); my.busyTimer = null; }
+    if (my.streaming) {
+      my.statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
-      statusEl.textContent = busyLabel(frames[0] + ' Working… 0s');
-      busyTimer = setInterval(function () {
+      my.statusEl.textContent = (my.compacting ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
+      my.busyTimer = setInterval(function () {
         fi = (fi + 1) % frames.length;
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = busyLabel(frames[fi] + ' Working… ' + fmtDur(Date.now() - busyStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : ''));
+        my.statusEl.textContent = (my.compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - my.busyStart) + (my.queueN > 0 ? L.queuedCount.replace('{n}', my.queueN) : ''));
       }, 120);
     } else {
-      statusEl.classList.remove('busy');
-      statusEl.textContent = '';
-      if (compacting) {
+      my.statusEl.classList.remove('busy');
+      my.statusEl.textContent = '';
+      if (my.compacting) {
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
-        statusEl.classList.add('busy');
-        statusEl.textContent = '⏳ ' + L.compacting;
+        my.statusEl.classList.add('busy');
+        my.statusEl.textContent = '⏳ ' + L.compacting;
       } else
       // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
       // 同时入记录，切走再切回来能恢复 ⏱ 现场
-      if (lastElapsed != null) {
-        statusEl.textContent = '⏱ ' + fmtDur(lastElapsed);
-        statusEl.title = L.turnDuration;
+      if (my.lastElapsed != null) {
+        my.statusEl.textContent = '⏱ ' + fmtDur(my.lastElapsed);
+        my.statusEl.title = L.turnDuration;
       }
     }
   }
@@ -403,21 +437,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       lastElapsed = elapsedMs;
     }
     if (!v) { finalizeLive(); liveReset(); }
-    if (bgMode) return; // 后台：只记账（账本随换镜保存），页面控件不动
-    renderBusyUi();
-  }
-  /** queuebar 按当前账本重建（页签切换时用；uiState 分支的同款逻辑收口到此） */
-  function renderQueuedBar() {
-    document.getElementById('queuebar').innerHTML = '';
-    for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
-    renderNativeQueue();
+    renderBusyUi(); // 状态行随页签视图走，后台渲进隐藏视图（busyTimer 随换镜走）
   }
   /** 压缩窗口开合（宿主 CompactingMsg）：true 直接接管状态栏——手动压缩是空闲会话里的
    *  RPC 调用，全程无 agent 事件，没有这条压缩期间零反馈。false 时不主动清：streaming 时
    *  busyTimer 会按新 flag 重写 Working，空闲时由后续 status/settled 流程收尾 */
   function setCompacting(v) {
     compacting = v;
-    if (bgMode) return; // 后台：只记账
     if (v) {
       statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
       statusEl.textContent = '⏳ ' + L.compacting;
@@ -515,9 +541,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       root.appendChild(card); followingEnd = true; scroll();
       return;
     }
-    var w = document.getElementById('welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
+    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
-    if (bgMode) return; // 后台页签：排队数据已入账（queuedItems 随换镜保存），queuebar 只属活动页签
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
     var qi = el('span', 'q-ico'); qi.innerHTML = ico('clock', 12); b.appendChild(qi);
@@ -533,7 +558,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rb.addEventListener('click', function (ev) { ev.stopPropagation(); vscode.postMessage({ type: 'queuedRetrieve', qid: q.qid }); });
     b.appendChild(rb);
     // 排队项固定在输入框上方的 queuebar，单行紧凑显示，不参与消息流
-    document.getElementById('queuebar').appendChild(b);
+    queuebarEl.appendChild(b);
   }
   function addQueued(q) {
     queuedItems.push(q);
@@ -548,8 +573,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 下一次 queue_update 重建——切页签后 pill 可能短暂消失，计数仍在
   var nativeQueuePills = [];
   function renderNativeQueue() {
-    if (bgMode) return; // 后台页签：pill 数据已入账，queuebar 只属活动页签
-    var qb = document.getElementById('queuebar');
+    var qb = queuebarEl;
     var olds = qb.querySelectorAll('.q-item[data-native="1"]');
     for (var i = 0; i < olds.length; i++) olds[i].parentNode.removeChild(olds[i]);
     for (var j = 0; j < nativeQueuePills.length; j++) {
@@ -562,8 +586,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function removeQueued(qid) {
     queuedItems = queuedItems.filter(function(x) { return x.qid !== qid; });
-    if (bgMode) return; // 后台：数据已剔除，queuebar 不动
-    var els = document.getElementById('queuebar').querySelectorAll('[data-qid="' + qid + '"]');
+    var els = queuebarEl.querySelectorAll('[data-qid="' + qid + '"]');
     for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);
   }
   // 增量渲染（照 pi TUI 的思路：只往已有节点追加，不整气泡重绘；文本块结束时才做一次 markdown 渲染，settled 再全量纠偏）
@@ -1160,12 +1183,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
     // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
     // 职责）再追加一遍 = 翻倍。修法：先清再建，幂等——本循环与 uiState 分支谁先谁后都不叠加。
-    // 工单24：queuebar 只属活动页签，后台重绘（写进隐藏树）不碰它
-    if (!bgMode) {
-      var qb = document.getElementById('queuebar');
-      qb.innerHTML = '';
-      for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
-    }
+    // 工单24 二期：queuebar 随页签视图走，后台渲进隐藏视图
+    queuebarEl.innerHTML = '';
+    for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
     scroll();
   }
   function fmtSession(file, name) {
@@ -1176,8 +1196,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.split(/[\\/]/).pop() || L.ephemeralSession;
   }
   function applyState(m) {
-    // 工单24：后台页签的页脚数据记账（模型/会话/用量随页签走），切换时按账本重渲
-    if (bgMode) { if (tabCtx[curTabId]) tabCtx[curTabId].foot = m; return; }
+    // 工单24 二期：页脚（模型/思考/用量）随页签视图走，后台直接渲进隐藏视图；
+    // 页头会话标题是页面级（只显示活动页签），后台跳过
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
     // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
@@ -1186,9 +1206,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
+    if (!bgMode) {
     var sessName = fmtSession(m.sessionFile, m.sessionName);
     sessionEl.textContent = L.sessionLabel + sessName;
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
+    }
+
     if (m.stats) {
       var parts = [];
       if (m.stats.contextPercent !== null && m.stats.contextPercent !== undefined) parts.push(L.ctx + (Math.round(m.stats.contextPercent * 10) / 10) + '%');
@@ -1392,9 +1415,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     pendingImages = []; pendingFiles = []; renderAttach();
     vscode.postMessage({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
   }
-  sendBtn.addEventListener('click', send);
-  stopBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abort' }); });
-  fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
+  // 下区控件监听已随视图绑定（bindViewEvents）；这里只绑页面级头部控件
   sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
   // 语言/主题头部按钮已移除：功能保留（pickLang/pickTheme），入口收进 ⚙ 设置菜单
@@ -1404,11 +1425,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
   newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
-  modelEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickModel' }); });
-  thinkEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickThinking' }); });
-  modeBadge.addEventListener('click', function () { vscode.postMessage({ type: 'pickMode' }); });
-  codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChip(); });
-  input.addEventListener('input', function () { updateSuggest(); autoSize(); });
   // 自适应高度：随内容增长，到 220px 上限后改为内部滚动（消息区不会被挤没）
   function autoSize() {
     input.style.height = 'auto';
@@ -1416,7 +1432,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     input.style.overflowY = over ? 'auto' : 'hidden';
     input.style.height = Math.min(input.scrollHeight, 220) + 'px';
   }
-  input.addEventListener('keydown', function (e) {
+  function inputKeydown(e: KeyboardEvent) {
     var sgOpen = suggestEl.style.display === 'block';
     if (sgOpen) {
       if (e.key === 'ArrowDown') { e.preventDefault(); nextSel(1); paintSuggest(); return; }
@@ -1428,7 +1444,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (e.key === 'Escape' && !sgOpen && !e.isComposing) { vscode.postMessage({ type: 'abort' }); }
     // isComposing 守门：中文输入法取消候选词也是 Esc，不拦的话打字打到一半就把运行中的任务中断了
     // （2026-09-18 事故：用户没点停止却见“已中断当前任务”）
-  });
+  }
   function filesFromClipboard(items) {
     var out = [];
     for (var i = 0; i < items.length; i++) {
@@ -1436,10 +1452,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     return out;
   }
-  input.addEventListener('paste', function (e) {
+  function inputPaste(e: ClipboardEvent) {
     var files = filesFromClipboard((e.clipboardData || {}).items || []);
     if (files.length) { e.preventDefault(); handleFiles(files, null); }
-  });
+  }
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length) handleFiles(dt.files, dt); });
   /** 重绘/续接排队（刀5b）：render 与 liveSync 同拍顺序执行（快照重绘 → 在途消息重定基），
@@ -1469,8 +1485,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (tid === null || tid === undefined) return;
     if (activeTabId === null) { activeTabId = tid; tabId = tid; }
     if (tid !== activeTabId) {
-      // 后台页签：交互应答/浮层类不投（notice 弹给谁看？输入框回填/状态行只属活动页签）
-      if (m.type === 'notice' || m.type === 'status' || m.type === 'fillInput') return;
+      // 后台页签：只挡焦点类（fillInput 回填+focus；notice/status/横幅都随视图活渲染）
+      if (m.type === 'fillInput') return;
       bgMode = true;
       useTab(tid);
       handleMsg(m);
@@ -1552,10 +1568,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // queuebar 原子重建：先置数组再重建 DOM（不再走 addQueued——它 push 回数组，会翻倍）。
       // 工单24：queuebar 只属活动页签，后台页签快照只记账（切换时按账本重建）
       queuedItems = (m.queued || []).slice();
-      if (!bgMode) {
-        document.getElementById('queuebar').innerHTML = '';
-        for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
-      }
+      queuebarEl.innerHTML = '';
+      for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
       nativeQueuePills = []; renderNativeQueue(); // uiState 不带 followUp 数组，同上取舍
       applyState(m);
     }
@@ -1578,7 +1592,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
     else if (m.type === 'queuedDelivered') { removeQueued(m.qid); if (m.show) addUser(m.text, m.imageCount, m.codeInfo); }
-    else if (m.type === 'queuedClear') { queuedItems = []; if (!bgMode) document.getElementById('queuebar').innerHTML = ''; }
+    else if (m.type === 'queuedClear') { queuedItems = []; queuebarEl.innerHTML = ''; }
     else if (m.type === 'queuedRemove') removeQueued(m.qid); // 工单十八补刀：乐观入队失败回滚单条
     else if (m.type === 'queuedRetrieved') {
       // 工单十六：取回文本合入编辑框——已有内容时换行追加，不覆盖正在输入的内容
@@ -1634,21 +1648,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       updateSubInd();
     }
   }
-  /** 页签切换（工单24 架构归位）：换可见性 O(1) + 按账本重渲页面控件，零重拉零重建。
-   *  现场在各页签自己的树里常驻（后台流式照常累加）；未建树的页签向宿主要一次快照 */
+  /** 页签切换（工单24 架构归位二期）：整个下区视图换可见性 O(1)。每个控件的实时状态都已在
+   *  各自视图里活渲染（后台也一样），这里没有任何重渲——只有页头会话标题（页面级）和
+   *  代码上下文 chip（页面级数据）需要补一下；跟随标志为真则补拉底（后台滚不动，见 scroll） */
   function activateTab(tid: string) {
     if (activeTabId === tid) { renderTabs(); return; }
     activeTabId = tid; tabId = tid;
     bgMode = false;
     useTab(tid);
-    for (var id in tabCtx) tabCtx[id].root.classList.toggle('offroot', id !== tid);
-    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    // 页面控件按新活动页签的账本重渲（数据早随流式事件记好账，这里只是显示）
-    renderStatus();
-    renderBanner(banner);
-    renderQueuedBar();
-    renderBusyUi();
-    if (tabCtx[tid].foot) applyState(tabCtx[tid].foot);
+    for (var id in tabCtx) tabCtx[id].view.classList.toggle('offview', id !== tid);
+    // 页头会话标题是页面级，切页签时从宿主清单对齐（会话名即标签题）
+    for (var ti = 0; ti < tabsList.length; ti++) {
+      if (tabsList[ti].id === tid) { sessionEl.textContent = L.sessionLabel + tabsList[ti].title; break; }
+    }
+    renderCodeChip(); // codeCtx 是页面级数据，新视图的 chip 可能还是原型态
+    // 后台视图期间内容在长而滚不动（display:none 无布局），跟随标志为真则切回后补拉底
+    if (followingEnd) { suppressScroll = true; root.scrollTop = root.scrollHeight; }
     applyTabSubState(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
     renderTabs();
     // 未建树的页签向宿主要一次快照（webview 重载后未轮到的后台页签/重启恢复页签）；
@@ -1698,7 +1713,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var alive = false;
       for (var ti = 0; ti < tabsList.length; ti++) { if (tabsList[ti].id === id) { alive = true; break; } }
       if (!alive) {
-        var dead = tabCtx[id].root;
+        if (tabCtx[id].busyTimer) { clearInterval(tabCtx[id].busyTimer); tabCtx[id].busyTimer = null; }
+        if (tabCtx[id].liveRTimer) { clearTimeout(tabCtx[id].liveRTimer); tabCtx[id].liveRTimer = null; }
+        var dead = tabCtx[id].view;
         if (dead.parentNode) dead.parentNode.removeChild(dead);
         delete tabCtx[id];
         if (curTabId === id) curTabId = null;
