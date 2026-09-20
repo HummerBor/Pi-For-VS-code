@@ -776,8 +776,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
             var c = m.content[j];
             if (c && c.type === 'thinking' && c.thinking) b.appendChild(makeThink(c.thinking));
             else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
-            if (c && c.type === 'thinking' && c.thinking) b.appendChild(makeThink(c.thinking));
-            else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
             else if (c && c.type === 'toolCall') {
               flushB();
               // 每个工具一行（toolStart/toolEnd 全套交互，收起态）；同名连续靠 toolEnd 里
