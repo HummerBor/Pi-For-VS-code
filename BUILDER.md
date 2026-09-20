@@ -4,7 +4,157 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。不提交进 git（与 DIRECTOR.md 同）。
 
-最后更新：2026-09-18 工单24 架构归位（用户直令推翻刀5，每页签一棵 DOM；待总监追认 + 用户实测）
+最后更新：2026-09-20 交接 5——三期整树搬迁落地（main.ts 每页签一个工厂闭包，compile 绿+27/34/12 全过，待实测）
+
+# 交接 5：三期整树搬迁落地（2026-09-20，接手先读本节）
+
+**改动面（单笔提交，仅 webview/main.ts + scripts/migrate-phase3.mjs）**：按交接 4 六步法机械搬迁——
+函数体逐字符不动（scripts/migrate-phase3.mjs 按行区间字节级抽取拼接，每段首/末行断言防错位），
+只动壳：
+- 每页签一个 `makeSessionView(id)` 工厂闭包（自己的 DOM/状态/定时器/输入框/事件），
+  换镜机制（useTab/assignMirrors/saveMirrors/curTabId/bgMode/TabCtx）整体删除——白 Working/
+  串会话两类事故的根因（镜像漂移）在结构上不可能。1802→1685 行
+- routeMsg 缩成三行直达（fillInput 后台拒收保留）；activateTab/handleTabs/renderTabs/
+  applyTabSubState/子agent浮窗簇留页面级，经访问器（handleMsg/renderCodeChip/refreshBusy/
+  show/isFollowing/forceScrollToBottom/isBuilt/dispose）访问——闭包原始值不走对象属性
+- 语义修改仅六处：①scroll bgMode→id 判定 ②applyState 同 ③上行改 vpost 显式带自己 tabId
+  ④scheduleStream/scheduleRender 去换镜舞蹈 ⑤built 直写闭包 ⑥codeCtx 页面级数据 +
+  renderCodeChipAll 循环各视图
+- 死代码清理：busyLabel/subMonUpdate（grep 零调用）；renderInline/renderPlain/renderTable/
+  renderRich 留页面级（无状态纯函数，renderSubDetail 浮窗也要用，不属任何页签）
+
+**施工事故教训（本轮新沉淀）**：①首/末行断言会被「行内含 }」的中间行骗过（inputPaste 实际
+到 1486 行，seg 切到 1485 丢了收尾括号，tsc 只报 EOF 不报现场）——切函数必须对到真正的
+闭括号行，用旧文件 AST 语句边界核对切割点（tools 已删，方法记档）；②长重构绝不在脑内
+整体演练后一次性输出（前三轮 Stream ended 无产出死于此），字节级脚本搬运 + 小步 compile
+才是正道；③多重集行 diff 是机械搬运的好验收：被删行逐行核对全部属于死代码，新增行
+全部属于胶水/变换，零意外
+
+**验证**：npm run compile 全链绿；27/34/12 用例全过；死标识符 grep 零残留
+
+**待实测（需重载窗口，对齐交接 4 第 6 步）**：①流式中切页签、后台完成切回 ②双页签双模型
+③stop 键/Esc 中断落在正确页签 ④0.1.19 遗留实测点（交接 4 的 ①~④）全部适用
+
+**工单队列**：27/28/29 仍未动。
+
+# 交接 4：白 Working / 串会话双事故 + 三期方案（2026-09-20，接手先读本节）
+
+## 用户实测症状与根因（都已实证，别再猜）
+
+1. **白 Working（另一页签挂白字 Working 走秒，会话结束后残留不走但也不清）**：
+   busyTicker 闭包（renderBusyUi 里 setInterval）原来写**全局镜像 statusEl**——镜像漂到哪个
+   页签就写谁的状态行，且只写文本不动 class（蓝 Working=.busy 类，白字=无类），那个页签
+   不 busy 便永远没人写/清它。修复 897ce40：ticker 只写自己页签 ctx 的 statusEl（元素引用
+   随 ctx 走，不碰漂移中的全局镜像）+ `!me.streaming` 自愈自杀（clearInterval 只清自己捕获的
+   timer id，**别改成清全局 busyTimer**——漂移时那可能是别人的 timer）+ activateTab 切回时
+   renderBusyUi() 重渲清残留。
+2. **「我切了会话，另外的会话也变成了你好」**：pickSession 的跨标签占用守卫漏了
+   「活动标签自己持有 + busy」分支——break 落到 busy 分支 handleTabNew，同一个 jsonl 开进
+   第二棵页签（双写者），两个页签同名同内容。修复 b59ee4c：活动持有且 busy → 提示
+   sessionOpenHere 即收，绝不开第二棵。busy 中选**其他**会话开进新页签的语义不变。
+
+## 验证与现状
+
+- compile 全链绿 + 27/34/12 用例全过；0.1.19 已打包**已装机待重载实测**
+- 实测点：①A 页签跑任务时切到 B 页签看——B 状态行应空（不再白 Working 走秒）；②A 结束后
+  B 无残留；③busy 中开历史选当前会话 → 提示「已在本页签打开」不开新页签；④回归：正常
+  Working 计时/停止键/切页签各归各
+- 本轮罚记：会话尾部上下文将满时硬做 1787 行整树重写，反复读文件绕圈烧上下文——大重构
+  必须在会话前段做，尾部只做小刀止血
+
+## 三期整树搬迁方案（用户定调「一个会话一个DOM一个pi后端」，下个会话一次做对）
+
+**目标**：拆掉 main.ts 全套换镜机制（useTab/assignMirrors/saveMirrors/curTabId/bgMode），
+每页签一个完全隔离的 SessionView 工厂闭包（自己的 DOM/状态/定时器/输入框），routeMsg 变
+`viewFor(tid).handleMsg(m)` 一行直达，串写在结构上不可能。宿主侧已达标不动（cores Map，
+一页签一 PiCore 一 pi 进程）。
+
+**机械搬迁法（本轮已验证可行的路径）**：函数体逐字符不动，只动壳——
+1. 把「每页签」全局变量组（toolEls…queuebarEl 约 35 个 + followingEnd/suppressScroll）
+   声明挪进 makeSessionView(id) 工厂顶部；全部页签级函数（scroll/setBusy/renderBusyUi/
+   setCompacting/renderBanner/renderChanges/addUser/queue 族/live 族/toolStart/End/notice/
+   renderAll/fmtSession/applyState/handleFiles/renderAttach/suggest 族/send/autoSize/
+   inputKeydown/inputPaste/scheduleStream/scheduleRender/flushRender/applyLiveSync/handleMsg/
+   renderCodeChip/bindViewEvents）**原体搬进工厂**——闭包变量与旧全局同名，函数体零改动
+2. 函数内只改这些点：①scroll() 的 bgMode 判定 → `id !== activeTabId` return；②applyState
+   的 `if (!bgMode)`（页头标题）→ `if (id === activeTabId)`；③视图内 `vscode.postMessage` →
+   `vpost(m)`（显式带自己的 tabId，不再借活动页签打标——stopBtn/abort/pickModel/queuedRetrieve/
+   banner 按钮/changes 按钮/retryFromLast/attachUri/attachFile/getSlash/getFiles 全在内）；
+   ④scheduleStream/scheduleRender 去掉换镜舞蹈（闭包变量天然绑定）；⑤uiState/render 分支
+   `tabCtx[curTabId].built` → 自己的 built；⑥codeCtx 分支改「codeCtx 页面级数据 + 循环
+   各视图 renderCodeChip」
+3. routeMsg 缩成三行（fillInput 后台拒收保留）；activateTab/handleTabs/renderTabs/
+   applyTabSubState/子agent浮窗簇留页面级（activateTab 改调 v.renderCodeChip()/v.isFollowing()
+   /v.forceScrollToBottom()/v.isBuilt()——闭包原始值不能走对象属性暴露，必须方法访问器）
+4. 文档级点击监听（plusmenu 关闭）改每视图一份各关各的；window drop 路由到活动视图的
+   handleFiles；dispose() 清三 timer + 摘 DOM
+5. 顺手清死代码：busyLabel、subMonUpdate（grep 零调用已实结）；linkifyEnabled 留页面级
+   （renderAll 同步执行无交错）；slashCmds/workspaceFiles 留页面级缓存（闭包可写）
+6. 每步 compile+27/34/12 用例验证；打包实测重点：流式中切页签、后台完成切回、双页签双
+   模型、stop 键/Esc 中断落在正确页签
+
+**工单队列**：27/28/29 仍未动（工单27 的 appendSystemPrompt 注意与新架构的 prompt 组装
+无关，宿主侧不受三期影响）。
+
+# 交接 3：二期「下区整棵 DOM」+ 双事故修复（2026-09-20，接手先读本节）
+
+## 本轮做了什么（全部已 commit，未 push）
+
+- `738ca6e` 架构归位二期（用户定调「下区整个一坨应该每页签一整棵 DOM」，逐字执行）：
+  #session-area 每页签一棵 `.session-view`（原型 innerHTML 克隆），横幅/变更条/消息流/排队
+  条/状态行/输入区/页脚全在内；后台页签整块隐藏但控件活渲染；切页签=换 display O(1)；
+  bgMode 守卫族整体拆除；输入草稿/附件随页签走。页面级共享：头部/标签条/子agent浮窗/
+  codeCtx 数据（chip 元素在各视图内）
+- `889452b` 双事故修复：
+  - **停止键消失**（0.1.17）：二期把渲染函数改成读 ctx 字段但 setter 仍写全局镜像——
+    setBusy(true) 写全局 streaming，renderBusyUi 读 my.streaming 永远旧值 → 停止键/计时
+    全死。修法：确立不变量「**全局镜像=镜像当前指向页签的运行时真相**」，routeMsg 处理完
+    saveMirrors() 落账 + useTab 换镜前落账；三个定时器闭包（busyTicker/scheduleStream/
+    scheduleRender）触发时先 useTab(stid) 换回发起页签再干活（动态值 queueN/streaming/
+    compacting 从 ctx 读唯一真相，busyStart 捕局部）
+  - **串项目**（0.1.17）：piChat.tabBar 存 globalState 跨项目共享，A 项目标签长进 B 项目。
+    照 lastSessionByWs2 模式分桶 piChat.tabBarByWs（cwdKey 小写），旧 key 按当前工作区
+    一次性收编
+- 验证：compile 全链绿 + 27/34/12 用例全过，0.1.18 打包并装机；vsix 内新 webview 判据
+  （needState/offview）已验
+
+## 未结事项（接手第一优先）
+
+1. **0.1.18 已装待重载实测**：①发消息→Working 计时跳动+停止键出现+点停生效；②多项目
+   窗口标签栏不再互串；③切页签各归各（双页签双模型/排队/横幅）；④切历史会话页脚保持
+   页签自选模型（上轮 93a96ee 遗留实测）
+2. **用户质疑「你这不是一个dom吧?」未定性**：已回复架构清单+问症状，用户未答。若重载后
+   仍见 DOM 串写/状态丢：按「镜像漂移」方向查——搜 main.ts 里还有哪些 setTimeout/
+   setInterval 闭包读全局镜像没先换回发起页签（pendingStream 路径已修，其他 timer 逐个审）
+3. 直令推翻刀5（✅活 6）待总监追认；二期 738ca6e + 修复 889452b 待验收结单
+4. 两笔 commit 未 push，等用户指令；工单队列 27/28/29 未动
+
+## 事故罚记（本轮）
+
+- 0.1.17 双真相事故根因：二期重构「半途而废」——渲染读 ctx 但 setter 写镜像，两套真相
+  没收敛就打包。教训：改状态架构必须一次性把「谁是真相」定死再动手，编译器查不出
+  语义分裂
+- tabBar 跨项目事故：restoreTabBar 注释里自己写着「可接受」（当旣陈词可被覆盖），实际
+  用户实测不接受。教训：注释里「可接受/容忍」级别的取舍，发版前当未决项过一遍
+
+## 直令修复留痕（✅活 14）：切会话后页签自选模型被顶掉（93a96ee，0.1.16 已装）
+
+用户报「为啥一切会话 下面的模型就变了」：切历史会话后页脚显示该会话存的模型
+（Free Models Router），页签自选的 GLM 被顶掉。根因：刀3 每标签模型记忆只在启动/新建
+补回，且启动处是与 switchSession 并行的 fire-and-forget（竞态）；pi 的 switchSession
+会把模型重置为会话文件里存的值。修法：补回收口 piCore.applyModelMemory，四条链路
+（启动恢复/切历史两条/新建/reload）统一在 switchSession **之后**调用。
+验证：compile 全链绿 + 27/34/12 用例全过。**实测待用户**：切历史会话后页脚应保持
+页签自选的模型（没自选过的页签跟随会话/默认，不变）。
+
+## 工单24 架构归位【实测通过，2026-09-18】
+
+用户原话：「非常完美——之前改了那么多都没按我说的方向改正确，一把就改好了。」
+压测现场：流式生成中连切页签，切回内容完整、瞬切不卡、后台照常累加。两笔提交：
+止血刀 3d6a448（快照语义实证重写）+ 架构刀 4530c5d（每页签一棵 DOM，推翻刀5），
+均 compile 全链绿 + 27/34/12 用例全过，0.1.14 装机实测。待总监：①追认直令推翻刀5；
+②工单24 修法定稿按「零剥离+窗口丢弃+消费端延后一拍 + 每页签一棵 DOM」口径写；
+③工单24 结单迁归档。
 
 ## 工单24 第二刀：架构归位（4530c5d，用户直令「推翻这个设计」，✅活 6 待追认）
 
