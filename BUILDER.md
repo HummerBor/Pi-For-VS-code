@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-20 交接 5 附——0.1.33 双画事故修复实测通过；同名合并定稿；模型自切线待查
+最后更新：2026-09-20 工单30 施工回报——拆除 appendSystemPrompt（工单27 回收），待总监验收
 
 # 交接 5：三期整树搬迁落地（2026-09-20，接手先读本节）
 
@@ -39,7 +39,20 @@
 **待实测（需重载窗口，对齐交接 4 第 6 步）**：①流式中切页签、后台完成切回 ②双页签双模型
 ③stop 键/Esc 中断落在正确页签 ④0.1.19 遗留实测点（交接 4 的 ①~④）全部适用
 
-# 工单27 施工回报：piChat.appendSystemPrompt 设置入口（2026-09-20，待实测）
+# 工单30 施工回报：拆除 piChat.appendSystemPrompt 设置入口（2026-09-20，工单27 回收）
+
+**改动面（单笔 6b81fce，package.json + src/piClient.ts + src/piCore.ts，webview/protocol/i18n 零改动）**：
+按 537de78 反向逐处拆除——package.json 删设置声明；piClient 删 start 第 4 参、
+startOpts.appendSystemPrompt 字段、createRuntime 里 resourceLoaderOptions 注入及工单27 注释；
+piCore.ensureClient 删 getConfig 读值与透传。pi 原生 APPEND_SYSTEM.md 发现逻辑从未被触碰
+（grep APPEND_SYSTEM src/ 零命中实证）。默认空=无操作，拆除后行为与 0.1.21 完全一致。
+
+**验证**：npm run compile 全链绿；`grep -ri appendSystemPrompt src/ package.json webview/` 零命中
+（exit 1）；git diff 逐 hunk 归属确认仅工单三文件。版本号未动，随下次 package 自动 bump。
+
+> 工单27 回报（下节）存档：该单已被用户终审回收，其待实测三项作废，全文见 归档.md「工单27 回收」。
+
+# 工单27 施工回报：piChat.appendSystemPrompt 设置入口（2026-09-20，已随工单30 拆除作废）
 
 **改动面（单笔 537de78，package.json + src/piClient.ts + src/piCore.ts，webview/protocol 零改动）**：
 - package.json：新增 `piChat.appendSystemPrompt`（string，default ""，中文描述含「改动后新开页签
