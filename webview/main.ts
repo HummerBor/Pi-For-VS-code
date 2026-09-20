@@ -446,7 +446,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!liveParts) return;
     for (var k in liveParts) {
       var p = liveParts[k];
-      if (p && p.kind === 'text' && !p.done) {
+      if (p && p.kind === 'thinking' && p.body && p.body.parentNode) {
+        // 返工（用户实测 0.1.28）：思考块结束（切正文/工具块出现/收尾）即收起 details——
+        // body 的父节点就是 details.think；用户手动展开仍可看全文（限高滚动照旧）
+        p.body.parentNode.removeAttribute('open');
+      }
+      else if (p && p.kind === 'text' && !p.done) {
         p.done = true;
         appendFinal(p, p.buf.slice(p.doneLen));
         p.doneLen = p.buf.length;
@@ -535,9 +540,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function appendThink(t, ci) {
     var p = liveBlock(ci, 'thinking');
-    p.buf += t; p.body.appendChild(document.createTextNode(t));
-    // 工单29扩权：think-body 限高后流式自动滚底（新思考内容始终可见，外层 root 滚动跟随不受影响）
-    p.body.scrollTop = p.body.scrollHeight;
+    // 返工（用户实测 0.1.28）：只在用户本就贴底时才自动滚底——否则每拍 delta 都拽回底部，
+    // 思考块「无法往上翻、不能被打断」。贴底判定必须在追加前算（追加会增大 scrollHeight）
+    var b = p.body;
+    var atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 30;
+    p.buf += t; b.appendChild(document.createTextNode(t));
+    if (atBottom) b.scrollTop = b.scrollHeight;
     scroll();
   }
   function toolStart(id: string, name: string, detail?: string, collapsed?: boolean) {
