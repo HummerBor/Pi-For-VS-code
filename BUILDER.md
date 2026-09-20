@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-20 交接 5 附——工单27 施工落地（appendSystemPrompt 设置入口，compile 绿，待实测）
+最后更新：2026-09-20 交接 5 附——工单27/28 施工落地（compile 绿，均待实测）
 
 # 交接 5：三期整树搬迁落地（2026-09-20，接手先读本节）
 
@@ -56,6 +56,21 @@
 **待实测（用户主验收）**：①设置里填探针文字（如「回答第一行必须输出：追加提示词生效✓」）→
 新开页签提问，第一行命中；②清空设置 → 新页签恢复正常；③（可选）与 .pi/APPEND_SYSTEM.md
 同时存在时两条都追加。
+
+# 工单28 施工回报：最后一问 sticky 悬浮（2026-09-20，待实测）
+
+**改动面（单笔，仅 webview/main.ts + webview/style.css，piCore/protocol/scroll 零改动）**：
+- main.ts：addUser（live 与 renderAll 共用路径）里做 sticky class 迁移——闭包变量 stickyQ
+  记当前最后一条 user bubble，新 user 到 → 旧摘除、新挂上；renderAll 历史重绘走同一 addUser，
+  循环末尾自然只剩最后一条带 class。子 agent 回报卡片早于迁移逻辑 return，不参与
+- style.css：`.bubble.user.sticky-q` 纯 CSS sticky（零 JS 滚动监听）；top:-10px 抵消
+  .msg-root padding-top 10px（两处必须同步改，注释已写明）；opacity .92→1 防钉住时透出
+  下方滚动内容（穿帮）；阴影隔离钉住态视觉边界
+
+**验证**：npm run compile 全绿；0.1.23 已打包待实测。
+
+**待实测（用户主验收）**：①长会话滚动，最后一条提问滚过顶部后钉在面板顶端、不透明无穿帮；
+②新提问到达后钉的是新提问、旧提问回原位；③自动滚动跟随行为不变。
 
 **工单队列**：27/28/29 仍未动。
 
