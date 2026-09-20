@@ -346,10 +346,7 @@ export class PiCore {
     // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
     // 这里把 VSCode 内置 http.proxy 设置透传给 pi（HTTP_PROXY/HTTPS_PROXY）
     const proxyUrl = this.caps.getConfig("http", "proxy", "").trim();
-    // 工单27：追加系统提示词（设置填了内容即生效，空 = 不追加；改动后新开页签生效，
-    // 所以只在 ensureClient 启动链路读一次，无需监听设置变化）
-    const appendSystemPrompt = this.caps.getConfig("piChat", "appendSystemPrompt", "").trim();
-    client.start(cwd, args, proxyUrl || undefined, appendSystemPrompt || undefined);
+    client.start(cwd, args, proxyUrl || undefined);
 
     // 插话送达方式（默认逐条，CC 风格：排队消息一条条处理）
     const steerMode = this.caps.getConfig("piChat", "steeringMode", "one-at-a-time");
