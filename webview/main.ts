@@ -127,20 +127,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   /** 换镜：全局变量组（含下区控件元素引用）↔ 页签上下文。同步小块内用，
    *  出来前必须换回（路由器负责）。followingEnd/suppressScroll 是滚动跟随镜像 */
+  /** 全局镜像落账：回存到镜像当前指向的页签。不变量「全局镜像永远描述 curTabId 页签」
+   *  由两处共同维持：routeMsg 在 handleMsg 后落账（事件 setter 改的是全局）+ useTab 换镜前落账 */
+  function saveMirrors() {
+    var c = curTabId !== null ? tabCtx[curTabId] : null;
+    if (!c) return;
+    c.toolEls = toolEls; c.liveMsg = liveMsg; c.liveDiv = liveDiv; c.pdet = pdet;
+    c.liveParts = liveParts; c.liveRTimer = liveRTimer; c.followingEnd = followingEnd;
+    c.queuedItems = queuedItems; c.queueN = queueN; c.nativeQueuePills = nativeQueuePills;
+    c.pendingImages = pendingImages; c.pendingFiles = pendingFiles;
+    c.streaming = streaming; c.busyTimer = busyTimer; c.busyStart = busyStart; c.lastElapsed = lastElapsed;
+    c.compacting = compacting; c.modeText = modeText; c.banner = banner;
+    c.renderPending = renderPending; c.liveSyncPending = liveSyncPending;
+  }
   function useTab(tid: string) {
     if (curTabId === tid) return;
-    var from = curTabId !== null ? tabCtx[curTabId] : null;
-    if (from) {
-      from.toolEls = toolEls; from.liveMsg = liveMsg; from.liveDiv = liveDiv; from.pdet = pdet;
-      from.liveParts = liveParts; from.liveRTimer = liveRTimer; from.followingEnd = followingEnd;
-      from.queuedItems = queuedItems; from.queueN = queueN; from.nativeQueuePills = nativeQueuePills;
-      from.pendingImages = pendingImages; from.pendingFiles = pendingFiles;
-      from.streaming = streaming; from.busyTimer = busyTimer; from.busyStart = busyStart; from.lastElapsed = lastElapsed;
-      from.compacting = compacting; from.modeText = modeText; from.banner = banner;
-      from.renderPending = renderPending; from.liveSyncPending = liveSyncPending;
-    }
-    var c = getCtx(tid);
-    assignMirrors(c);
+    saveMirrors();
+    assignMirrors(getCtx(tid));
   }
   /** 每视图绑定事件 + 注入图标（克隆树不带监听；交互只发生在可见视图，
    *  闭包里读全局镜像即正确——镜像在该视图可见时恒指向它） */
@@ -393,35 +396,38 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 手动压缩的空闲会话本就没有 Working）
   function busyLabel(base) { return compacting ? '⏳ ' + L.compacting : base; }
   /** 状态栏 DOM 重渲（工单24 架构归位）：setBusy 的控件部分抽出，页签切换时按账本重建用 */
-  /** 状态栏 DOM 重渲（工单24 架构归位二期）：闭包必须捕**自己页签的上下文字段**——
-   *  后台页签的计时器在镜像已指向别处时触发，读写全局镜像会写错别人的状态栏 */
+  /** 状态栏 DOM 重渲：调用时机是 routeMsg 换镜保护内（镜像=目标页签），直接读全局镜像。
+   *  唯一例外是 ticker 闭包——触发时镜像可能已漂移到别的页签，所以 busyStart 捕获局部值、
+   *  queueN/streaming/compacting 读 ctx（唯一真相，由 saveMirrors 维持最新） */
   function renderBusyUi() {
-    var my = tabCtx[curTabId]; if (!my) return;
-    my.stopBtn.style.display = my.streaming ? 'inline-flex' : 'none';
-    if (my.busyTimer) { clearInterval(my.busyTimer); my.busyTimer = null; }
-    if (my.streaming) {
-      my.statusEl.classList.add('busy');
+    var tid = curTabId; if (tid === null) return;
+    stopBtn.style.display = streaming ? 'inline-flex' : 'none';
+    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+    if (streaming) {
+      statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
-      my.statusEl.textContent = (my.compacting ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
-      my.busyTimer = setInterval(function () {
+      var myStart = busyStart; // 捕获局部：ticker 触发时全局 busyStart 可能已是别人的
+      statusEl.textContent = (compacting ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
+      busyTimer = setInterval(function () {
         fi = (fi + 1) % frames.length;
+        var me = tabCtx[tid]; if (!me) return;
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        my.statusEl.textContent = (my.compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - my.busyStart) + (my.queueN > 0 ? L.queuedCount.replace('{n}', my.queueN) : ''));
+        statusEl.textContent = (me.compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (me.queueN > 0 ? L.queuedCount.replace('{n}', me.queueN) : ''));
       }, 120);
     } else {
-      my.statusEl.classList.remove('busy');
-      my.statusEl.textContent = '';
-      if (my.compacting) {
+      statusEl.classList.remove('busy');
+      statusEl.textContent = '';
+      if (compacting) {
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
-        my.statusEl.classList.add('busy');
-        my.statusEl.textContent = '⏳ ' + L.compacting;
+        statusEl.classList.add('busy');
+        statusEl.textContent = '⏳ ' + L.compacting;
       } else
       // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
       // 同时入记录，切走再切回来能恢复 ⏱ 现场
-      if (my.lastElapsed != null) {
-        my.statusEl.textContent = '⏱ ' + fmtDur(my.lastElapsed);
-        my.statusEl.title = L.turnDuration;
+      if (lastElapsed != null) {
+        statusEl.textContent = '⏱ ' + fmtDur(lastElapsed);
+        statusEl.title = L.turnDuration;
       }
     }
   }
@@ -701,7 +707,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     setMdTail(p, rest.slice(nl + 1));
   }
   function scheduleStream() {
-    if (!liveRTimer) liveRTimer = setTimeout(function () { liveRTimer = null; if (liveParts) for (var k in liveParts) { var p = liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); } scroll(); }, 100);
+    // 定时器触发时镜像可能已漂移（routeMsg 处理完就换回活动页签）——先换回发起页签
+    // 再 tick，streamTick 的元素引用虽随 p 走，scroll/后续块写必须落在自己的树里
+    var stid = curTabId;
+    if (!liveRTimer) liveRTimer = setTimeout(function () {
+      // 先换回发起页签再清句柄：全局 liveRTimer 此刻可能已是别的页签的（镜像漂移），别抹掉
+      if (stid !== null && curTabId !== stid) useTab(stid);
+      liveRTimer = null;
+      if (liveParts) for (var k in liveParts) { var p = liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); }
+      scroll();
+      if (activeTabId !== null && curTabId !== activeTabId) useTab(activeTabId);
+    }, 100);
   }
   function appendDelta(t, ci) {
     var p = liveBlock(ci, 'text');
@@ -1463,7 +1479,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var renderPending: SessionMessage[] | null = null;
   var liveSyncPending: SessionMessage | null = null;
   var renderTimer: number | null = null;
-  function scheduleRender() { if (!renderTimer) renderTimer = setTimeout(flushRender, 0); }
+  /** 重绘排程（延后一拍）：定时器触发时镜像可能已漂移到别的页签——先换回发起页签再重绘，
+   *  否则 renderAll 会把后台页签的重绘写进活动页签的树 */
+  function scheduleRender() {
+    var stid = curTabId;
+    if (!renderTimer) renderTimer = setTimeout(function () {
+      if (stid !== null && curTabId !== stid) useTab(stid); // 先换镜再清句柄，别抹掉别人的 renderTimer
+      renderTimer = null;
+      flushRender();
+      if (activeTabId !== null && curTabId !== activeTabId) useTab(activeTabId);
+    }, 0);
+  }
   // 工单24：重绘期流式事件延后一拍——renderAll 清根重建，若事件先于延后一拍的重绘落地
   // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
   // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
@@ -1490,12 +1516,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       bgMode = true;
       useTab(tid);
       handleMsg(m);
+      saveMirrors(); // 事件 setter 写的是全局镜像，处理完立即落账（否则 ctx 永远旧值）
       useTab(activeTabId);
       bgMode = false;
       return;
     }
     useTab(tid);
     handleMsg(m);
+    saveMirrors();
   }
   function flushRender() {
     renderTimer = null;

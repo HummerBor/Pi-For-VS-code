@@ -1,4 +1,7 @@
 import { spawn } from "child_process";
+
+/** 标签栏持久化条目（按工作区分桶，见 TAB_BAR_BY_WS_KEY） */
+interface SavedTabBar { tabs: { id: string; title: string }[]; active: string; }
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -36,6 +39,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  自己的 tabKey 恢复各自记忆的会话，语义自然成立。busy/unread 是会话态不落盘；
    *  freshTabs 绝不落盘——恢复的标签一律按既有记忆恢复，只有「＋新建」才开新会话 */
   private static readonly TAB_BAR_KEY = "piChat.tabBar";
+  /** 标签栏按工作区分桶（2026-09-20 事故：globalState 跨项目共享，A 项目的标签原样
+   *  长进 B 项目的面板——串项目）。照 lastSessionByWs2 的 cwdKey 模式分桶 */
+  private static readonly TAB_BAR_BY_WS_KEY = "piChat.tabBarByWs";
   /** 重启时从持久化重建的标签 id：首次切到时尚无 pi 进程，要起新进程按该标签记忆恢复会话
    *  （普通「没启动过的标签」切到只清空显示不起进程——那是新建/关剩补位的语义，见 handleTabSwitch） */
   private readonly restoredTabs = new Set<string>();
@@ -84,9 +90,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 从 globalState 重建标签栏（构造器调用一次）。形状不对整体放弃回单标签——
    *  持久化数据不可信时，退回旧行为（单 t1）比半恢复安全 */
   private restoreTabBar(): void {
-    const saved = this.globalState.get<
-      { tabs: { id: string; title: string }[]; active: string } | undefined
-    >(ChatPanelProvider.TAB_BAR_KEY, undefined);
+    const wsKey = this.wsKey();
+    const byWs = this.globalState.get<Record<string, SavedTabBar>>(
+      ChatPanelProvider.TAB_BAR_BY_WS_KEY, {});
+    let saved = byWs[wsKey];
+    if (!saved) {
+      // 旧全局 key 一次性收编：旧数据不知道属于哪个工作区，按当前工作区认领
+      // （分桶前只有单工作区场景，大概率正确）；收编后写回新桶，下次不再走 legacy
+      const legacy = this.globalState.get<SavedTabBar | undefined>(ChatPanelProvider.TAB_BAR_KEY, undefined);
+      if (legacy?.tabs?.length) { saved = legacy; byWs[wsKey] = saved; void this.globalState.update(ChatPanelProvider.TAB_BAR_BY_WS_KEY, byWs); }
+    }
     if (!saved?.tabs?.length) return;
     let maxSeq = 0;
     for (const t of saved.tabs) {
@@ -103,12 +116,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       : saved.tabs[saved.tabs.length - 1].id;
   }
 
-  /** 标签栏落盘（id/顺序/标题/活动标签）。globalState 跨项目共享：换项目恢复的标签
-   *  标题是上一项目的陈词，等该核心 state 刷新即被 syncTabMeta 覆盖，可接受
-   *  （lang/theme 本就全局共享，同口径） */
+  /** 标签栏落盘（id/顺序/标题/活动标签）——按工作区分桶（globalState 跨项目共享，
+   *  不分桶会把 A 项目的标签长进 B 项目，2026-09-20 串项目事故） */
   private saveTabBar(): void {
     const tabs = [...this.tabMeta.entries()].map(([id, m]) => ({ id, title: m.title }));
-    void this.globalState.update(ChatPanelProvider.TAB_BAR_KEY, { tabs, active: this.activeTabId });
+    const saved: SavedTabBar = { tabs, active: this.activeTabId };
+    const byWs = this.globalState.get<Record<string, SavedTabBar>>(ChatPanelProvider.TAB_BAR_BY_WS_KEY, {});
+    byWs[this.wsKey()] = saved;
+    void this.globalState.update(ChatPanelProvider.TAB_BAR_BY_WS_KEY, byWs);
+  }
+
+  private wsKey(): string {
+    return (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "")
+      .replace(/\\+$/, "").toLowerCase();
   }
 
   /** 取（或创建）指定标签的核心控制器（工单十五刀1）。创建即接线：post 桥打 tabId 标、
