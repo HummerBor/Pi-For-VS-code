@@ -590,7 +590,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');
     scroll();
   }
-  function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); scroll(); }
+  // toast 跨重渲存续（用户实测「切页签回来压缩提示没了」2026-09-20）：notice 是一次性 DOM，
+  // 本页签 core 后续任何 uiState 重渲都会冲掉它。持久事实源是折叠块（jsonl compaction 条目，
+  // 恢复时从数据重建，在最顶部）；本层只是让瞬时 toast 也活过重渲——按存档重挂，发新消息即清
+  var lastNotice = '';
+  function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll(); }
   function textOf(content) {
     if (typeof content === 'string') return content;
     var out = '';
@@ -759,6 +763,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 工单24 二期：queuebar 随页签视图走，后台渲进隐藏视图
     queuebarEl.innerHTML = '';
     for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
+    // 重挂存活的 toast（renderAll 开头清了 root；空列表 welcome 早退分支不挂——新会话无历史 toast）
+    if (lastNotice) { var ln = el('div', 'notice', lastNotice); linkify(ln); root.appendChild(ln); }
     scroll();
   }
   function fmtSession(file, name) {
@@ -986,6 +992,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     input.value = '';
     autoSize();
     pendingImages = []; pendingFiles = []; renderAttach();
+    lastNotice = ''; // 新回合开始：瞬时反馈（含压缩完成）不再跨回合存活，与 pi TUI 状态行语义一致
     vpost({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
   }
   // 自适应高度：随内容增长，到 220px 上限后改为内部滚动（消息区不会被挤没）
