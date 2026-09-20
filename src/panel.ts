@@ -787,7 +787,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               this.post({ type: "notice", text: this.L.sessionOpenInTab });
               return;
             }
-            break; // 活动标签自己持有：幂等重开无害，走正常切换
+            // 双写者事故（2026-09-20 用户实测「我切了会话，另外的会话也变成了你好」）：
+            // 活动标签自己持有且 busy 时，原 code 破守卫落到下方 busy 分支 handleTabNew——
+            // 同一个 jsonl 开进第二棵页签，两个页签同名同内容双写（pi 双进程同文件追加）。
+            // 占用守卫必须盖住 busy 分支：会话已在本页签，提示即收，绝不开第二棵
+            if (this.core.isBusy) {
+              this.post({ type: "notice", text: this.L.sessionOpenHere });
+              return;
+            }
+            break; // 活动标签自己持有且空闲：幂等重开无害，走正常切换
           }
         }
         if (this.core.isBusy) {

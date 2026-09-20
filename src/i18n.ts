@@ -49,6 +49,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     tabCloseYes: "关闭标签",
     // 会话语义守卫（工单十五刀3/4）：跨标签占用（busy 禁切已废弃——busy 时选历史开进新标签）
     sessionOpenInTab: "该会话已在其他标签中打开，已为你切换过去",
+    sessionOpenHere: "该会话已在本页签打开",
     nsCancelled: "新建会话被扩展取消",
     nsFail: "新建会话失败: ",
     browseAllSessions: "$(folder) 浏览所有项目的会话…",
@@ -463,6 +464,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     tabCloseYes: "Close tab",
     // Session semantics guards (ticket 15 knife 3/4)
     sessionOpenInTab: "This session is already open in another tab; switched to it",
+    sessionOpenHere: "This session is already open in this tab",
     nsCancelled: "New session was cancelled by an extension",
     nsFail: "Failed to start new session: ",
     browseAllSessions: "$(folder) Browse sessions of all projects…",
