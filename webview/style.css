@@ -129,10 +129,11 @@ details.think.compaction-flash > summary {
 /* 工单29扩权：全量 OUT 展开态限高内部滚动（首次点开换全量时才加 tb-full，1000 字预览不限） */
 .tool-box .tb-val.tb-full { max-height: 320px; overflow-y: auto; }
 /* 工具组（用户直令 2026-09-20 重设计）：连续工具（不分名）一个大折叠块；头行复用 .tool 行
-   样式（点击开合整组），组体左侧微缩进层级感 */
+   样式（点击开合整组，运行中带 run 脉动点、结束 ok/err）；组体左侧连线突出内外层嵌套 */
 .tool-grp { margin: 5px 0; }
 .tool-grp .grp-head { cursor: pointer; }
-.tool-grp .grp-body { margin-left: 10px; }
+.tool-grp .grp-body { margin: 2px 0 2px 14px; padding-left: 10px; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.3)); }
+.tool-grp .grp-body .tool { opacity: .8; }
 .tool-grp .t-count { opacity: .6; }
 
 /* ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ── */

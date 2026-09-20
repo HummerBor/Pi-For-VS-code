@@ -161,6 +161,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!toolGroup) return;
     toolGroup.body.style.display = 'none';
     toolGroup.head.classList.remove('open');
+    // 头行状态（用户反馈「组没状态」）：运行中带 run 脉动点，结束落 ok/err
+    toolGroup.head.classList.remove('run');
+    toolGroup.head.classList.add(toolGroup.head.classList.contains('has-err') ? 'err' : 'ok');
     toolGroup = null;
   }
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
@@ -619,7 +622,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (into) { into.appendChild(t); into.appendChild(box); scroll(); return; }
     if (!toolGroup) {
       var grpEl = el('div', 'tool-grp');
-      var head = el('div', 'tool grp-head');
+      var head = el('div', 'tool grp-head run');
       head.appendChild(el('span', 't-dot'));
       head.appendChild(el('span', 't-name', L.toolGroup));
       head.appendChild(el('span', 't-count', ' ×1'));
@@ -685,7 +688,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
     }
     // 完成即收一个（用户直令 2026-09-20）：不等 settled 统一收；原 wasOpen「保持展开」逻辑作废。
-    // 组计数在 toolStart 时已记，这里不再做行合并（重设计后不分名，组容器负责折叠）
+    // 组计数在 toolStart 时已记，这里不再做行合并（重设计后不分名，组容器负责折叠）；
+    // 出错则头行落 err（has-err 标记，endToolGroup 时兑成终态）
+    if (isError && toolGroup) toolGroup.head.classList.add('has-err');
     ref.box.style.display = 'none';
     t.classList.remove('open');
     scroll();
@@ -757,16 +762,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       return toolDetail(args);
     }
     // 工具组壳（历史重绘与 live 同构，用户直令 2026-09-20）：头行 工具 ×N + 收起态内容区；
-    // 点击头行开合，组内每行工具可再点开各自 IN/OUT（复用 toolStart/toolEnd 全套交互）
-    function makeToolGroupShell(n: number) {
+    // 点击头行开合，组内每行工具可再点开各自 IN/OUT（复用 toolStart/toolEnd 全套交互）。
+    // 探针实锤：pi 每 toolCall 一条独立 assistant 消息——历史侧跨消息合并（crossRun 状态）
+    function makeToolGroupShell() {
       var grpEl = el('div', 'tool-grp');
-      var head = el('div', 'tool grp-head');
+      var head = el('div', 'tool grp-head ok');
       head.appendChild(el('span', 't-dot'));
       head.appendChild(el('span', 't-name', L.toolGroup));
-      head.appendChild(el('span', 't-count', ' ×' + n));
+      head.appendChild(el('span', 't-count', ' ×1'));
       var arr = el('span', 't-arrow'); arr.innerHTML = ico('chev', 12); head.appendChild(arr);
       var body = el('div', 'grp-body');
+      var count = 1;
       body.style.display = 'none'; // 历史组默认收起（序列已结束）
+      function bump() { count++; var c2 = head.querySelector('.t-count'); if (c2) c2.textContent = ' ×' + count; }
+      function markErr() { head.classList.remove('ok'); head.classList.add('err'); }
       head.addEventListener('click', function () {
         var open = body.style.display === 'none';
         body.style.display = open ? 'block' : 'none';
@@ -774,12 +783,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       });
       grpEl.appendChild(head); grpEl.appendChild(body);
       root.appendChild(grpEl);
-      return body;
+      return { body: body, bump: bump, err: markErr };
     }
+    var crossRun: { body: HTMLElement; bump: () => void; err: () => void } | null = null; // 跨消息工具组（见 makeToolGroupShell 注释）
     for (var i = 0; i < list.length; i++) {
       if (i >= list.length - 15) linkifyEnabled = true;
       var m = list[i];
       if (m.role === 'user') {
+        crossRun = null; // 用户消息打断工具组
         var ut = textOf(m.content); var ui = null; var ufiles = 0;
         var ccm = ut.match(/^--- 代码上下文: (.+?) \((.+?)\) ---\n/);
         if (ccm) {
@@ -807,23 +818,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
             var c = m.content[j];
             if (c && c.type === 'thinking' && c.thinking) b.appendChild(makeThink(c.thinking));
             else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
+            if (c && c.type === 'thinking' && c.thinking) { crossRun = null; b.appendChild(makeThink(c.thinking)); } // 思考块打断组（与 live 口径同）
+            else if (c && c.type === 'text' && c.text) { crossRun = null; var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
             else if (c && c.type === 'toolCall') {
               flushB();
-              // 工具组（用户直令 2026-09-20，不分名）：连续 toolCall 合进一个大折叠块，
+              // 工具组（用户直令 2026-09-20，不分名、跨消息）：连续 toolCall 合进一个大折叠块，
               // 与 live 路径同构；每行工具复用 toolStart/toolEnd 全套交互（点击展开 IN/OUT）。
               // 历史 OUT 截 1000 不持全量引用（老会话内存零增长，全量在 jsonl 里）
-              var run = [c];
-              while (j + 1 < m.content.length && m.content[j+1] && m.content[j+1].type === 'toolCall') { run.push(m.content[++j]); }
-              var grpBody = makeToolGroupShell(run.length);
-              for (var ri = 0; ri < run.length; ri++) {
-                var ct2 = run[ri];
-                var hid = ct2.id || ('h' + i + '_' + j + '_' + ri);
-                var det = historyDetail(ct2.arguments);
-                toolStart(hid, ct2.name, det, true, grpBody);
-                var res = (ct2.id && results[ct2.id]) || null;
-                if (!res) { for (var rp = 0; rp < resultList.length; rp++) { if (!resultList[rp].used) { res = resultList[rp]; break; } } }
-                if (res) { res.used = true; toolEnd(hid, ct2.name, res.isError, res.text != null ? String(res.text).slice(0, 1000) : res.text, det); }
-              }
+              if (!crossRun) crossRun = makeToolGroupShell();
+              crossRun.bump();
+              var hid = c.id || ('h' + i + '_' + j);
+              var det = historyDetail(c.arguments);
+              toolStart(hid, c.name, det, true, crossRun.body);
+              var res = (c.id && results[c.id]) || null;
+              if (!res) { for (var rp = 0; rp < resultList.length; rp++) { if (!resultList[rp].used) { res = resultList[rp]; break; } } }
+              if (res) { res.used = true; toolEnd(hid, c.name, res.isError, res.text != null ? String(res.text).slice(0, 1000) : res.text, det); if (res.isError) crossRun.err(); }
               // 子 agent 历史重绘不建浮窗/卡片（用户拍板：消息流只留工具行，浮窗只属 LIVE）——
               // 否则恢复会话时旧 run 的 final 快照会凭空弹出浮窗；历史看工具行 OUT 文本即可
             }
@@ -841,7 +850,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         }
       }
       else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
-      else if (m.role === 'compactionSummary') { root.appendChild(makeCompaction(m)); }
+      else if (m.role === 'compactionSummary') { crossRun = null; root.appendChild(makeCompaction(m)); }
     }
     // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
     // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
@@ -1185,7 +1194,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
-    else if (m.type === 'newLive') { endToolGroup(); finalizeLive(); liveReset(); }
+    else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
+    // 探针实锤（probe-toolblocks.mjs 09-20）：pi 每输出一个 toolCall 就是一条独立 assistant
+    // 消息——newLive 不能结束工具组（否则每工具一组「工具 ×1」）；组只被思考块/正文 delta 打断
+    // （appendThink/appendDelta 里的 endToolGroup）
     else if (m.type === 'delta') appendDelta(m.text, m.ci);
     else if (m.type === 'thinking') appendThink(m.text, m.ci);
     else if (m.type === 'toolStart') {
