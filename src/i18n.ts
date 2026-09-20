@@ -398,6 +398,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     thinkingProcess: "思考过程",
     noArgs: "(无参数)",
     toolTruncated: "输出已截断，点击展开全量",
+    toolGroup: "工具",
+    stickyExpand: "展开",
+    stickyCollapse: "收起",
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
     smTitle: "子智能体",
     smRunningGroup: "已开启",
@@ -797,6 +800,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     thinkingProcess: "Thinking",
     noArgs: "(no args)",
     toolTruncated: "Output truncated — click to expand",
+    toolGroup: "Tools",
+    stickyExpand: "Expand",
+    stickyCollapse: "Collapse",
     // Subagent monitor (subagentUpdate): card header and task rows
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
     smTitle: "Subagents",

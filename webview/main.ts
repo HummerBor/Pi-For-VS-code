@@ -128,10 +128,41 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
   // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
   var stickyQ: HTMLElement | null = null;
-  // 工单29扩权（用户直令 2026-09-20）：连续同名工具折叠成组——记最近完成的工具组
-  // {name, ref(存活行), count}。合并条件靠 DOM 相邻判定（row→box→row→box 首尾相接），
-  // 中间插了文本/思考块即不是「连续」，重绘后旧引用的 nextElementSibling 为 null 也不会误合
-  var lastToolGroup: { name: string; ref: any; count: number } | null = null;
+  // 钉住态检测（工单28 追加二，用户直令 2026-09-20）：原位不折叠、钉住才折——sticky 的 pinned
+  // 状态 CSS 感知不到，用 IntersectionObserver 观察 bubble 前的 0 高 sentinel：sentinel 滚出视
+  // 口顶 = bubble 到顶（钉住）。每视图一个 IO 实例；内容高超 3 行才折（line-clamp 自带 …），
+  // 右下角「展开/收起」chip 走 attr(data-st)。零滚动监听器，IO 是浏览器原生高效回调
+  var stickyIO: any = null;
+  function updateStickyChip(b: any) {
+    if (!b._fullH) return; // 未量到内容高（rAF 前）
+    var pinned = b.classList.contains('pinned');
+    var open = b.classList.contains('sticky-open');
+    if (pinned && b._fullH > 78) b.setAttribute('data-st', open ? L.stickyCollapse : L.stickyExpand); // 3 行 ≈ 13px×1.55×3+padding14 ≈ 74.5，取 78
+    else b.removeAttribute('data-st');
+  }
+  function observeSticky(sent: any, b: any) {
+    if (!stickyIO) stickyIO = new IntersectionObserver(function (es: any) {
+      for (var i = 0; i < es.length; i++) {
+        var tgt = (es[i].target as any)._stickyBubble;
+        if (!tgt) continue;
+        tgt.classList.toggle('pinned', !es[i].isIntersecting);
+        updateStickyChip(tgt);
+      }
+    }, { root: root, threshold: 0 });
+    sent._stickyBubble = b; b._sent = sent;
+    stickyIO.observe(sent);
+  }
+  // 工具组（用户直令 2026-09-20 重设计）：连续工具调用（不分 edit/bash）合进一个大折叠块——
+  // 序列进行中：大块展开（头行 工具 ×N + 每个已完成工具一行），每完成一个其盒子收起；
+  // 序列结束（下一个信息块是思考块或正文 delta，或回合收尾）→ 大块整体收成一行头。
+  // 点击头行开合整组；点击组内工具行开合其 IN/OUT。历史重绘走同构结构（makeToolGroupShell）
+  var toolGroup: { head: HTMLElement; body: HTMLElement; count: number } | null = null;
+  function endToolGroup() {
+    if (!toolGroup) return;
+    toolGroup.body.style.display = 'none';
+    toolGroup.head.classList.remove('open');
+    toolGroup = null;
+  }
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
@@ -357,11 +388,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       return;
     }
     var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user');
-    // 工单28 追加（用户直令 2026-09-20）：sticky 默认限两行（面积太大），点击展开/再点折叠；
-    // 迁移时旧 bubble 连 sticky-open 状态一起摘，新 bubble 永远从折叠态起步
-    if (stickyQ) { stickyQ.classList.remove('sticky-q'); stickyQ.classList.remove('sticky-open'); }
+    // 工单28 追加（用户直令 2026-09-20）：迁移时旧 bubble 连 sticky-open/pinned 状态一起摘、
+    // 旧 sentinel 一并 unobserve；新 bubble 从未折叠原位态起步（钉住后才折，超 3 行才出 chip）
+    if (stickyQ) {
+      stickyQ.classList.remove('sticky-q'); stickyQ.classList.remove('sticky-open'); stickyQ.classList.remove('pinned');
+      if (stickyIO && (stickyQ as any)._sent) stickyIO.unobserve((stickyQ as any)._sent);
+    }
     stickyQ = b; b.classList.add('sticky-q');
-    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
+    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } var sent = el('div', 'sticky-sent'); root.appendChild(sent); root.appendChild(b); followingEnd = true; scroll();
+    // 原位态量一次完整内容高（未 clamp，后续钉住判定用它，不再反复读布局）；
+    // sentinel 在 bubble 前，IO 观察它判定钉住（工单28 追加二）
+    observeSticky(sent, b);
+    requestAnimationFrame(function () { (b as any)._fullH = b.scrollHeight; updateStickyChip(b as any); }); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
@@ -534,11 +572,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }, 100);
   }
   function appendDelta(t, ci) {
+    endToolGroup(); // 工具组口径：下一个信息块是正文/思考 → 整组收成一行头（用户直令 2026-09-20）
     var p = liveBlock(ci, 'text');
     p.buf += t;
     streamTick(p); scroll();
   }
   function appendThink(t, ci) {
+    endToolGroup(); // 同上：思考块出现 → 工具组整体折叠
     var p = liveBlock(ci, 'thinking');
     // 返工（用户实测 0.1.28）：只在用户本就贴底时才自动滚底——否则每拍 delta 都拽回底部，
     // 思考块「无法往上翻、不能被打断」。贴底判定必须在追加前算（追加会增大 scrollHeight）
@@ -548,7 +588,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (atBottom) b.scrollTop = b.scrollHeight;
     scroll();
   }
-  function toolStart(id: string, name: string, detail?: string, collapsed?: boolean) {
+  function toolStart(id: string, name: string, detail?: string, collapsed?: boolean, into?: HTMLElement) {
     var t = el('div', 'tool run');
     t.appendChild(el('span', 't-dot'));
     t.appendChild(el('span', 't-name', name));
@@ -574,8 +614,32 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (open) t.classList.add('open'); else t.classList.remove('open');
     });
     toolEls[id] = { row: t, box: box, full: null, outVal: null };
-    root.appendChild(t);
-    root.appendChild(box);
+    // 归属：外部容器（历史重绘）> 进行中的 live 组 > 新开 live 组。头行复用 .tool 行样式，
+    // 点击头行开合整组（组内工具行各自的点击不受影响）
+    if (into) { into.appendChild(t); into.appendChild(box); scroll(); return; }
+    if (!toolGroup) {
+      var grpEl = el('div', 'tool-grp');
+      var head = el('div', 'tool grp-head');
+      head.appendChild(el('span', 't-dot'));
+      head.appendChild(el('span', 't-name', L.toolGroup));
+      head.appendChild(el('span', 't-count', ' ×1'));
+      var garr = el('span', 't-arrow'); garr.innerHTML = ico('chev', 12); head.appendChild(garr);
+      var gbody = el('div', 'grp-body');
+      head.addEventListener('click', function () {
+        var open = gbody.style.display === 'none';
+        gbody.style.display = open ? 'block' : 'none';
+        if (open) head.classList.add('open'); else head.classList.remove('open');
+      });
+      grpEl.appendChild(head); grpEl.appendChild(gbody);
+      root.appendChild(grpEl);
+      toolGroup = { head: head, body: gbody, count: 1 };
+      head.classList.add('open'); // 组进行中默认展开
+    } else {
+      toolGroup.count++;
+      var gc = toolGroup.head.querySelector('.t-count'); if (gc) gc.textContent = ' ×' + toolGroup.count;
+    }
+    toolGroup.body.appendChild(t);
+    toolGroup.body.appendChild(box);
     scroll();
   }
   function toolEnd(id, name, isError, text, detail) {
@@ -620,27 +684,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         t.title = full.slice(0, 400);
       }
     }
-    // 完成即收一个（用户直令 2026-09-20）：不等 settled 统一收；原 wasOpen「保持展开」逻辑作废
+    // 完成即收一个（用户直令 2026-09-20）：不等 settled 统一收；原 wasOpen「保持展开」逻辑作废。
+    // 组计数在 toolStart 时已记，这里不再做行合并（重设计后不分名，组容器负责折叠）
     ref.box.style.display = 'none';
     t.classList.remove('open');
-    // 连续同名折叠成组（bash ×N 不设上限，用户拍板）：DOM 相邻（row→box→row→box 首尾相接）
-    // 才算连续，中间隔文本/思考块不合；重绘后旧引用 nextElementSibling 为 null 也不会误合。
-    // 合并 = 节点搬移零复制（moveChild），被合并方的全量引用先展开进隐藏盒再释放
-    var lt = lastToolGroup;
-    if (lt && lt.name === name && lt.ref.row.nextElementSibling === lt.ref.box && lt.ref.box.nextElementSibling === t && t.nextElementSibling === ref.box) {
-      if (ref.full != null && ref.outVal) { ref.outVal.textContent = ref.full; ref.outVal.classList.add('tb-full'); ref.full = null; }
-      while (ref.box.firstChild) lt.ref.box.appendChild(ref.box.firstChild);
-      root.removeChild(t);
-      root.removeChild(ref.box);
-      delete toolEls[id];
-      lt.count++;
-      if (isError) lt.ref.row.className = 'tool err';
-      var cnt = lt.ref.row.querySelector('.t-count');
-      if (cnt) cnt.textContent = ' ×' + lt.count;
-      else { var nm = lt.ref.row.querySelector('.t-name'); if (nm) nm.appendChild(el('span', 't-count', ' ×' + lt.count)); }
-    } else {
-      lastToolGroup = { name: name, ref: ref, count: 1 };
-    }
     scroll();
   }
   // toast 跨重渲存续（用户实测「切页签回来压缩提示没了」2026-09-20）：notice 是一次性 DOM，
@@ -689,7 +736,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     root.innerHTML = '';
     liveReset();
     toolEls = {};
-    lastToolGroup = null; // 重绘后 DOM 全换，旧组引用作废（相邻判定本身也兕底，这里显式清）
+    toolGroup = null; // 重绘后 DOM 全换，旧组引用作废
     if (!list || !list.length) {
       if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); }
       return;
@@ -709,45 +756,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 已并入共享实现（DIRECTOR 工单三）：与宿主流式工具行同一摘要逻辑，字段并集 + 首字符串兑底
       return toolDetail(args);
     }
-    function toolGroupRun(name, run, mi) {
-      var allOk = true;
-      var lines = [];
-      for (var gi = 0; gi < run.length; gi++) {
-        var g = run[gi];
-        var gd = historyDetail(g.arguments);
-        var gr = (g.id && results[g.id]) || null;
-        if (gr) { gr.used = true; }
-        else { for (var gp = 0; gp < resultList.length; gp++) { if (!resultList[gp].used) { gr = resultList[gp]; resultList[gp].used = true; break; } } }
-        if (gr && gr.isError) allOk = false;
-        var out1 = gr && gr.text ? String(gr.text).replace(/\s+/g, ' ').slice(0, 80) : '';
-        lines.push({ d: gd, out: out1, err: gr ? gr.isError : false });
-      }
-      var t = el('div', 'tool ' + (allOk ? 'ok' : 'err'));
-      t.appendChild(el('span', 't-dot'));
-      t.appendChild(el('span', 't-name', name));
-      var det0 = lines[0] && lines[0].d ? '  ' + lines[0].d : '';
-      var dsum = el('span', 't-detail', '\u00d7' + run.length + det0);
-      dsum.title = lines.map(function(l) { return (l.d || L.noArgs) + (l.out ? '  → ' + l.out : ''); }).join('\n');
-      t.appendChild(dsum); linkify(dsum);
-      var arrA = el('span', 't-arrow'); arrA.innerHTML = ico('chev', 12); t.appendChild(arrA);
-
-      var box = el('div', 'tool-box');
-      for (var li = 0; li < lines.length; li++) {
-        var row = el('div', 'tb-row');
-        var tag = el('span', 'tb-tag'); tag.innerHTML = ico(lines[li].err ? 'x' : 'check', 11);
-
-        tag.style.color = lines[li].err ? '#f66' : '#4ec96e';
-        row.appendChild(tag);
-        row.appendChild(el('span', 'tb-val', (lines[li].d || L.noArgs) + (lines[li].out ? ('  → ' + lines[li].out) : '')));
-        box.appendChild(row);
-      }
-      box.style.display = 'none';
-      t.addEventListener('click', function () {
-        box.style.display = box.style.display === 'none' ? 'block' : 'none';
-        t.classList.toggle('open');
+    // 工具组壳（历史重绘与 live 同构，用户直令 2026-09-20）：头行 工具 ×N + 收起态内容区；
+    // 点击头行开合，组内每行工具可再点开各自 IN/OUT（复用 toolStart/toolEnd 全套交互）
+    function makeToolGroupShell(n: number) {
+      var grpEl = el('div', 'tool-grp');
+      var head = el('div', 'tool grp-head');
+      head.appendChild(el('span', 't-dot'));
+      head.appendChild(el('span', 't-name', L.toolGroup));
+      head.appendChild(el('span', 't-count', ' ×' + n));
+      var arr = el('span', 't-arrow'); arr.innerHTML = ico('chev', 12); head.appendChild(arr);
+      var body = el('div', 'grp-body');
+      body.style.display = 'none'; // 历史组默认收起（序列已结束）
+      head.addEventListener('click', function () {
+        var open = body.style.display === 'none';
+        body.style.display = open ? 'block' : 'none';
+        if (open) head.classList.add('open'); else head.classList.remove('open');
       });
-      root.appendChild(t);
-      root.appendChild(box);
+      grpEl.appendChild(head); grpEl.appendChild(body);
+      root.appendChild(grpEl);
+      return body;
     }
     for (var i = 0; i < list.length; i++) {
       if (i >= list.length - 15) linkifyEnabled = true;
@@ -782,20 +809,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
             else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
             else if (c && c.type === 'toolCall') {
               flushB();
+              // 工具组（用户直令 2026-09-20，不分名）：连续 toolCall 合进一个大折叠块，
+              // 与 live 路径同构；每行工具复用 toolStart/toolEnd 全套交互（点击展开 IN/OUT）。
+              // 历史 OUT 截 1000 不持全量引用（老会话内存零增长，全量在 jsonl 里）
               var run = [c];
-              while (j + 1 < m.content.length && m.content[j+1] && m.content[j+1].type === 'toolCall' && m.content[j+1].name === c.name) { run.push(m.content[++j]); }
-              if (run.length === 1) {
-                var hid = c.id || ('h' + i + '_' + j);
-                var det = historyDetail(c.arguments);
-                toolStart(hid, c.name, det, true);
-                var res = (c.id && results[c.id]) || null;
+              while (j + 1 < m.content.length && m.content[j+1] && m.content[j+1].type === 'toolCall') { run.push(m.content[++j]); }
+              var grpBody = makeToolGroupShell(run.length);
+              for (var ri = 0; ri < run.length; ri++) {
+                var ct2 = run[ri];
+                var hid = ct2.id || ('h' + i + '_' + j + '_' + ri);
+                var det = historyDetail(ct2.arguments);
+                toolStart(hid, ct2.name, det, true, grpBody);
+                var res = (ct2.id && results[ct2.id]) || null;
                 if (!res) { for (var rp = 0; rp < resultList.length; rp++) { if (!resultList[rp].used) { res = resultList[rp]; break; } } }
-                if (res) { res.used = true; toolEnd(hid, c.name, res.isError, res.text, det); }
-                // 子 agent 历史重绘不建浮窗/卡片（用户拍板：消息流只留工具行，浮窗只属 LIVE）——
-                // 否则恢复会话时旧 run 的 final 快照会凭空弹出浮窗；历史看工具行 OUT 文本即可
-              } else {
-                toolGroupRun(c.name, run, i);
+                if (res) { res.used = true; toolEnd(hid, ct2.name, res.isError, res.text != null ? String(res.text).slice(0, 1000) : res.text, det); }
               }
+              // 子 agent 历史重绘不建浮窗/卡片（用户拍板：消息流只留工具行，浮窗只属 LIVE）——
+              // 否则恢复会话时旧 run 的 final 快照会凭空弹出浮窗；历史看工具行 OUT 文本即可
             }
           }
         } else { renderRich(b, textOf(m.content)); }
@@ -1155,7 +1185,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
     if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
-    else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
+    else if (m.type === 'newLive') { endToolGroup(); finalizeLive(); liveReset(); }
     else if (m.type === 'delta') appendDelta(m.text, m.ci);
     else if (m.type === 'thinking') appendThink(m.text, m.ci);
     else if (m.type === 'toolStart') {
