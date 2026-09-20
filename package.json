@@ -99,6 +99,11 @@
           "maximum": 100,
           "description": "上下文占用超过该百分比时，面板顶部提醒建议压缩（同一会话只提醒一次，压缩后重置）"
         },
+        "piChat.appendSystemPrompt": {
+          "type": "string",
+          "default": "",
+          "description": "追加到 pi 系统提示词的额外指令（每次对话生效）；填了内容即生效，留空不追加。改动后新开页签生效（进行中会话不动）；与项目/全局 .pi/APPEND_SYSTEM.md 叠加，互不冲突"
+        },
         "piChat.steeringMode": {
           "type": "string",
           "enum": [

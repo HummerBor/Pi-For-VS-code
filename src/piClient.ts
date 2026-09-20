@@ -44,7 +44,7 @@ export class PiClient {
   }
   private unsubscribe: (() => void) | null = null;
   private initPromise: Promise<void> | null = null;
-  private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string } | null = null;
+  private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string; appendSystemPrompt?: string } | null = null;
   /** 扩展 UI 对话框的挂起请求：id → resolver（panel respondUi 回来时配对） */
   private uiPending = new Map<string, { method: string; resolve: (v: any) => void; timer?: NodeJS.Timeout }>();
   private uiSeq = 1;
@@ -54,9 +54,9 @@ export class PiClient {
   }
 
   /** 启动参数（cwd/启动模式/代理）由 panel 传入；初始化是异步的，所有方法先 await ready() */
-  start(cwd: string, extraArgs: string[] = [], proxyUrl?: string): void {
+  start(cwd: string, extraArgs: string[] = [], proxyUrl?: string, appendSystemPrompt?: string): void {
     if (this.session || this.initPromise) return;
-    this.startOpts = { cwd, extraArgs, proxyUrl };
+    this.startOpts = { cwd, extraArgs, proxyUrl, appendSystemPrompt };
     this.initPromise = this.init();
   }
 
@@ -93,7 +93,15 @@ export class PiClient {
         sessionManager: any;
         sessionStartEvent?: any;
       }) => {
-        const services = await sdk.createAgentSessionServices({ cwd: opts.cwd });
+        // 工单27：追加系统提示词——pi 公开选项 DefaultResourceLoaderOptions.appendSystemPrompt
+        // （resource-loader.d.ts:83），与项目/全局 APPEND_SYSTEM.md 文件并列追加，同时生效。
+        // 空 = 不传，保持无设置时的行为不变。每次重建 services 都要带上：从 startOpts 取
+        // 而不是 init 顶部解构一次，cwd 切换重建时也不会丢
+        const append = this.startOpts?.appendSystemPrompt;
+        const services = await sdk.createAgentSessionServices({
+          cwd: opts.cwd,
+          ...(append ? { resourceLoaderOptions: { appendSystemPrompt: [append] } } : {}),
+        });
         return {
           ...(await sdk.createAgentSessionFromServices({
             services,
