@@ -1715,8 +1715,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         tabbarEl.appendChild(chip);
       })(tabsList[i]);
     }
-    // ＋入口已收敛到头部（与标签条＋撞脸是用户实测吐槽点，2026-09-14 拍板去掉）：
-    // 标签条只承载芯片（切换/关闭/状态点），开新标签走头部＋或 ⏱ 选择器顶部项
+    // ＋入口变迁：2026-09-14 曾按用户拍板收敛到头部（当时吐槽点：与标签条＋撞脸）；
+    // 2026-09-20 用户拍板恢复——页签末尾要 add 按钮开新标签会话，头部＋保留，双入口并存
+    var add = el('span', 'tab-add');
+    add.innerHTML = ico('plus', 12);
+    add.title = L.tabNewTitle;
+    add.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
+    tabbarEl.appendChild(add);
   }
 
   /** 宿主标签清单（唯一事实源）：未读点由宿主记账（后台跑完置位，切回时清） */

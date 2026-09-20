@@ -736,18 +736,18 @@ export class PiCore {
         }
         break;
       case "retryFromLast": {
-        // 模型请求失败后回退：fork 到最近一条用户消息（错误消息从活跃分支清除），原文填回输入框供修改重发
+        // 模型请求失败后的重试入口（错误气泡「↺ 修改后重试」）。
+        // 事故教训（2026-09-20 用户拍板）：旧实现走 client.fork 回退到最近一条用户消息，
+        // 会把该轮 assistant 已完成的全部工作（思考/几十个工具调用）从活跃分支裁掉——
+        // 网络断一下也得从头再来。pi 原生 TUI 遇错从不删东西：错误消息留在分支里，
+        // 用户直接再发消息（如「继续」）就能接着干。故改为纯回填：只把上一条用户消息
+        // 原文填回输入框供修改重发，会话零改动、工作全保留。
         try {
           const fm = await this.client?.getForkMessages();
           const list: any[] = fm?.messages ?? [];
           const last = list[list.length - 1];
           if (!last) {
             this.post({ type: "notice", text: this.L.noMsgToFork });
-            break;
-          }
-          const fr = await this.client!.fork(last.entryId);
-          if (fr?.cancelled) {
-            this.post({ type: "notice", text: this.L.forkCancelled });
             break;
           }
           let text = String(last.text ?? "");
@@ -773,8 +773,7 @@ export class PiCore {
             if (text.startsWith("\n")) text = text.slice(1);
           }
           this.post({ type: "fillInput", text });
-          this.syncRenderKeepQueued();
-          this.post({ type: "notice", text: this.L.forked });
+          this.post({ type: "notice", text: this.L.retryFilled });
         } catch (err) {
           this.post({ type: "notice", text: this.L.forkFail + (err as Error).message });
         }

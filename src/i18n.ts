@@ -32,8 +32,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     autoQueued: "⏳ agent 忙碌中，已自动转为排队插话",
     aborted: "⏹ 已中断当前任务（已发送的消息保留在会话中）",
     noMsgToFork: "⚠ 没有可回退的用户消息",
-    forkCancelled: "⚠ 回退被 pi 扩展取消",
-    forked: "↩ 已回退到上一条用户消息，错误消息已清除；修改后重发即可",
+    retryFilled: "↩ 已把上一条消息填回输入框；对话原样保留——修改后重发，或直接说「继续」",
     forkFail: "⚠ 回退失败: ",
 
     // ── 会话 ──
@@ -452,8 +451,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     autoQueued: "⏳ Agent busy, message queued as steering automatically",
     aborted: "⏹ Current task aborted (sent messages are kept in the session)",
     noMsgToFork: "⚠ No user message to fall back to",
-    forkCancelled: "⚠ Fork was cancelled by a pi extension",
-    forked: "↩ Reverted to the last user message; the error message was cleared. Edit and resend",
+    retryFilled: "↩ Last message filled into the input; the conversation is kept intact — edit and resend, or just say \"continue\"",
     forkFail: "⚠ Revert failed: ",
 
     nsConfirm: "pi is working. Starting a new session will abort the current task. Continue?",
