@@ -361,20 +361,9 @@ export class PiCore {
       }
     })();
 
-    // 恢复上次使用的模型 / 思考等级（每标签记忆，工单十五刀3；旧全局 key 兑底见 lastModelFor）
-    const lastModel = this.lastModelFor();
-    const lastThinking = this.lastThinkingFor();
-    if (lastModel || lastThinking) {
-      void (async () => {
-        try {
-          if (lastModel) await client.setModel(lastModel.provider, lastModel.id);
-          if (lastThinking) await client.setThinkingLevel(lastThinking);
-        } catch {
-          // 恢复失败不影响使用
-        }
-        await this.refreshState();
-      })();
-    }
+    // 恢复上次使用的模型/思考等级（每标签记忆，工单十五刀3）：不再与 switchSession 并行赛跑
+    // （原 fire-and-forget 补回实测会被恢复流程的 switchSession 冲掉——pi 切会话会把模型
+    // 重置为会话文件里存的值），改由 restore 流程在 switchSession 之后统一补回，见下
 
     // 初始化状态和已有会话内容：按项目恢复上次使用的会话文件（免重选，且不串项目）。
     // 注意顺序：先等恢复（可能 switchSession）完成再刷新状态/重绘，
@@ -390,10 +379,11 @@ export class PiCore {
           } catch {
             // 文件失效则退回 -c 恢复的最近会话
           }
-          await this.refreshState(); // 切换后立刻同步标题，杜绝「内容 A 标题 B」
-        } else {
-          await this.refreshState();
         }
+        // 模型/思考记忆补回必须在 switchSession **之后**（顺序即正确性），随后的
+        // refreshState 把补回结果同步到页脚（用户报「一切会话模型就变了」的修复）
+        await this.applyModelMemory();
+        await this.refreshState(); // 切换后立刻同步标题，杜绝「内容 A 标题 B」
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
         this.replaySubagentRuns(d?.messages ?? []);
@@ -1147,6 +1137,28 @@ export class PiCore {
     ];
   }
 
+  /** 每标签记忆的模型/思考等级补回（工单十五刀3 语义补全，2026-09-18）：pi 的 switchSession
+   *  会把模型重置为会话文件里存的值（用户实测：切老会话后页脚显示该会话的 Free Models
+   *  Router，页签上自选的模型被顶掉）。补回必须在**每次 switchSession 之后**——启动恢复/
+   *  切历史/新建/重载四条链路统一走这里；原先与 switchSession 并行的补回是竞态（谁后到谁赢）。
+   *  panel 切历史链路用 reapplyModelMemory */
+  private async applyModelMemory(): Promise<void> {
+    const lastModel = this.lastModelFor();
+    const lastThinking = this.lastThinkingFor();
+    if (!lastModel && !lastThinking) return;
+    try {
+      if (lastModel) await this.client?.setModel(lastModel.provider, lastModel.id);
+      if (lastThinking) await this.client?.setThinkingLevel(lastThinking);
+    } catch {
+      // 补回失败不影响使用
+    }
+  }
+  /** panel 切历史会话后的补回入口（含页脚同步） */
+  async reapplyModelMemory(): Promise<void> {
+    await this.applyModelMemory();
+    await this.refreshState();
+  }
+
   /** 面板版 /reload：重建 pi 运行时，让新装的包/技能/扩展立即生效（pi 原生 /reload 的
    *  等价物）。此前被误归 tuiOnly 挡掉——装个技能就得重启插件，不合理（2026-09-18
    *  用户指出）。持久会话从文件恢复、聊天不丢（会话文件就是真相）；ephemeral
@@ -1173,6 +1185,8 @@ export class PiCore {
         // 会话文件失效则停在 -c 恢复的最近会话，不阻断重载
       }
     }
+    // switchSession 会把模型重置为会话文件里存的值——记忆补回（每标签，刀3）
+    await this.applyModelMemory();
     this.dbg("reload: runtime rebuilt, refetching commands");
     await this.refreshState();
     this.syncRenderKeepQueued();
@@ -1208,15 +1222,9 @@ export class PiCore {
       this.queued = [];
       this.post({ type: "queuedClear" });
       // 不再发「已开始新会话」通知：欢迎页本身就是反馈，多余通知会挂在欢迎页下面
-      // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去（每标签，刀3）
-      const lastModel = this.lastModelFor();
-      const lastThinking = this.lastThinkingFor();
-      try {
-        if (lastModel) await client.setModel(lastModel.provider, lastModel.id);
-        if (lastThinking) await client.setThinkingLevel(lastThinking);
-      } catch {
-        // 补回失败不影响使用
-      }
+      // pi 的 new_session 会把模型重置为默认值 → 把记住的模型/思考等级补回去（每标签，刀3，
+      // 统一走 applyModelMemory——switchSession/newSession/reset 同口径）
+      await this.applyModelMemory();
       await this.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.nsFail + (err?.message ?? err) });

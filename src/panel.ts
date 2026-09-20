@@ -781,7 +781,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "render", messages: d2?.messages ?? [] });
           const name2 = (pick.label ?? "").replace(/^\$\(history\) /, "");
           this.post({ type: "notice", text: this.L.sessionRestored + name2 });
-          await nc.refreshState();
+          // 切完补回每标签模型/思考记忆并同步页脚（刀3 语义补全，同下方主路径口径）
+          await nc.reapplyModelMemory();
           return;
         }
         const r = await client.switchSession(pick.file);
@@ -794,7 +795,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const name = (pick.label ?? "").replace(/^\$\(history\) /, "");
         this.post({ type: "notice", text: this.L.sessionRestored + name });
       }
-      await this.core.refreshState();
+      // 工单15刀3 记忆语义补全：switchSession 会把模型重置为会话文件里存的值，
+      // 页签上自选的模型/思考等级要在切完后补回（用户报「一切会话模型就变了」）
+      await this.core.reapplyModelMemory();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
