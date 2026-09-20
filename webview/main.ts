@@ -124,6 +124,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 视图内上行显式带自己的 tabId（不再借活动页签打标——换镜退役后归属唯一）
     function vpost(m: any) { if (m.tabId === undefined) m.tabId = id; vscodeApi.postMessage(m); }
   var toolEls = {}; var queuedItems = [];
+  // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
+  // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
+  var stickyQ: HTMLElement | null = null;
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
@@ -348,7 +351,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       root.appendChild(card); followingEnd = true; scroll();
       return;
     }
-    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
+    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user'); if (stickyQ) { stickyQ.classList.remove('sticky-q'); } stickyQ = b; b.classList.add('sticky-q'); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } root.appendChild(b); followingEnd = true; scroll(); }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);

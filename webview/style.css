@@ -69,6 +69,11 @@ body > :not(#bg-layer):not(.subdock) { position: relative; z-index: 1; }
 .q-item .q-btn:hover { opacity: 1; }
 .bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; }
 .bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; max-width: 88%; }
+/* 工单28：最后一问 sticky 悬浮——滚出视口时钉在面板顶部，零 JS 滚动监听。只对最后一条 user
+   bubble 生效（class 随 addUser 迁移，main.ts）；assistant/tool 行不参与。top:-10px 抵消
+   .msg-root 的 padding-top 10px（两处必须同步改），钉住时与面板可见顶边齐平；opacity 置 1：
+   默认 .92 半透明会在钉住时透出下方滚动内容（穿帮）；阴影隔离钉住态与背后滚动内容的视觉边界 */
+.bubble.user.sticky-q { position: sticky; top: -10px; z-index: 10; opacity: 1; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
 .bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }
 .bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }
 .bubble.errmsg { background: transparent; border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c); color: var(--vscode-errorForeground, #f66); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
