@@ -97,6 +97,9 @@ details.think.compaction-flash > summary {
   border-radius: 3px;
 }
 .think-body { white-space: pre-wrap; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin-top: 4px; }
+/* 工单29扩权（用户直令 2026-09-20）：思考块限高内部滚动——live 流式与历史重绘同用 .think-body，
+   一处生效两路受益；流式期间 appendThink 自动滚底（main.ts）。纯 CSS，零监听器 */
+.think-body { max-height: 240px; overflow-y: auto; }
 .tool { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .85; margin: 5px 0 2px 8px; padding: 2px 6px; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); }
 .tool-out { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .55; white-space: pre-wrap; margin: 0 0 4px 16px; }
 .notice { font-size: 11px; opacity: .55; margin: 4px 8px; }
@@ -118,6 +121,10 @@ details.think.compaction-flash > summary {
 .tool-box .tb-row + .tb-row { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
 .tool-box .tb-tag { flex: none; opacity: .65; width: 26px; }
 .tool-box .tb-val { white-space: pre-wrap; word-break: break-all; opacity: .85; }
+/* 工单29扩权：全量 OUT 展开态限高内部滚动（首次点开换全量时才加 tb-full，1000 字预览不限） */
+.tool-box .tb-val.tb-full { max-height: 320px; overflow-y: auto; }
+/* 工单29扩权：连续同名工具组的 ×N 计数（bash ×N 不设上限，用户拍板） */
+.tool .t-count { opacity: .6; }
 
 /* ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ── */
 .subdock { position: fixed; right: 12px; top: 48px; width: 340px; max-width: 60%; z-index: 50; transform-origin: top right; transition: transform .18s ease-out, opacity .18s ease-out; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-focusBorder, #0078d4); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); overflow: hidden; font-size: 12px; }

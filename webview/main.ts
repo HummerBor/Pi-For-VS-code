@@ -531,6 +531,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function appendThink(t, ci) {
     var p = liveBlock(ci, 'thinking');
     p.buf += t; p.body.appendChild(document.createTextNode(t));
+    // 工单29扩权：think-body 限高后流式自动滚底（新思考内容始终可见，外层 root 滚动跟随不受影响）
+    p.body.scrollTop = p.body.scrollHeight;
     scroll();
   }
   function toolStart(id: string, name: string, detail?: string, collapsed?: boolean) {
@@ -573,7 +575,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       root.appendChild(ref.box);
     }
     var t = ref.row;
-    var wasOpen = ref.box.style.display !== 'none';
     t.className = 'tool ' + (isError ? 'err' : 'ok');
     t.innerHTML = '';
     t.appendChild(el('span', 't-dot'));
@@ -588,15 +589,45 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ref.box.appendChild(r1);
     }
     linkify(ref.box);
-    if (text) {
+    var full = text != null ? String(text) : '';
+    if (full) {
       var r2 = el('div', 'tb-row');
       r2.appendChild(el('span', 'tb-tag', 'OUT'));
-      r2.appendChild(el('span', 'tb-val', String(text).slice(0, 1000)));
+      var ov = el('span', 'tb-val', full.slice(0, 1000)); // 预览只存 1000 字；全量不进 DOM
+      r2.appendChild(ov);
       ref.box.appendChild(r2);
-      t.title = String(text).slice(0, 400);
+      ref.outVal = ov;
+      if (full.length > 1000) {
+        // 工单29扩权省内存口径：全量只持引用不复制（字符串本就在事件流里），首次点开才写
+        // DOM、换完即弃；settled 后 renderAll 整树重绘时引用与全量 DOM 全部释放——内存
+        // 是暂态的，上限 = 一个回合的工具数
+        ref.full = full;
+        t.title = L.toolTruncated + '\n' + full.slice(0, 400);
+      } else {
+        t.title = full.slice(0, 400);
+      }
     }
-    if (!ref.box.textContent) { ref.box.style.display = 'none'; }
-    if (wasOpen && ref.box.style.display !== 'none') t.classList.add('open');
+    // 完成即收一个（用户直令 2026-09-20）：不等 settled 统一收；原 wasOpen「保持展开」逻辑作废
+    ref.box.style.display = 'none';
+    t.classList.remove('open');
+    // 连续同名折叠成组（bash ×N 不设上限，用户拍板）：DOM 相邻（row→box→row→box 首尾相接）
+    // 才算连续，中间隔文本/思考块不合；重绘后旧引用 nextElementSibling 为 null 也不会误合。
+    // 合并 = 节点搬移零复制（moveChild），被合并方的全量引用先展开进隐藏盒再释放
+    var lt = lastToolGroup;
+    if (lt && lt.name === name && lt.ref.row.nextElementSibling === lt.ref.box && lt.ref.box.nextElementSibling === t && t.nextElementSibling === ref.box) {
+      if (ref.full != null && ref.outVal) { ref.outVal.textContent = ref.full; ref.outVal.classList.add('tb-full'); ref.full = null; }
+      while (ref.box.firstChild) lt.ref.box.appendChild(ref.box.firstChild);
+      root.removeChild(t);
+      root.removeChild(ref.box);
+      delete toolEls[id];
+      lt.count++;
+      if (isError) lt.ref.row.className = 'tool err';
+      var cnt = lt.ref.row.querySelector('.t-count');
+      if (cnt) cnt.textContent = ' ×' + lt.count;
+      else { var nm = lt.ref.row.querySelector('.t-name'); if (nm) nm.appendChild(el('span', 't-count', ' ×' + lt.count)); }
+    } else {
+      lastToolGroup = { name: name, ref: ref, count: 1 };
+    }
     scroll();
   }
   // toast 跨重渲存续（用户实测「切页签回来压缩提示没了」2026-09-20）：notice 是一次性 DOM，
@@ -645,6 +676,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     root.innerHTML = '';
     liveReset();
     toolEls = {};
+    lastToolGroup = null; // 重绘后 DOM 全换，旧组引用作废（相邻判定本身也兕底，这里显式清）
     if (!list || !list.length) {
       if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); }
       return;

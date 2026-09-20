@@ -398,6 +398,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     genArgs: " 正在生成调用参数… {n} 字符",
     thinkingProcess: "思考过程",
     noArgs: "(无参数)",
+    toolTruncated: "输出已截断，点击展开全量",
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
     smTitle: "子智能体",
     smRunningGroup: "已开启",
@@ -797,6 +798,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     genArgs: " Generating call arguments… {n} chars",
     thinkingProcess: "Thinking",
     noArgs: "(no args)",
+    toolTruncated: "Output truncated — click to expand",
     // Subagent monitor (subagentUpdate): card header and task rows
     // 子 agent 监控（subagentUpdate）：概览分组行 + 下钻视图
     smTitle: "Subagents",
