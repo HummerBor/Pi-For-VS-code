@@ -58,18 +58,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private duckUri = "";
 
   // ── 工单七：本次改动（git diff 可视化）宿主侧状态。git/还原语义全在本 adapter，核心只产中性事件 ──
-  /** webview 展示清单（changesList 下发镜像）；空数组 = 无条 */
-  private changesFiles: ChangesFileInfo[] = [];
-  /** 还原/diff 动作所需细节（不进 webview）：归一化绝对路径 → 信息 */
-  private changesDetail = new Map<
+  // 三期 per-tab 化（2026-09-20 用户实测「其他会话看的也是同一个改动条」）：原是 panel 全局
+  // 单份（单会话时代遗产），多页签下归属错乱——A 页签 run 结束时条画进当时活动的 B 视图。
+  // 现 keys=tabId；「查看/关闭」只在活动视图的条上发生，取 activeTabId 即可
+  private changesTab = new Map<
     string,
-    { source: "tool" | "git"; tool: string; patches: string[]; canGit: boolean; inHead: boolean; preexisting: boolean }
+    {
+      files: ChangesFileInfo[];
+      detail: Map<string, { source: "tool" | "git"; tool: string; patches: string[]; canGit: boolean; inHead: boolean; preexisting: boolean }>;
+      dismissed: boolean;
+      startP: Promise<Map<string, string> | null> | null;
+      lastStateFile: string | null;
+    }
   >();
-  private changesDismissed = false;
-  /** run 开始时的 git status 快照 Promise（区分「运行期间才出现的改动」与运行前既有 WIP） */
-  private runStartStatusP: Promise<Map<string, string> | null> | null = null;
-  /** 上一条 state 消息里的 sessionFile（会话切换 → 清变更条，会话域不残留） */
-  private lastStateFile: string | null = null;
+  private changesOf(tabId: string) {
+    let s = this.changesTab.get(tabId);
+    if (!s) {
+      s = { files: [], detail: new Map(), dismissed: false, startP: null, lastStateFile: null };
+      this.changesTab.set(tabId, s);
+    }
+    return s;
+  }
   /** HEAD 版本内容只读文档提供器（vscode.diff 左侧用，懒注册一次） */
   private headProvider = vscode.workspace.registerTextDocumentContentProvider("pi-head", {
     provideTextDocumentContent: (uri) => this.headContent(uri),
@@ -145,8 +154,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       core.freshTab = this.freshTabs.has(tabId);
       this.freshTabs.delete(tabId);
       // 工单七 run 边界回调：agent_start 快照 / agent_settled 接收工具命中清单（合并 git 比对在 handleRunSettled）
-      core.onRunStart = () => this.snapshotGitStatus();
-      core.onRunSettled = (files) => void this.handleRunSettled(files);
+      core.onRunStart = () => this.snapshotGitStatus(tabId); // 回调捕获 tabId：后台页签的 run 也归自己
+      core.onRunSettled = (files) => void this.handleRunSettled(tabId, files);
       this.cores.set(tabId, core);
     }
     return core;
@@ -222,8 +231,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       startError: (err) => this.onStartError(err),
       showChanges: () => this.showChangesFlow(),
       dismissChanges: async () => {
-        this.changesDismissed = true;
-        this.postChangesList();
+        // 条只属活动视图，点击必在活动页签（工单七 per-tab 化：后台条点不到）
+        const s = this.changesOf(this.activeTabId);
+        s.dismissed = true;
+        this.postChangesList(this.activeTabId);
       },
     };
   }
@@ -330,7 +341,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
       // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
       if (m.type === "webviewReady") {
-        if (this.changesFiles.length) this.postChangesList();
+        // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢——三期 per-tab：逐页签各发各的
+        for (const [tid, s] of this.changesTab) if (s.files.length) this.postChangesList(tid);
         // 工单十五刀2：标签清单随握手下发（webview 启动即渲染标签条）
         this.postTabs();
         // 工单24 架构归位：webview 重载后每页签的树都空了，给所有已建核心各发一次快照——
@@ -1720,29 +1732,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (msg.type === "state") {
+      const s = this.changesOf(tabId);
       const f = msg.sessionFile ?? null;
-      if (f !== this.lastStateFile) {
-        this.lastStateFile = f;
-        if (this.changesFiles.length) {
-          this.changesFiles = [];
-          this.changesDetail.clear();
-          this.postChangesList();
+      if (f !== s.lastStateFile) {
+        s.lastStateFile = f;
+        if (s.files.length) {
+          s.files = [];
+          s.detail.clear();
+          this.postChangesList(tabId);
         }
       }
     }
     this.post(msg, tabId);
   }
 
-  private postChangesList(): void {
-    this.post({ type: "changesList", files: this.changesDismissed ? [] : this.changesFiles });
+  private postChangesList(tabId: string): void {
+    const s = this.changesOf(tabId);
+    this.post({ type: "changesList", files: s.dismissed ? [] : s.files }, tabId);
   }
 
   /** agent_start 时对 workspace 做 git status 快照（run 的 baseline；非 git 目录得 null 兑底） */
-  private snapshotGitStatus(): void {
-    this.runStartStatusP = null;
+  private snapshotGitStatus(tabId: string): void {
+    const s = this.changesOf(tabId);
+    s.startP = null;
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) return;
-    this.runStartStatusP = this.gitStatus(root);
+    s.startP = this.gitStatus(root);
   }
 
   /** 跑一条 git 命令，成功回 stdout、失败回 null（非 git 目录/git 不在 PATH 都走 null，不抛） */
@@ -1783,18 +1798,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   /** agent_settled：合并工具命中清单（piCore 中性回调）与 git 比对兜底，产出「本次改动」 */
-  private async handleRunSettled(files: ToolChangedFile[]): Promise<void> {
+  private async handleRunSettled(tabId: string, files: ToolChangedFile[]): Promise<void> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) return;
-    const startStatus = this.runStartStatusP ? await this.runStartStatusP : null;
-    this.runStartStatusP = null;
+    const s = this.changesOf(tabId);
+    const startStatus = s.startP ? await s.startP : null;
+    s.startP = null;
     const nowStatus = await this.gitStatus(root);
     const relOf = (abs: string): string | null => {
       const r = path.relative(root, abs);
       return r.startsWith("..") ? null : r.replace(/\\/g, "/"); // 工作区外不归因
     };
     const norm = (p: string): string => path.normalize(p);
-    this.changesDetail.clear();
+    s.detail.clear();
     const list: ChangesFileInfo[] = [];
     // 1) 工具命中（裁决 11②：还原只对工具清单命中文件提供；git-only 仅展示）
     for (const f of files) {
@@ -1808,7 +1824,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const canGit = nowStatus !== null;
       // inHead：HEAD 里有此文件（checkout 可回退）；?? 未跟踪 / A 新增不在 HEAD，只能走 patch 逆向
       const inHead = canGit && !!xy && xy !== "??" && xy[0] !== "A" && xy[1] !== "A";
-      this.changesDetail.set(norm(abs), {
+      s.detail.set(norm(abs), {
         source: "tool",
         tool: f.tool,
         patches: f.patches,
@@ -1822,20 +1838,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (nowStatus) {
       for (const [r, xy] of nowStatus) {
         const abs = norm(path.join(root, r));
-        if ([...this.changesDetail.keys()].some((k) => k.toLowerCase() === abs.toLowerCase())) continue;
+        if ([...s.detail.keys()].some((k) => k.toLowerCase() === abs.toLowerCase())) continue;
         if (startStatus?.has(r)) continue; // 运行前已 dirty，不归因本轮
-        this.changesDetail.set(abs, { source: "git", tool: "", patches: [], canGit: true, inHead: xy !== "??" && xy[0] !== "A", preexisting: false });
+        s.detail.set(abs, { source: "git", tool: "", patches: [], canGit: true, inHead: xy !== "??" && xy[0] !== "A", preexisting: false });
         list.push({ path: abs, source: "git" });
       }
     }
-    this.changesFiles = list;
-    this.changesDismissed = false;
-    this.postChangesList();
+    s.files = list;
+    s.dismissed = false;
+    this.postChangesList(tabId);
   }
 
   /** 「查看本次改动」主链路：文件 QuickPick → 动作二选（diff / 还原） */
   private async showChangesFlow(): Promise<void> {
-    if (!this.changesFiles.length) {
+    // QuickPick 是模态全局 UI，用户在活动视图的条上点击 → 数据取活动页签的（工单七 per-tab）
+    const s = this.changesOf(this.activeTabId);
+    if (!s.files.length) {
       this.post({ type: "notice", text: this.L.chgNone });
       return;
     }
@@ -1844,8 +1862,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     type ChgButton = vscode.QuickInputButton & { act?: string };
     type ChgItem = vscode.QuickPickItem & { path: string; buttons?: ChgButton[] };
     const buildItems = (): ChgItem[] =>
-      this.changesFiles.map((f) => {
-        const d = this.changesDetail.get(f.path);
+      s.files.map((f) => {
+        const d = s.detail.get(f.path);
         const src = !d ? ""
           : d.source === "git" ? this.L.chgGitOnly
           : this.revertable(d) ? this.L.chgToolRev
@@ -1870,18 +1888,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     qp.placeholder = this.L.chgPickPh;
     qp.onDidTriggerItemButton(async ({ item, button }) => {
       const act = (button as ChgButton).act;
-      const d = this.changesDetail.get(item.path);
+      const d = s.detail.get(item.path);
       if (act === "diff") await this.openChangesDiff(item.path);
       else if (act === "revert" && d) {
         await this.revertFile(item.path, d);
-        qp.items = buildItems(); // 还原完原地刷新清单（revertFile 已把文件移出 changesFiles）
+        qp.items = buildItems(); // 还原完原地刷新清单（revertFile 已把文件移出清单）
       }
     });
     qp.onDidAccept(() => {
       const item = qp.selectedItems[0];
       qp.hide();
       if (!item) return;
-      const d = this.changesDetail.get(item.path);
+      const d = s.detail.get(item.path);
       if (d && (d.canGit && d.inHead || d.source === "tool" && d.patches.length > 0)) void this.openChangesDiff(item.path);
       else this.post({ type: "notice", text: this.L.chgNoAction });
     });
@@ -1902,7 +1920,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async openChangesDiff(abs: string): Promise<void> {
-    const d = this.changesDetail.get(this.hunkKey(abs));
+    const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(abs));
     if (d?.canGit && d.inHead) await this.openHeadDiff(abs);
     else await this.openPrerunDiff(abs);
   }
@@ -1933,7 +1951,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const q = decodeURIComponent(uri.query);
     if (q.startsWith("prerun:")) {
       const abs = q.slice("prerun:".length);
-      const d = this.changesDetail.get(this.hunkKey(abs));
+      const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(abs));
       if (!d || !d.patches.length) return "";
       try {
         let content = fs.readFileSync(abs, "utf8");
@@ -2008,9 +2026,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         fs.writeFileSync(abs, content, "utf8");
       }
       this.post({ type: "notice", text: this.L.chgRevertDone + path.basename(abs) });
-      this.changesFiles = this.changesFiles.filter((f) => f.path !== abs);
-      this.changesDetail.delete(abs);
-      this.postChangesList();
+      const s = this.changesOf(this.activeTabId);
+      s.files = s.files.filter((f) => f.path !== abs);
+      s.detail.delete(abs);
+      this.postChangesList(this.activeTabId);
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.chgRevertFail + (err?.message ?? err) });
     }
