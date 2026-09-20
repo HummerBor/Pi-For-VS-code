@@ -121,12 +121,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var attachbarEl = q('#attachbar'); var attachEl = q('#attach'); var fileInput = q('#file') as HTMLInputElement;
     var suggestEl = q('#suggest'); var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
     var bannerEl = q('#banner'); var changesBarEl = q('#changesbar'); var queuebarEl = q('#queuebar');
+    var compactbarEl = q('#compactbar'); // 压缩浮动条（仿改动条：完成后提示 + 点击定位折叠块）
     // 视图内上行显式带自己的 tabId（不再借活动页签打标——换镜退役后归属唯一）
     function vpost(m: any) { if (m.tabId === undefined) m.tabId = id; vscodeApi.postMessage(m); }
   var toolEls = {}; var queuedItems = [];
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
   // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
   var stickyQ: HTMLElement | null = null;
+  // 工单29扩权（用户直令 2026-09-20）：连续同名工具折叠成组——记最近完成的工具组
+  // {name, ref(存活行), count}。合并条件靠 DOM 相邻判定（row→box→row→box 首尾相接），
+  // 中间插了文本/思考块即不是「连续」，重绘后旧引用的 nextElementSibling 为 null 也不会误合
+  var lastToolGroup: { name: string; ref: any; count: number } | null = null;
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
@@ -545,11 +550,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     box.style.display = collapsed ? 'none' : 'block';
     if (!collapsed) t.classList.add('open');
     t.addEventListener('click', function () {
-      if (!box.textContent) return;
-      box.style.display = box.style.display === 'none' ? 'block' : 'none';
-      t.classList.toggle('open');
+      var ref = toolEls[id];
+      if (!ref || !box.textContent) return;
+      var open = ref.box.style.display === 'none';
+      // 工单29扩权：展开时若有全量 OUT（>1000 字被截的），换全量进滚动容器（一次性换，之后只收/展）
+      if (open && ref.full != null && ref.outVal) { ref.outVal.textContent = ref.full; ref.outVal.classList.add('tb-full'); ref.full = null; }
+      ref.box.style.display = open ? 'block' : 'none';
+      if (open) t.classList.add('open'); else t.classList.remove('open');
     });
-    toolEls[id] = { row: t, box: box };
+    toolEls[id] = { row: t, box: box, full: null, outVal: null };
     root.appendChild(t);
     root.appendChild(box);
     scroll();
@@ -594,7 +603,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 本页签 core 后续任何 uiState 重渲都会冲掉它。持久事实源是折叠块（jsonl compaction 条目，
   // 恢复时从数据重建，在最顶部）；本层只是让瞬时 toast 也活过重渲——按存档重挂，发新消息即清
   var lastNotice = '';
-  var seenCompactions = -1; // 折叠块计数基线：-1=未立基线（首渲不跳顶），增大=新压缩（触发定位）
+  var seenCompactions = -1; // 折叠块计数基线：-1=未立基线（首渲不跳顶），增大=新压缩
+  var compactBarShownAt = -1; // 已弹过条的压缩计数（防同轮重渲重弹；dismiss 后置 = seenCompactions）
   function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll(); }
   function textOf(content) {
     if (typeof content === 'string') return content;
@@ -767,24 +777,34 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 重挂存活的 toast（renderAll 开头清了 root；空列表 welcome 早退分支不挂——新会话无历史 toast）
     if (lastNotice) { var ln = el('div', 'notice', lastNotice); linkify(ln); root.appendChild(ln); }
     scroll();
-    // 压缩完成定位（2026-09-20 用户拍板）：折叠块在消息区最顶（压缩点前历史已被替换，
-    // 它前面没有消息），全量重渲后跟随滚动在底部、块不可见——手动压缩（空闲）完成后
-    // 定位居中 + 短暂高亮，带用户看一眼压缩边界。首渲只立基线（恢复旧会话不跳顶）；
-    // 自动压缩发生在流式中，不拽用户视线（不定位）
+    // 压缩完成 → 浮动条（2026-09-20 用户拍板：自动跳顶难受，仿「查看改动」条浮动提示）。
+    // 折叠块在消息区最顶（压缩点前历史已被替换，它前面没有消息），平时不可见——
+    // 条常驻提示本轮有压缩，「查看压缩」定位到块（点击触发的高亮不搢流）。
+    // 首渲只立基线（恢复旧会话不弹条）；count 增大才弹（同轮重渲不重复弹）
     var cc = 0;
     if (list) for (var cm = 0; cm < list.length; cm++) if (list[cm].role === 'compactionSummary') cc++;
-    if (seenCompactions < 0) seenCompactions = cc;
-    else if (cc > seenCompactions) {
-      seenCompactions = cc;
-      if (id === activeTabId && !streaming) {
-        var cb = root.querySelector('details.compaction');
-        if (cb) {
-          cb.scrollIntoView({ block: 'center' });
-          cb.classList.add('compaction-flash');
-          setTimeout(function () { cb.classList.remove('compaction-flash'); }, 2000);
-        }
-      }
-    }
+    if (seenCompactions < 0) { seenCompactions = cc; compactBarShownAt = cc; } // 首渲立基线：恢复旧会话不弹条
+    else if (cc > seenCompactions) { seenCompactions = cc; renderCompact(); } // 新压缩 → 弹条
+  }
+  /** 压缩浮动条：文案 + 查看压缩（定位折叠块）+ 关闭；纯视图内 DOM，零协议新增 */
+  function renderCompact() {
+    var cbEl = root.querySelector('details.compaction');
+    if (!cbEl) return;
+    compactBarShownAt = seenCompactions;
+    compactbarEl.innerHTML = '';
+    var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = L.compactBarText;
+    compactbarEl.appendChild(txt);
+    var act = document.createElement('button'); act.className = 'b-act'; act.textContent = L.compactBarView;
+    act.onclick = function () {
+      cbEl.scrollIntoView({ block: 'center' });
+      cbEl.classList.add('compaction-flash');
+      setTimeout(function () { cbEl.classList.remove('compaction-flash'); }, 2000);
+    };
+    compactbarEl.appendChild(act);
+    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
+    x.onclick = function () { compactbarEl.style.display = 'none'; compactbarEl.innerHTML = ''; compactBarShownAt = seenCompactions; };
+    compactbarEl.appendChild(x);
+    compactbarEl.style.display = 'flex';
   }
   function fmtSession(file, name) {
     if (name) return name;

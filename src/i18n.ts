@@ -175,6 +175,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     // ── 本次改动条 + QuickPick（工单七）──
     changesCount: "✦ 本轮改动 {n} 个文件",
     changesView: "查看改动",
+    // 压缩浮动条（2026-09-20 用户拍板：压缩完成不自动跳顶，仿改动条浮动提示 + 点击定位）
+    compactBarText: "✦ 本次对话已压缩上下文",
+    compactBarView: "查看压缩",
     chgPickPh: "本轮改动的文件（git 检出项可能是你自己的修改，仅展示）",
     chgToolRev: "pi 改动 · 可还原",
     chgToolIrrev: "pi 改动 · 不可还原",
@@ -582,6 +585,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     // ── Changes bar + QuickPick (ticket 7) ──
     changesCount: "✦ {n} file(s) changed this run",
     changesView: "Review changes",
+    compactBarText: "✦ Context compacted this conversation",
+    compactBarView: "View compaction",
     chgPickPh: "Files changed this run (git-detected items may be your own edits; view only)",
     chgToolRev: "changed by pi · reversible",
     chgToolIrrev: "changed by pi · not reversible",
