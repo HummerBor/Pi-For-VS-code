@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-20 交接 5——三期整树搬迁落地（main.ts 每页签一个工厂闭包，compile 绿+27/34/12 全过，待实测）
+最后更新：2026-09-20 交接 5 附——工单27 施工落地（appendSystemPrompt 设置入口，compile 绿，待实测）
 
 # 交接 5：三期整树搬迁落地（2026-09-20，接手先读本节）
 
@@ -38,6 +38,24 @@
 
 **待实测（需重载窗口，对齐交接 4 第 6 步）**：①流式中切页签、后台完成切回 ②双页签双模型
 ③stop 键/Esc 中断落在正确页签 ④0.1.19 遗留实测点（交接 4 的 ①~④）全部适用
+
+# 工单27 施工回报：piChat.appendSystemPrompt 设置入口（2026-09-20，待实测）
+
+**改动面（单笔 537de78，package.json + src/piClient.ts + src/piCore.ts，webview/protocol 零改动）**：
+- package.json：新增 `piChat.appendSystemPrompt`（string，default ""，中文描述含「改动后新开页签
+  生效；与 .pi/APPEND_SYSTEM.md 叠加不冲突」）
+- piClient.start 增第 4 参 appendSystemPrompt；createRuntime 闭包内从 startOpts 取值，非空时给
+  createAgentSessionServices 传 `resourceLoaderOptions: { appendSystemPrompt: [text] }`（每次重建
+  services 都带，cwd 切换不丢）；空值不传键，无设置行为不变
+- piCore.ensureClient 读 `caps.getConfig("piChat", "appendSystemPrompt", "").trim()` 透传
+  （铁律：核心不 import vscode）；只在启动链路读一次，无需监听设置变化
+
+**验证**：npm run compile 全绿（typecheck:webview → vite → tsc）；grep 透传链三处齐
+（package.json:102 / piClient.ts:57,100,103 / piCore.ts:351-352）。0.1.22 已打包待实测。
+
+**待实测（用户主验收）**：①设置里填探针文字（如「回答第一行必须输出：追加提示词生效✓」）→
+新开页签提问，第一行命中；②清空设置 → 新页签恢复正常；③（可选）与 .pi/APPEND_SYSTEM.md
+同时存在时两条都追加。
 
 **工单队列**：27/28/29 仍未动。
 
