@@ -594,6 +594,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 本页签 core 后续任何 uiState 重渲都会冲掉它。持久事实源是折叠块（jsonl compaction 条目，
   // 恢复时从数据重建，在最顶部）；本层只是让瞬时 toast 也活过重渲——按存档重挂，发新消息即清
   var lastNotice = '';
+  var seenCompactions = -1; // 折叠块计数基线：-1=未立基线（首渲不跳顶），增大=新压缩（触发定位）
   function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll(); }
   function textOf(content) {
     if (typeof content === 'string') return content;
@@ -621,7 +622,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 收起态文案含 tokensBefore（原多少 tokens）声明边界，克服单（工单六）横幅只管「当下」的局限
   function makeCompaction(m) {
     var d = document.createElement('details');
-    d.className = 'think';
+    d.className = 'think compaction'; // 追加可寻址类：压缩完成后的定位高亮用（与 thinking 块区分）
     var s = document.createElement('summary');
     s.textContent = L.compactionSummary.replace('{n}', (m.tokensBefore != null ? Number(m.tokensBefore).toLocaleString() : 0));
     d.appendChild(s);
@@ -766,6 +767,24 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 重挂存活的 toast（renderAll 开头清了 root；空列表 welcome 早退分支不挂——新会话无历史 toast）
     if (lastNotice) { var ln = el('div', 'notice', lastNotice); linkify(ln); root.appendChild(ln); }
     scroll();
+    // 压缩完成定位（2026-09-20 用户拍板）：折叠块在消息区最顶（压缩点前历史已被替换，
+    // 它前面没有消息），全量重渲后跟随滚动在底部、块不可见——手动压缩（空闲）完成后
+    // 定位居中 + 短暂高亮，带用户看一眼压缩边界。首渲只立基线（恢复旧会话不跳顶）；
+    // 自动压缩发生在流式中，不拽用户视线（不定位）
+    var cc = 0;
+    if (list) for (var cm = 0; cm < list.length; cm++) if (list[cm].role === 'compactionSummary') cc++;
+    if (seenCompactions < 0) seenCompactions = cc;
+    else if (cc > seenCompactions) {
+      seenCompactions = cc;
+      if (id === activeTabId && !streaming) {
+        var cb = root.querySelector('details.compaction');
+        if (cb) {
+          cb.scrollIntoView({ block: 'center' });
+          cb.classList.add('compaction-flash');
+          setTimeout(function () { cb.classList.remove('compaction-flash'); }, 2000);
+        }
+      }
+    }
   }
   function fmtSession(file, name) {
     if (name) return name;
