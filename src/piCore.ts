@@ -129,6 +129,10 @@ export class PiCore {
    *  只有 toolCallId/toolName/result/isError），patch 归档必须靠 start 时记下的映射。
    *  注：此修复曾随 5f30a51 后的未提交态被 11:24 的 checkout 连坐丢失，本次重打 */
   private toolCallPaths = new Map<string, string>();
+  /** toolCallId → 工具行摘要（start 时的 toolDetail(args)）。end 事件不带 args（见上）,
+   *  toolEnd 转发时 detail 恒为空串——webview toolEnd() 整行重建后命令/路径摘要蒸发，
+   *  要等 settled 全量重绘（c.arguments）才回来（2026-09-20 用户实测截图）。缓存兜底 */
+  private toolCallDetails = new Map<string, string>();
   /** 工单 A（下钻）：subagent 运行留存 —— id（toolCallId 或异步句柄）→ 最新全量 details + 计时。
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
@@ -1491,6 +1495,7 @@ export class PiCore {
         // 工单七：变更清单同样是会话域信息，不残留到别的会话
         this.runChangedFiles.clear();
         this.toolCallPaths.clear();
+        this.toolCallDetails.clear();
       }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
@@ -1598,6 +1603,7 @@ export class PiCore {
         // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
         this.runChangedFiles.clear();
         this.toolCallPaths.clear();
+        this.toolCallDetails.clear();
         try { this.onRunStart?.(); } catch { /* 快照失败不阻断 agent 运行 */ }
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
@@ -1656,11 +1662,13 @@ export class PiCore {
           // end 事件无 args，靠 toolCallId 找回文件（patch 归档必需）
           this.toolCallPaths.set(e.toolCallId, p);
         }
+        const startDetail = toolDetail(e.args);
+        this.toolCallDetails.set(e.toolCallId, startDetail);
         this.post({
           type: "toolStart",
           id: e.toolCallId,
           name: e.toolName,
-          detail: toolDetail(e.args),
+          detail: startDetail,
         });
         break;
 
@@ -1720,8 +1728,10 @@ export class PiCore {
           name: e.toolName,
           isError: !!e.isError,
           text,
-          // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来
-          detail: toolDetail(e.args),
+          // 不带 detail 的话，webview 重建工具行时命令摘要会蒸发，直到 settled 全量重绘才回来。
+          // pi 的 end 事件不带 args（agent-session.js:547 只转发 toolCallId/toolName/result/isError），
+          // toolDetail(e.args) 恒空——必须用 start 时缓存的摘要兜底，否则这个修复等于没修
+          detail: toolDetail(e.args) || this.toolCallDetails.get(e.toolCallId) || "",
         });
         // 子 agent 监控收尾：最终 details.results 快照（含各任务最终输出/状态），
         // 先于 toolEnd 语义无差别——webview 两条都消费，顺序不敏感
