@@ -36,7 +36,72 @@
 > 做新单前若与旧单边界相关先查归档，勿凭记忆执行旧单条目。
 > **工单号一律阿拉伯数字**（工单23 起，用户拍板 2026-09-15；存量编号不改）
 
-> **当前无待施工工单**（工单30 已结，迁归档.md）。下一单从归档「八、后续排队」选题签发。
+> **当前无待施工工单**（工单31 已签，见下）。归档「八、后续排队」其余候选另行签发。
+
+## 工单31：用户消息图片缩略图 + 点击放大（原图走 VS Code 内置预览）
+
+> **来源**：用户 2026-09-21 原话「想让我发的图片都能展示出来，以缩率图或者缩小尺寸
+> 不变比例的形式展示出来 还能点击放大看原图」。总监调查（本轮会话，用户「先调查」直令）
+> + 方案推荐后用户拍板「好的」。
+>
+> **pi 三处查（总监已实测闭环，施工方勿重查）**：①公开 API——pi-ai `ImageContent`
+> `{type:"image", data, mimeType}`，user 消息 content 数组结构化存图，**会话 jsonl 全量落盘
+> 原图 base64**（实测 `--D--work-docs-pi test--` 会话 8 张图全量在盘，无裁剪）；②TUI 无图形
+> 显示能力（终端）；③扩展生态无。**结论：数据层零造轮子（用 jsonl 现成数据，存储/格式零
+> 改动）；显示层 pi 无能力，壳自研缩略图属 pi 留给壳的职责；放大不造 lightbox，借 VS Code
+> 内置图片预览器（panel.ts:1030-1037 图片分支 vscode.open 已在，preview 模式自带缩放/原尺寸）**。
+>
+> **现状缺口（调查实证）**：图片数据已随 render 消息全量到 webview（getMessages→snapshot
+> 深拷贝原样带图）但被 `textOf()` 扔掉（main.ts:653 只拼 text 项）；当场发送只显
+> 「N 张图片」数字（piCore:934 imageCount）；**历史重绘连数字都丢**——main.ts:773 数
+> `m.attachments`，但 pi 落盘 user 消息无 attachments 字段（顶层仅 role/content/timestamp，
+> 实测恒 0 死代码）。排队气泡只有计数不存原图（piCore:1018 已知局限，本单不修）。
+> CSP `img-src data:` 已放行（index.html:5），data URI 零配置。
+>
+> **选型四条**：①缩略图 = user 气泡内 `<img src="data:…">`，CSS 限高 + 等比（object-fit），
+> 多张横排；②点击放大 = 新消息 openImage → 宿主按 md5 写临时文件（**复用 piCore byteAttachCache
+> 同款「同字节同路径」去重语义**，附 20MB 上限一致）→ `ui.openPath(tmp)`（已有能力，panel
+> **零改动**）；③当场回显 = WvUserMsg 加 images 可选字段（piCore:934 透传 prompt 已带的
+> m.images，webview↔宿主同回合二次传递属本地 postMessage 非网络通道，直白正确优先；
+> agent_settled 后整页 render 重绘覆盖，历史路径同样画缩略图，两路一致）；④有缩略图时不再
+> 画「N 张图片」胶囊行，胶囊仅在无 images 数据时兜底（排队气泡）。
+
+### 施工步骤
+
+1. protocol.ts：WvUserMsg 加 `images?: { data: string; mimeType: string }[]`；新增
+   `WvOpenImageMsg { type: "openImage"; data: string; mimeType: string }`（三处同步：发送方
+   webview / 接收方 piCore / 协议本处）
+2. piCore.ts：`case "prompt"` 的乐观回显（原 934 行）user 消息透传 `images: m.images`；
+   新增 `case "openImage"`——校验 data 非空 + 20MB 上限（与字节通道同口径），mimeType 映射
+   扩展名（png/jpe?j/g/webp/bmp，缺省 png），md5 命中 byteAttachCache 复用同路径，未命中
+   照 attachFile 分支写 tmp + 入缓存（FIFO 50 兑底不动）→ `await this.ui.openPath(tmp)`
+3. webview/main.ts：①render user 分支从 content 数组分离 image 项渲染缩略图（textOf 照旧
+   取文本，image 项不再丢弃）；②addUser 支持 images 参数（缩略图行 + 点击 → openImage，
+   无 images 数据时才画数字胶囊）；③user 消息处理（1157 行）与 queuedDelivered 兑底行
+   按数据有无分支；④删 `m.attachments` 死引用（773 行）
+4. webview/style.css：缩略图样式（max-height 钳位、等比、横排 flex、点击态、圆角）；
+   注意 agent_settled 整页重绘覆盖后视觉一致（两路同 class）
+5. i18n：如需新增提示 key（如打不开原图），中英两处同步；能复用既有 key 则不新增
+6. main.ts 保持 ES5 var 风格、strict:false 零报错（门禁约定）
+
+### 边界（不许顺手改）
+
+- **pi 原生数据/会话 jsonl 格式零改动**——本单纯消费现成数据，存储/协议数据面不碰
+- 不修排队丢图（piCore:1018 注释局限保留，queued 只存 imageCount 的语义不动）；
+  不接 `steer(text, images)`（pi SDK 支持但 piClient 未接，另单议）；不动 lightbox 路线
+- 不动 panel.ts（openPath 图片分支已支持 vscode.open）；byteAttachCache 去重语义与
+  50 上限兑底照旧，不重构
+- render 消息载荷现状已带全量 base64，本单不新增载荷压缩/懒加载（图多卡顿如实测出现
+  再立项，不预设）
+
+### 验收
+
+- `npm run compile` 全绿；`grep -n "m.attachments" webview/main.ts` 零命中；单笔提交
+- 场景四条：①当场发送 2 图 → 气泡显示两张等比缩略图（不再只有数字）；②点缩略图 →
+  VS Code 内置预览打开原图（可缩放）；③重开/重绘同一会话 → 历史气泡同样显示缩略图
+  （重开丢数字问题随本单消解）；④重复点击同一图 → 临时文件复用同路径（md5 去重生效，
+  不产生副本）
+- 回报按直令规格在 BUILDER.md 留痕
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
