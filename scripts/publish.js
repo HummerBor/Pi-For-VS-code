@@ -105,13 +105,21 @@ function runShip() {
 
 // ── 1. 提交 ─────────────────────────────────────────────────────
 function gitCommit() {
-  console.log("\x1b[36m[ship] git commit -m \"chore: release\"\x1b[0m");
-  var r = spawnSync("git", ["commit", "-m", "chore: release"], { stdio: "inherit", cwd: cwd });
+  // 版本号 bump 已随台账提前入库（package 先跑过）时，commit 天然无变更（exit 1 +
+  // "nothing to commit"）——不视为失败，继续发版；真失败（索引锁/权限等）照旧拦截。
+  // 事故背景（2026-09-21）：工单31 验收时 bump 随台账收编，用户 ship 撞死在此
+  var r = spawnSync("git", ["commit", "-m", "chore: release"], { cwd: cwd, encoding: "utf-8" });
+  if (r.stdout) console.log(r.stdout.trim());
+  if (r.stderr) console.error(r.stderr.trim());
   if (r.status !== 0) {
-    console.error("\x1b[1;31m[ship] ✗ git commit 失败\x1b[0m");
+    if (/nothing to commit/i.test((r.stdout || "") + (r.stderr || ""))) {
+      console.log("[33m[ship] ⚠ 无变更可提交（版本号 bump 已提前入库），继续发版[0m");
+      return;
+    }
+    console.error("[1;31m[ship] ✗ git commit 失败[0m");
     process.exit(r.status || 1);
   }
-  console.log("\x1b[32m[ship] ✓ 已提交\x1b[0m");
+  console.log("[32m[ship] ✓ 已提交[0m");
 }
 
 // ── 2. 推送 + 发布（原逻辑） ───────────────────────────────────
