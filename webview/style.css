@@ -737,6 +737,30 @@ details.think.compaction-flash>summary {
   margin: 4px 8px;
 }
 
+/* ── 工单31：原图缩略图——user 气泡内多张横排；等比不裁切（object-fit 对原始尺寸
+   不干预，只钳高：height 钳 96px 宽自适应，点击可进 VS Code 内置预览看原图）。
+   两路渲染（当场回显 / 历史重绘）同 class，settled 重绘覆盖后视觉一致。
+   白边距随气泡 padding 走；cursor:pointer 表可点；降透明度 hover 恢复表可点 */
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+.thumbs .thumb {
+  height: 96px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: .95;
+  display: block;
+}
+.thumbs .thumb:hover {
+  opacity: 1;
+}
+
 /* ── 工具行（CC 风格块结构）── */
 .tool {
   display: flex;

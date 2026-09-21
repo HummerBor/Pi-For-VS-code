@@ -79,6 +79,12 @@ export interface WvOpenPathMsg {
   type: "openPath";
   path: string;
 }
+/** 点击缩略图请求打开原图（工单31）：宿主 md5 去重写临时文件后走 openPath → VS Code 内置图片预览 */
+export interface WvOpenImageMsg {
+  type: "openImage";
+  data: string;
+  mimeType: string;
+}
 // WvDeleteSessionMsg 已删（工单四-3 死链清理）：webview 从无发送端，宿主 case 曾是裸 rmSync。
 // 删除走宿主 QuickPick deleteSessionPick 路径（4781f78），webview 直删不再提供
 export interface WvGetFilesMsg {
@@ -142,6 +148,7 @@ export type WebviewToHost =
   | WvOpenSessionMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
+  | WvOpenImageMsg
   | WvGetFilesMsg
   | WvMoreMsg
   | WvSettingsMsg
@@ -195,6 +202,9 @@ export interface UserMsg {
   imageCount?: number;
   fileCount?: number;
   codeInfo?: string;
+  /** 原图 base64（工单31）：当场发送回显带图渲染缩略图；排队气泡等无数据路径不带此字段，
+   *  仍由 imageCount 兑底数字胶囊 */
+  images?: { data: string; mimeType: string }[];
 }
 export interface NewLiveMsg {
   type: "newLive";

@@ -452,7 +452,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
   }
 
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number) {
+  /** 历史消息 content 数组里的原图项（工单31）：pi 落盘 ImageContent {type:"image",data,mimeType}，
+   *  textOf 只拼 text，原图靠本函数另抽——重绘路径与当场回显两路同用 */
+  function imgsOf(content) {
+    var out = [];
+    if (Array.isArray(content)) {
+      for (var i = 0; i < content.length; i++) {
+        var c = content[i];
+        if (c && c.type === 'image' && c.data) out.push({ data: c.data, mimeType: c.mimeType || 'image/png' });
+      }
+    }
+    return out;
+  }
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number, images?: any[]) {
     // 子 agent 异步回报特殊标记渲染（2026-09-18 用户拍板升级：不隐藏，改独立卡片——
     // 防止被当成用户自己说的话；前版“直接不展示”作废）。前缀契约在 subagent 扩展的
     // sendUserMessage 处（"[子 agent sa-N 完成|失败] agent名: 输出"），改格式两处同步。
@@ -476,7 +488,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (stickyIO && (stickyQ as any)._sent) stickyIO.unobserve((stickyQ as any)._sent);
     }
     stickyQ = b; b.classList.add('sticky-q');
-    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; } if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } var sent = el('div', 'sticky-sent'); root.appendChild(sent); root.appendChild(b); followingEnd = true; scroll();
+    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; }
+    // 工单31：原图缩略图（data URI，CSP img-src data: 已放行）——限高等比在 CSS；点击 → openImage
+    // 交宿主写临时文件走 VS Code 内置预览器开原图（自带缩放），不造 lightbox；stopPropagation
+    // 防 sticky 气泡 toggle（点击缩略图不能触发展开/折叠）
+    if (images && images.length) {
+      var th = el('div', 'thumbs');
+      for (var ti = 0; ti < images.length; ti++) {
+        (function (img0) {
+          var im = document.createElement('img');
+          im.className = 'thumb';
+          im.src = 'data:' + (img0.mimeType || 'image/png') + ';base64,' + img0.data;
+          im.addEventListener('click', function (ev) { ev.stopPropagation(); vpost({ type: 'openImage', data: img0.data, mimeType: img0.mimeType || 'image/png' }); });
+          // 工单31：img 异步加载，加载完成前量出的 _fullH 不含图高 → 钉住折叠判定失准；
+          // 加载完成后重测（工单28 口径「原位量一次完整内容高」以 img.onload 为准修正）
+          im.onload = function () { requestAnimationFrame(function () { (b as any)._fullH = (b as any).scrollHeight; updateStickyChip(b as any); }); };
+          th.appendChild(im);
+        })(images[ti]);
+      }
+      b.appendChild(th);
+    }
+    if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount && !(images && images.length)) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } var sent = el('div', 'sticky-sent'); root.appendChild(sent); root.appendChild(b); followingEnd = true; scroll();
     // 原位态量一次完整内容高（未 clamp，后续钉住判定用它，不再反复读布局）；
     // sentinel 在 bubble 前，IO 观察它判定钉住（工单28 追加二）
     observeSticky(sent, b);
@@ -858,7 +890,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           ut = ut.slice(ei2 + term2.length);
           if (ut.charAt(0) === '\n') ut = ut.slice(1);
         }
-        addUser(ut, m.attachments ? m.attachments.length : 0, ui, ufiles);
+        var uimgs = imgsOf(m.content); // 工单31：content 里的 image 项直画缩略图（原数图死引用已删——pi 落盘 user 消息无 attachments 字段，重开丢数字的根因）
+        addUser(ut, uimgs.length, ui, ufiles, uimgs);
       }
       else if (m.role === 'assistant') {
         var b = el('div', 'bubble assistant');
@@ -1241,7 +1274,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function handleMsg(m: HostToWebviewTagged) {
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
-    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount);
+    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     // 探针实锤（probe-toolblocks.mjs）：pi 每输出一个 toolCall 就是一条独立 assistant 消息——
     // 同名合并靠 DOM 相邻判定（空壳 bubble 已移除、思考/正文 bubble 天然插队断连续），

@@ -853,6 +853,49 @@ export class PiCore {
       case "openPath":
         await this.ui.openPath(m.path);
         break;
+      case "openImage": {
+        // 工单31：点击缩略图看原图——md5 去重写临时文件后走 openPath，VS Code 内置图片预览器
+        // 打开（自带缩放/原尺寸），不造 lightbox。字节通道同口径：同字节永远同路径（缓存命中
+        // 复用，未命中写入即入缓存，FIFO 50 兑底防长会话内存增长）；20MB 上限与字节通道一致
+        const buf = Buffer.from(m.data || "", "base64");
+        if (!buf.length) {
+          this.post({ type: "notice", text: this.L.attachTempFail });
+          break;
+        }
+        if (buf.length > 20 * 1024 * 1024) {
+          this.post({ type: "notice", text: this.L.attachTooBig });
+          break;
+        }
+        const digest = createHash("md5").update(buf).digest("hex");
+        const dup = this.byteAttachCache.get(digest);
+        if (dup) {
+          await this.ui.openPath(dup);
+          break;
+        }
+        // mimeType 映射扩展名（VS Code 预览器按扩展名选编辑器，不能省）；未知类型兑 png——
+        // 图片入 pi 走的都是这几种，兑底只是为了不裂文件名
+        const MIME_EXT: Record<string, string> = {
+          "image/png": "png",
+          "image/jpeg": "jpg",
+          "image/gif": "gif",
+          "image/webp": "webp",
+          "image/bmp": "bmp",
+        };
+        const ext = MIME_EXT[m.mimeType] || "png";
+        const tmp = path.join(os.tmpdir(), "pi-img-" + Date.now() + "-" + digest.slice(0, 8) + "." + ext);
+        try {
+          fs.writeFileSync(tmp, buf);
+          this.byteAttachCache.set(digest, tmp);
+          if (this.byteAttachCache.size > 50) {
+            const first = this.byteAttachCache.keys().next().value;
+            if (first !== undefined) this.byteAttachCache.delete(first);
+          }
+          await this.ui.openPath(tmp);
+        } catch (err: any) {
+          this.post({ type: "notice", text: this.L.attachTempFail + String(err?.message ?? err).slice(0, 120) });
+        }
+        break;
+      }
       case "getFiles":
         await this.sendWorkspaceFiles();
         break;
@@ -932,7 +975,9 @@ export class PiCore {
       this.queued.push({ qid, sentText: text, text: displayText, imageCount: images?.length ?? 0, codeInfo, kind: "steer" });
       this.post({ type: "queuedAdd", qid, text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo });
     } else {
-      this.post({ type: "user", text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo });
+      // 工单31：乐观回显透传原图（webview→宿主同回合二次传递，本地 postMessage 非网络通道），
+      // 气泡直接画缩略图不再只有数字；agent_settled 后整页 render 重绘覆盖，两路视觉一致
+      this.post({ type: "user", text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo, images });
     }
     let steered = false;
     // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到

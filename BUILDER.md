@@ -4,7 +4,27 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-20 工单30 施工回报——拆除 appendSystemPrompt（工单27 回收），待总监验收
+最后更新：2026-09-21 工单31 施工回报——图片缩略图+点击放大，待总监验收
+
+# 交接 6：工单31 施工（2026-09-21）
+
+**改动面（单笔提交，protocol.ts / piCore.ts / webview/main.ts / webview/style.css 四文件）**：
+- protocol.ts：UserMsg 加 `images?` 透传字段 + 新增 WvOpenImageMsg（入 WebviewToHost 联合，三处同步齐）
+- piCore.ts：sendPromptCore 乐观回显 post user 透传 images（排队分支不动，已知局限保留）；
+  新增 case openImage——md5 去重复用 byteAttachCache（同字节同路径，FIFO 50 兑底），mimeType
+  映射扩展名，20MB 上限与字节通道同口径，写 tmp 后走既有 ui.openPath → VS Code 内置图片预览
+- webview/main.ts：imgsOf() 抽 content 里的 ImageContent；addUser 尾参 images（有图画
+  .thumbs/.thumb data URI 缩略图并跳过数字胶囊，无图才有数字兑底，stopPropagation 防 sticky
+  toggle）；render user 分支改用 imgsOf（原数图死引用已删——pi 落盘无 attachments 字段，重开丢
+  数字根因）；img.onload 后重测 _fullH（工单28 量高口径与异步图兼容，否则钉住折叠判定失准）
+- webview/style.css：.thumbs 横排 flex + .thumb 限高等比（两路渲染同 class，settled 重绘一致）
+
+**验证**：npm run compile 全链绿；`grep m.attachments webview/main.ts` 零命中；定义/调用成对
+逐项核对（openImage 三处齐/imgsOf 一定义一调用/addUser 四调用点分支正确）；工单验收场景
+①当场出缩略图②点击 VS Code 预览原图③重开历史同图④重复点击同路径四条待用户实测
+
+**边界守**：pi 数据面/jsonl 零改动；panel.ts 零改动；排队丢图与 steer 带图未动（另单）；
+i18n 零新增（复用 attachTempFail/attachTooBig 中英既有）
 
 # 交接 5：三期整树搬迁落地（2026-09-20，接手先读本节）
 
