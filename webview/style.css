@@ -247,6 +247,11 @@ body> :not(#bg-layer):not(.subdock) {
   pointer-events: auto;
 }
 
+/* 大纲轨道藏原生条：新内核标准属性 scrollbar-width:none，老内核 webkit display:none（双层同理，别删任何层） */
+.outline {
+  scrollbar-width: none;
+}
+
 .outline::-webkit-scrollbar {
   display: none;
 }
@@ -467,11 +472,19 @@ body> :not(#bg-layer):not(.subdock) {
   background: rgba(128, 128, 128, .12);
 }
 
-/* 滚动条只用 webkit 伪元素（3px 细条）。教训（2026-09-22 用户截图戳穿误诊）：Chromium 121+
- * 里只要文档中任何元素用了标准 scrollbar 属性（scrollbar-width / scrollbar-color），
- * ::-webkit-scrollbar 样式就整文档失效、所有滚动容器回退默认粗条——2026-09-21 方案B 的
- * 「伪类已废弃」实测结论实为误诊（当时表里留着 scrollbar-width: none 把 3px 规则顶掉），
- * 方案B 已整体回收。红线：这张表绝不许出现标准 scrollbar 属性，细条全走伪类。 */
+/* 滚动条统一走标准属性。三代实测结论（别再摇摆）：
+ * ① 伪类派（::-webkit-scrollbar 3px）：VS Code 1.138 webview 内核不渲染（实测 0.1.70 装机
+ *   验证，纯伪类无标准属性污染照样粗条）——但老内核上仍是唯一有效方案，保留作兑底；
+ * ② 方案B 自绘 ol-sbar：能用但只护了主区，思考块漏网；已回收（2026-09-22）；
+ * ③ 标准属性派（现行，2026-09-22 用户拍板）：hot-duck 同款，scrollbar-width: thin 细条
+ *   + scrollbar-color 灰 thumb 透明轨道，新内核全容器生效（思考块/主区/代码块）。
+ * 注意：文档里出现标准属性后伪类整文档失效（Chromium 121+ 互斥规则），下面的 webkit
+ * 兑底块在 1.138 上是死码、在老内核上生效，两层不共存但各管一代，别删任何一层。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, .45) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 3px;
   height: 3px;
