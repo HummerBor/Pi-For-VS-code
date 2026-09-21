@@ -36,6 +36,9 @@
           <div class="w-sub">{{t:welcomeSub}}</div>
         </div>
       </div>
+      <!-- 消息大纲轨道（对齐 DeepSeek/Codex web）：随页签克隆，main.ts 建视图时按 root 可视区重摆 -->
+      <div id="outline" class="outline"></div>
+      <!-- 自绘滚动进度 thumb（方案B）：随页签克隆，olSpy 滚动帧同步位置；老内核不显示（原生条兑底） -->
       <div id="queuebar"></div>
       <div id="statusline"><span id="status"></span></div>
       <div id="composer">

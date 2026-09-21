@@ -1,282 +1,1730 @@
-html, body { height: 100%; margin: 0; }
-html { background: #1f1f1f !important; } /* 默认地板色；宿主按设置追加 inline 覆盖 */
-body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); color: var(--vscode-editor-foreground); background: var(--vscode-sideBar-background); }
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  background: #1f1f1f !important;
+}
+
+/* 默认地板色；宿主按设置追加 inline 覆盖 */
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-sideBar-background);
+}
 
 /* ── 头部 ── */
-#header { padding: 6px 10px 5px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
-#hdr-row1 { display: flex; align-items: center; gap: 6px; }
-#bg-layer { position: fixed; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; z-index: 0; }
+#header {
+  padding: 6px 10px 5px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .25));
+}
+
+#hdr-row1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#bg-layer {
+  position: fixed;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* :not(#bg-layer) 特异性含 ID，会压过 .subdock 的 position:fixed（浮窗被拍回文档流底部事故），豁免之 */
-body > :not(#bg-layer):not(.subdock) { position: relative; z-index: 1; }
-#logo { width: 18px !important; height: 18px !important; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; border: none; padding: 0; background: none; border-radius: 0; }
-#welcome { display: flex; flex-direction: column; align-items: center; padding-top: 18vh; }
-#welcome .w-duck { width: 96px !important; height: 96px !important; object-fit: contain; image-rendering: pixelated; border: none; padding: 0; background: none; border-radius: 0; }
-#welcome .w-title { margin-top: 14px; font-size: 15px; font-weight: 600; }
-#welcome .w-tip { margin-top: 10px; font-size: 11px; opacity: .6; max-width: 280px; text-align: center; line-height: 1.7; }
-#welcome .w-sub { margin-top: 6px; font-size: 11px; opacity: .55; }
-#title { font-weight: bold; font-size: 12px; }
-#session { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#ctoolbar #usage { font-size: 11px; opacity: .6; margin-right: 8px; white-space: nowrap; }
-.ico-btn { cursor: pointer; padding: 3px 5px; border-radius: 4px; opacity: .8; display: inline-flex; align-items: center; line-height: 0; }
-.ico-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }
+body> :not(#bg-layer):not(.subdock) {
+  position: relative;
+  z-index: 1;
+}
+
+#logo {
+  width: 18px !important;
+  height: 18px !important;
+  object-fit: contain;
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+  border: none;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+#welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 18vh;
+}
+
+#welcome .w-duck {
+  width: 96px !important;
+  height: 96px !important;
+  object-fit: contain;
+  image-rendering: pixelated;
+  border: none;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+#welcome .w-title {
+  margin-top: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#welcome .w-tip {
+  margin-top: 10px;
+  font-size: 11px;
+  opacity: .6;
+  max-width: 280px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+#welcome .w-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: .55;
+}
+
+#title {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+#session {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#ctoolbar #usage {
+  font-size: 11px;
+  opacity: .6;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.ico-btn {
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  opacity: .8;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.ico-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
+  opacity: 1;
+}
+
 /* 子 agent 监控入口（浮窗最小化/关闭且有子 agent 在跑时亮起）：codicon loading 同款转圈，
    全部子 agent 停止 → JS 控制隐藏（不跑就不转） */
-#subind.spin svg { animation: icospin 1.1s linear infinite; color: var(--vscode-focusBorder, #0078d4); }
-@keyframes icospin { to { transform: rotate(360deg); } }
-.spacer { flex: 1; }
-.spacer-right { margin-left: auto; }
-.hdr-btn { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; max-width: 100%; }
-.hdr-btn:hover { opacity: 1; text-decoration: underline; }
+#subind.spin svg {
+  animation: icospin 1.1s linear infinite;
+  color: var(--vscode-focusBorder, #0078d4);
+}
+
+@keyframes icospin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spacer {
+  flex: 1;
+}
+
+.spacer-right {
+  margin-left: auto;
+}
+
+.hdr-btn {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.hdr-btn:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
 
 /* ── 消息区 ── */
 /* 工单24 架构归位二期（用户定调「下区整块是一个 DOM」）：#session-area 每页签一个
  * .session-view（横幅/变更条/消息流/排队条/状态行/输入区/页脚整棵），后台整块隐藏但活渲染，
  * 切页签=换可见性 O(1)；.msg-root 仍是消息滚动根，滚动位置天然按页签保留 */
-#session-area { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.session-view { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.session-view.offview { display: none; }
-.msg-root { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 10px 4px; }
+#session-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* relative：消息大纲轨道的定位锚 */
+.session-view.offview {
+  display: none;
+}
+
+/* 滚动根必须占满面板宽（不能 max-width 居中）——滚动条贴面板右缘是 DeepSeek 定稿样的一部分：
+ * 滚动条贴窗缘、轨道横线紧挨其左。居中只做在 padding 上：max(10px,(100%-800px)/2) 让内容列
+ * 恰好 800px 居中，与旧 max-width:800+margin 方案的内容盒逐像素等价（窄面板两侧 10px），
+ * 气泡 max-width:88% 等百分比基准也不变；唯一变化是滚动条从悬在半空回到窗缘
+ * （实测事故 2026-09-21：宽面板下滚动条与轨道脱节，用户点名） */
+.msg-root {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px max(10px, calc((100% - 800px) / 2)) 4px;
+  width: 100%;
+  box-sizing: border-box;
+  /* width:100% 含 padding，否则右 padding 把自身撑出面板、滚动条出界（实测 rootRight=1564 > panelW=1182） */
+}
+
+/* 内容列 800px 居中，与输入框/状态栏同轴 */
 /* 工单24 架构归位：每页签一棵 root 常驻 #messages，非活动页签隐藏（切页签=换可见性 O(1)，现场保留） */
-.msg-root.offroot { display: none; }
+.msg-root.offroot {
+  display: none;
+}
+
+/* ── 消息大纲轨道（右缘短横线 = 用户消息锚点，hover 展开文字，点击跳转）── */
+.outline {
+  position: absolute;
+  right: 0;
+  z-index: 30;
+  display: none;
+  flex-direction: column;
+  gap: 0; /* 收起态行距由 .ol-row 自己控制（紧凑化后不再另加 gap） */
+  overflow-y: auto;
+  /* 右内边距 6px：横线右缘距面板边 7px（6+1 边框），滚动条占 0~3px，间隙恰 4px=定稿样 */
+  padding: 6px 6px 6px 8px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  /* 玻璃只在 hover 展开态：收起时轨道干净无底；blur 加大到 28px（12px 时背景太清晰，实测） */
+  background: transparent;
+  border: 1px solid transparent;
+  /* 整体贴右缘（用户直令 2026-09-21 贴左实装后观感错乱，同日定稿改回贴右，DeepSeek 样）：
+   * 只圆左侧角，贴边侧直角；横线贴右、hover 文字向左展开 */
+  border-radius: 10px 0 0 10px;
+  transition: background .2s ease, border-color .2s ease, backdrop-filter .2s ease;
+}
+
+.outline:hover {
+  background: rgba(28, 28, 34, .62);
+  border-color: rgba(255, 255, 255, .08);
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+}
+
+.outline:hover {
+  pointer-events: auto;
+}
+
+.outline::-webkit-scrollbar {
+  display: none;
+}
+
+.ol-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  /* 横线贴右缘（DOM 顺序 label→dash 不动，贴边由容器 right:0 保证） */
+  gap: 6px;
+  /* 收起态 1px 上下 padding = 行距 4px（用户直令 2026-09-21：限定高度里尽量密，原 3px/9px 太疏）；
+   * hover 展开文字后行距放回，否则 19px 高的 label 在 4px 行里全叠死——padding 进过渡列表平滑放开 */
+  padding: 1px 0;
+  transition: padding .2s ease;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.ol-label {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: #fff;
+  border-radius: 6px;
+  transform: translateX(-10px);
+  transition: max-width .22s cubic-bezier(.2, .7, .3, 1), opacity .18s ease, transform .26s cubic-bezier(.2, .7, .3, 1),
+    padding .2s ease, background .15s ease, color .15s ease;
+}
+
+.ol-dash {
+  flex: none;
+  width: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(160, 160, 170, .6);
+  transition: width .25s cubic-bezier(.2, .7, .3, 1), background .2s ease;
+}
+
+/* DS 式整列弹出：hover 轨道全部行错峰展开文字（玻璃底由面板出，行内不再带药丸底） */
+.outline:hover .ol-row {
+  padding: 3px 0; /* 展开态行距放回，给 label 留出高度 */
+  /* 高度生长也按离 cur 的距离错峰（--d 由 main.ts olSpy 写）：与 label 同节奏，动效=从选中条往上下辐射 */
+  transition-delay: min(calc(var(--d) * 26ms), 340ms);
+}
+
+.outline:hover .ol-label {
+  max-width: 240px;
+  opacity: 1;
+  transform: none;
+  padding: 3px 8px;
+  transition-delay: min(calc(var(--d) * 26ms), 340ms);
+}
+
+.outline:hover .ol-dash {
+  background: rgba(160, 160, 170, .75);
+}
+
+.ol-row:hover .ol-label {
+  color: #fff;
+  background: rgba(255, 255, 255, .08);
+  transition-delay: 0ms;
+}
+
+.ol-row.cur .ol-label {
+  color: #fff;
+}
+
+.ol-dash {
+  flex: none;
+  width: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(160, 160, 170, .6);
+  transition: width .25s cubic-bezier(.2, .7, .3, 1), background .2s ease;
+}
+
+/* hover 单行提亮，当前条横线高亮（高亮色用纯白，focusBorder 蓝在深底上太跳，用户定调） */
+.ol-row.cur .ol-dash,
+.ol-row:hover .ol-dash {
+  width: 18px;
+  background: #fff;
+}
+
+/* 点击跳转后定位闪烁：首帧全亮白描边+外泛光，中段保持后段淡出——纯 1s 线性淡出容易没看见 */
+@keyframes olflash {
+  0% {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 1), 0 0 14px 2px rgba(255, 255, 255, .55);
+  }
+
+  55% {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, .85), 0 0 14px 2px rgba(255, 255, 255, .4);
+  }
+
+  100% {
+    box-shadow: 0 0 0 3px transparent, 0 0 14px 2px transparent;
+  }
+}
+
+.bubble.user.ol-jump {
+  animation: olflash 1s ease-out;
+}
+
 /* ── 标签条（工单十五刀2）── */
-#tabbar { display: none; align-items: stretch; gap: 2px; padding: 4px 8px 0; overflow-x: auto; flex: none; }
-#tabbar.has-tabs { display: flex; }
-.tab-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; font-size: 11.5px; line-height: 1.2;
-  border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0;
-  color: inherit; opacity: .65; cursor: pointer; white-space: nowrap; max-width: 160px; position: relative; }
-.tab-chip .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab-chip:hover { background: rgba(128,128,128,.12); }
-.tab-chip.active { background: rgba(128,128,128,.18); opacity: 1; border-color: rgba(128,128,128,.25); }
-.tab-chip .tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; display: none; }
-.tab-chip.busy .tab-dot { display: inline-block; background: #e8a33d; animation: tabblink 1.1s ease-in-out infinite; }
-.tab-chip.unread .tab-dot { display: inline-block; background: #4ec96e; }
-@keyframes tabblink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
-.tab-chip .tab-x { display: none; flex: none; opacity: .5; font-size: 11px; padding: 0 1px; border-radius: 3px; }
-.tab-chip:hover .tab-x, .tab-chip .tab-x.always { display: inline; }
-.tab-chip .tab-x:hover { opacity: 1; background: rgba(128,128,128,.25); }
-.tab-add { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; border-radius: 6px 6px 0 0; opacity: .6; cursor: pointer; }
-.tab-add:hover { opacity: 1; background: rgba(128,128,128,.12); }
-* { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.5) transparent; } /* 标准属性兑底：部分 Chromium 环境里 webkit 伪元素滚动条不生效 */
-::-webkit-scrollbar { width: 3px; height: 3px; }
-::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 1.5px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,.65); }
-::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-#queuebar { padding: 0 12px 3px; }
-.q-item { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .65; padding: 2px 0; }
-.q-item .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+#tabbar {
+  display: none;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  flex: none;
+}
+
+#tabbar.has-tabs {
+  display: flex;
+}
+
+.tab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: inherit;
+  opacity: .65;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 160px;
+  position: relative;
+}
+
+.tab-chip .tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-chip:hover {
+  background: rgba(128, 128, 128, .12);
+}
+
+.tab-chip.active {
+  background: rgba(128, 128, 128, .18);
+  opacity: 1;
+  border-color: rgba(128, 128, 128, .25);
+}
+
+.tab-chip .tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  display: none;
+}
+
+.tab-chip.busy .tab-dot {
+  display: inline-block;
+  background: #e8a33d;
+  animation: tabblink 1.1s ease-in-out infinite;
+}
+
+.tab-chip.unread .tab-dot {
+  display: inline-block;
+  background: #4ec96e;
+}
+
+@keyframes tabblink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: .25;
+  }
+}
+
+.tab-chip .tab-x {
+  display: none;
+  flex: none;
+  opacity: .5;
+  font-size: 11px;
+  padding: 0 1px;
+  border-radius: 3px;
+}
+
+.tab-chip:hover .tab-x,
+.tab-chip .tab-x.always {
+  display: inline;
+}
+
+.tab-chip .tab-x:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, .25);
+}
+
+.tab-add {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  border-radius: 6px 6px 0 0;
+  opacity: .6;
+  cursor: pointer;
+}
+
+.tab-add:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, .12);
+}
+
+/* 滚动条只用 webkit 伪元素（3px 细条）。教训（2026-09-22 用户截图戳穿误诊）：Chromium 121+
+ * 里只要文档中任何元素用了标准 scrollbar 属性（scrollbar-width / scrollbar-color），
+ * ::-webkit-scrollbar 样式就整文档失效、所有滚动容器回退默认粗条——2026-09-21 方案B 的
+ * 「伪类已废弃」实测结论实为误诊（当时表里留着 scrollbar-width: none 把 3px 规则顶掉），
+ * 方案B 已整体回收。红线：这张表绝不许出现标准 scrollbar 属性，细条全走伪类。 */
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, .45);
+  border-radius: 1.5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, .65);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+#queuebar {
+  padding: 0 12px 3px;
+}
+
+.q-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  opacity: .65;
+  padding: 2px 0;
+}
+
+.q-item .q-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
 /* 工单十六：取回按钮（q-btn）——低存在感，hover 才亮；不压缩 q-text 的 ellipsis 空间 */
-.q-item .q-btn { flex: none; cursor: pointer; opacity: .5; display: inline-flex; align-items: center; }
-.q-item .q-btn:hover { opacity: 1; }
-.bubble { margin: 8px 0; padding: 7px 11px; border-radius: 10px; line-height: 1.55; word-break: break-word; }
-.bubble.user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: auto; border-bottom-right-radius: 3px; white-space: pre-wrap; opacity: .92; max-width: 88%; }
+.q-item .q-btn {
+  flex: none;
+  cursor: pointer;
+  opacity: .5;
+  display: inline-flex;
+  align-items: center;
+}
+
+.q-item .q-btn:hover {
+  opacity: 1;
+}
+
+.bubble {
+  margin: 8px 0;
+  padding: 7px 11px;
+  border-radius: 10px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.bubble.user {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  margin-left: auto;
+  border-bottom-right-radius: 3px;
+  white-space: pre-wrap;
+  opacity: .92;
+  max-width: 88%;
+}
+
 /* 工单28：最后一问 sticky 悬浮——滚出视口时钉在面板顶部。只对最后一条 user
    bubble 生效（class 随 addUser 迁移，main.ts）；assistant/tool 行不参与。top:-10px 抵消
    .msg-root 的 padding-top 10px（两处必须同步改），钉住时与面板可见顶边齐平；opacity 置 1：
    默认 .92 半透明会在钉住时透出下方滚动内容（穿帮）；阴影隔离钉住态与背后滚动内容的视觉边界。
    追加二（用户直令 09-20）：原位不折叠；钉住时超 3 行才折（line-clamp 自带 …），右下角
    展开/收起 chip 走 attr(data-st)（原位/未超行无 chip）。sticky 是定位元素，::after 相对它定位 */
-.bubble.user.sticky-q { position: sticky; top: -10px; z-index: 10; opacity: 1; box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer; }
-.bubble.user.sticky-q.pinned:not(.sticky-open) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-.bubble.user.sticky-q.pinned[data-st]::after { content: attr(data-st); position: absolute; right: 10px; bottom: 3px; font-size: 10px; opacity: .8; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); padding: 0 5px; border-radius: 3px; }
-.sticky-sent { height: 0; margin: 0; }
-.bubble.assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-bottom-left-radius: 3px; }
-.bubble.queued { opacity: .5; border: 1px dashed var(--vscode-input-border, rgba(128,128,128,.4)); background: transparent; }
-.bubble.errmsg { background: transparent; border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c); color: var(--vscode-errorForeground, #f66); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
-.errmsg-retry { cursor: pointer; text-decoration: underline; font-family: var(--vscode-font-family, sans-serif); opacity: .9; }
-.errmsg-retry:hover { opacity: 1; }
-.md-p { white-space: pre-wrap; }
-.md-h { font-weight: bold; margin: 6px 0 2px; }
-.md-li { padding-left: 12px; }
-.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
-.md-table th, .md-table td { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding: 3px 8px; text-align: left; }
-.md-table th { background: var(--vscode-editorWidget-background, rgba(128,128,128,.12)); }
-.md-quote { border-left: 3px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin: 2px 0; opacity: .85; }
-code { font-family: var(--vscode-editor-font-family, monospace); font-size: .92em; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.2)); padding: 0 3px; border-radius: 3px; }
-pre.code { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.15)); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 6px 0; }
-details.think { margin: 6px 0; opacity: .55; font-size: 12px; }
-details.think summary { cursor: pointer; user-select: none; }
+.bubble.user.sticky-q {
+  position: sticky;
+  top: -10px;
+  z-index: 10;
+  opacity: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  cursor: pointer;
+}
+
+.bubble.user.sticky-q.pinned:not(.sticky-open) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.bubble.user.sticky-q.pinned[data-st]::after {
+  content: attr(data-st);
+  position: absolute;
+  right: 10px;
+  bottom: 3px;
+  font-size: 10px;
+  opacity: .8;
+  background: var(--vscode-button-background, #0078d4);
+  color: var(--vscode-button-foreground, #fff);
+  padding: 0 5px;
+  border-radius: 3px;
+}
+
+.sticky-sent {
+  height: 0;
+  margin: 0;
+}
+
+.bubble.assistant {
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
+  border-bottom-left-radius: 3px;
+}
+
+.bubble.queued {
+  opacity: .5;
+  border: 1px dashed var(--vscode-input-border, rgba(128, 128, 128, .4));
+  background: transparent;
+}
+
+.bubble.errmsg {
+  background: transparent;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #b91c1c);
+  color: var(--vscode-errorForeground, #f66);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+
+.errmsg-retry {
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: var(--vscode-font-family, sans-serif);
+  opacity: .9;
+}
+
+.errmsg-retry:hover {
+  opacity: 1;
+}
+
+.md-p {
+  white-space: pre-wrap;
+}
+
+.md-h {
+  font-weight: bold;
+  margin: 6px 0 2px;
+}
+
+.md-li {
+  padding-left: 12px;
+}
+
+.md-table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .4));
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.md-table th {
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .12));
+}
+
+.md-quote {
+  border-left: 3px solid var(--vscode-panel-border, rgba(128, 128, 128, .4));
+  padding-left: 8px;
+  margin: 2px 0;
+  opacity: .85;
+}
+
+code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: .92em;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, .2));
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+pre.code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, .15));
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 6px 0;
+}
+
+details.think {
+  margin: 6px 0;
+  opacity: .55;
+  font-size: 12px;
+}
+
+details.think summary {
+  cursor: pointer;
+  user-select: none;
+}
+
 /* 压缩完成定位高亮（2026-09-20）：折叠块短暂闪烁，提示压缩边界位置 */
-details.think.compaction-flash > summary {
+details.think.compaction-flash>summary {
   background: rgba(255, 191, 73, 0.18);
   outline: 1px solid rgba(255, 191, 73, 0.45);
   border-radius: 3px;
 }
-.think-body { white-space: pre-wrap; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); padding-left: 8px; margin-top: 4px; }
+
+.think-body {
+  white-space: pre-wrap;
+  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, .4));
+  padding-left: 8px;
+  margin-top: 4px;
+}
+
 /* 工单29扩权（用户直令 2026-09-20）：思考块限高内部滚动——live 流式与历史重绘同用 .think-body，
    一处生效两路受益；流式期间 appendThink 自动滚底（main.ts）。纯 CSS，零监听器 */
-.think-body { max-height: 240px; overflow-y: auto; }
-.tool { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .85; margin: 5px 0 2px 8px; padding: 2px 6px; border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,.4)); }
-.tool-out { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .55; white-space: pre-wrap; margin: 0 0 4px 16px; }
-.notice { font-size: 11px; opacity: .55; margin: 4px 8px; }
+.think-body {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.tool {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  opacity: .85;
+  margin: 5px 0 2px 8px;
+  padding: 2px 6px;
+  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, .4));
+}
+
+.tool-out {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  opacity: .55;
+  white-space: pre-wrap;
+  margin: 0 0 4px 16px;
+}
+
+.notice {
+  font-size: 11px;
+  opacity: .55;
+  margin: 4px 8px;
+}
 
 /* ── 工具行（CC 风格块结构）── */
-.tool { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px 2px; padding: 4px 8px; font-size: 12px; cursor: pointer; border-radius: 6px; font-family: var(--vscode-font-family); }
-.tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.12)); }
-.tool .t-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-descriptionForeground, #888); }
-.tool.ok .t-dot { background: #4ec96e; box-shadow: 0 0 4px rgba(78,201,110,.5); }
-.tool.err .t-dot { background: #f66; box-shadow: 0 0 4px rgba(255,102,102,.5); }
-.tool.run .t-dot { background: transparent; border: 2px solid var(--vscode-focusBorder, #0078d4); animation: pulse 1s infinite; }
-@keyframes pulse { 50% { opacity: .3; } }
-.tool .t-name { font-weight: bold; color: var(--vscode-editor-foreground); }
-.tool .t-detail { opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.tool .t-arrow { opacity: .4; display: inline-flex; align-items: center; transition: transform .15s; }
-.tool.open .t-arrow { transform: rotate(90deg); }
-.tool-box { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; }
-.tool-box .tb-row { display: flex; gap: 8px; padding: 6px 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; }
-.tool-box .tb-row + .tb-row { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
-.tool-box .tb-tag { flex: none; opacity: .65; width: 26px; }
-.tool-box .tb-val { white-space: pre-wrap; word-break: break-all; opacity: .85; }
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px 2px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-family: var(--vscode-font-family);
+}
+
+.tool:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .12));
+}
+
+.tool .t-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--vscode-descriptionForeground, #888);
+}
+
+.tool.ok .t-dot {
+  background: #4ec96e;
+  box-shadow: 0 0 4px rgba(78, 201, 110, .5);
+}
+
+.tool.err .t-dot {
+  background: #f66;
+  box-shadow: 0 0 4px rgba(255, 102, 102, .5);
+}
+
+.tool.run .t-dot {
+  background: transparent;
+  border: 2px solid var(--vscode-focusBorder, #0078d4);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: .3;
+  }
+}
+
+.tool .t-name {
+  font-weight: bold;
+  color: var(--vscode-editor-foreground);
+}
+
+.tool .t-detail {
+  opacity: .55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.tool .t-arrow {
+  opacity: .4;
+  display: inline-flex;
+  align-items: center;
+  transition: transform .15s;
+}
+
+.tool.open .t-arrow {
+  transform: rotate(90deg);
+}
+
+.tool-box {
+  margin: 0 0 8px 18px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .25));
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tool-box .tb-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tool-box .tb-row+.tb-row {
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .2));
+}
+
+.tool-box .tb-tag {
+  flex: none;
+  opacity: .65;
+  width: 26px;
+}
+
+.tool-box .tb-val {
+  white-space: pre-wrap;
+  word-break: break-all;
+  opacity: .85;
+}
+
 /* 工单29扩权：全量 OUT 展开态限高内部滚动（首次点开换全量时才加 tb-full，1000 字预览不限） */
-.tool-box .tb-val.tb-full { max-height: 320px; overflow-y: auto; }
+.tool-box .tb-val.tb-full {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* 同名连续合并行的 ×N 计数（0.1.29 方案回归，bash ×N） */
-.tool .t-count { opacity: .6; }
+.tool .t-count {
+  opacity: .6;
+}
 
 /* ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ── */
-.subdock { position: fixed; right: 12px; top: 48px; width: 340px; max-width: 60%; z-index: 50; transform-origin: top right; transition: transform .18s ease-out, opacity .18s ease-out; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-focusBorder, #0078d4); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); overflow: hidden; font-size: 12px; }
+.subdock {
+  position: fixed;
+  right: 12px;
+  top: 48px;
+  width: 340px;
+  max-width: 60%;
+  z-index: 50;
+  transform-origin: top right;
+  transition: transform .18s ease-out, opacity .18s ease-out;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-focusBorder, #0078d4);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  overflow: hidden;
+  font-size: 12px;
+}
+
 /* 收起=缩回头部图标处（倒放切出动效）；opacity+pointer-events 而非 display:none，过渡才能走完 */
-.subdock.hidden { opacity: 0; transform: scale(.25) translateY(-10px); pointer-events: none; }
-.subdock.final { border-color: var(--vscode-panel-border, rgba(128,128,128,.35)); opacity: .92; }
-.subdock.min { width: 220px; }
-.sd-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; cursor: move; background: var(--vscode-titleBar-activeBackground, rgba(128,128,128,.14)); user-select: none; font-weight: bold; }
-.sd-head .sm-mode { font-weight: normal; }
-.sd-head .sm-count { font-weight: normal; }
-.sd-btn { cursor: pointer; opacity: .55; padding: 0 4px; border-radius: 3px; font-size: 12px; }
-.sd-head .sd-btn:last-child { margin-left: auto; } /* 只把最右按钮（—）推到右侧，返回按钮贴左（09-18 用户反馈） */
-.sd-head .sm-count + .sd-btn, .sd-head .sm-mode + .sd-btn { margin-left: auto; }
-.sd-btn + .sd-btn { margin-left: 0; }
-.sd-btn:hover { opacity: 1; background: rgba(128,128,128,.25); }
-.sd-body { max-height: 300px; overflow-y: auto; padding: 2px 0; }
-.sm-task { padding: 5px 10px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
-.sm-task:first-child { border-top: none; }
-.sm-task.failed .sm-agent { color: var(--vscode-errorForeground, #f66); }
-.sm-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
-.sm-agent { font-weight: 600; flex: none; }
-.sm-usage { opacity: .55; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sm-task-desc { opacity: .6; font-size: 11.5px; margin: 3px 0 0 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sm-act { opacity: .75; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); margin: 2px 0 0 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subdock.hidden {
+  opacity: 0;
+  transform: scale(.25) translateY(-10px);
+  pointer-events: none;
+}
+
+.subdock.final {
+  border-color: var(--vscode-panel-border, rgba(128, 128, 128, .35));
+  opacity: .92;
+}
+
+.subdock.min {
+  width: 220px;
+}
+
+.sd-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  cursor: move;
+  background: var(--vscode-titleBar-activeBackground, rgba(128, 128, 128, .14));
+  user-select: none;
+  font-weight: bold;
+}
+
+.sd-head .sm-mode {
+  font-weight: normal;
+}
+
+.sd-head .sm-count {
+  font-weight: normal;
+}
+
+.sd-btn {
+  cursor: pointer;
+  opacity: .55;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.sd-head .sd-btn:last-child {
+  margin-left: auto;
+}
+
+/* 只把最右按钮（—）推到右侧，返回按钮贴左（09-18 用户反馈） */
+.sd-head .sm-count+.sd-btn,
+.sd-head .sm-mode+.sd-btn {
+  margin-left: auto;
+}
+
+.sd-btn+.sd-btn {
+  margin-left: 0;
+}
+
+.sd-btn:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, .25);
+}
+
+.sd-body {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.sm-task {
+  padding: 5px 10px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+}
+
+.sm-task:first-child {
+  border-top: none;
+}
+
+.sm-task.failed .sm-agent {
+  color: var(--vscode-errorForeground, #f66);
+}
+
+.sm-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sm-agent {
+  font-weight: 600;
+  flex: none;
+}
+
+.sm-usage {
+  opacity: .55;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-task-desc {
+  opacity: .6;
+  font-size: 11.5px;
+  margin: 3px 0 0 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-act {
+  opacity: .75;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  margin: 2px 0 0 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 下钻视图（概览用不到 sm-act）：FULL 快照的助手文本/工具输出保留换行，不单行截断；
    行距放宽 + 工具输出行（⮑）灰底左缘条与助手文本分层（09-18 样式打磨） */
-.sm-detail { padding: 2px 0 8px; }
-.sm-detail .sm-act { white-space: pre-wrap; overflow-x: auto; text-overflow: clip; margin: 4px 10px 4px 15px; line-height: 1.5; }
-.sm-detail .sm-act.out { background: rgba(128,128,128,.08); border-left: 2px solid rgba(128,128,128,.28); padding: 2px 7px; border-radius: 0 3px 3px 0; margin-left: 13px; }
-.sm-detail .sm-task { padding-bottom: 7px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
-.sm-detail .sm-out-md { margin: 8px 10px 8px 13px; }
-.sm-more { opacity: .4; font-size: 10.5px; margin: 2px 0 0 15px; }
-.sm-out { opacity: .85; font-size: 11.5px; margin: 4px 0 0 15px; padding: 4px 8px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-radius: 5px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
-.sm-ico { flex: none; }
-.sm-ico.spin { animation: smspin 1.2s linear infinite; display: inline-block; }
+.sm-detail {
+  padding: 2px 0 8px;
+}
+
+.sm-detail .sm-act {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  text-overflow: clip;
+  margin: 4px 10px 4px 15px;
+  line-height: 1.5;
+}
+
+.sm-detail .sm-act.out {
+  background: rgba(128, 128, 128, .08);
+  border-left: 2px solid rgba(128, 128, 128, .28);
+  padding: 2px 7px;
+  border-radius: 0 3px 3px 0;
+  margin-left: 13px;
+}
+
+.sm-detail .sm-task {
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+}
+
+.sm-detail .sm-out-md {
+  margin: 8px 10px 8px 13px;
+}
+
+.sm-more {
+  opacity: .4;
+  font-size: 10.5px;
+  margin: 2px 0 0 15px;
+}
+
+.sm-out {
+  opacity: .85;
+  font-size: 11.5px;
+  margin: 4px 0 0 15px;
+  padding: 4px 8px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
+  border-radius: 5px;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sm-ico {
+  flex: none;
+}
+
+.sm-ico.spin {
+  animation: smspin 1.2s linear infinite;
+  display: inline-block;
+}
+
 /* 工单 A：概览列表（已开启/完成分组）+ 下钻详情，Codex 同款交互 */
-.sm-group-title { opacity: .5; font-size: 10.5px; padding: 6px 10px 2px; user-select: none; }
-.sm-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
-.sm-row:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.16)); }
-.sm-row-main { flex: 1; min-width: 0; }
-.sm-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sm-row.failed .sm-name, .sm-row.failed .sm-status { color: var(--vscode-errorForeground, #f66); }
-.sm-status { opacity: .55; font-size: 10.5px; margin-top: 1px; }
-.sm-time { flex: none; opacity: .55; font-size: 10.5px; }
-.sm-back-head { font-size: 12px; opacity: .8; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
-.sm-back-head:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.16)); }
-.sm-empty { opacity: .5; padding: 14px 10px; text-align: center; }
-.sm-out-md { margin: 6px 10px 8px 15px; padding: 6px 9px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); border-radius: 5px; max-height: 260px; overflow-y: auto; font-size: 11.5px; word-break: break-word; }
-@keyframes smspin { to { transform: rotate(360deg); } }
-.sm-title { font-weight: bold; }
-.sm-mode { opacity: .5; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); }
-.sm-count { opacity: .65; font-size: 11px; }
-.sm-hint { margin-left: auto; opacity: .4; font-size: 10.5px; }
+.sm-group-title {
+  opacity: .5;
+  font-size: 10.5px;
+  padding: 6px 10px 2px;
+  user-select: none;
+}
+
+.sm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+}
+
+.sm-row:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .16));
+}
+
+.sm-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sm-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-row.failed .sm-name,
+.sm-row.failed .sm-status {
+  color: var(--vscode-errorForeground, #f66);
+}
+
+.sm-status {
+  opacity: .55;
+  font-size: 10.5px;
+  margin-top: 1px;
+}
+
+.sm-time {
+  flex: none;
+  opacity: .55;
+  font-size: 10.5px;
+}
+
+.sm-back-head {
+  font-size: 12px;
+  opacity: .8;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.sm-back-head:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .16));
+}
+
+.sm-empty {
+  opacity: .5;
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.sm-out-md {
+  margin: 6px 10px 8px 15px;
+  padding: 6px 9px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
+  border-radius: 5px;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 11.5px;
+  word-break: break-word;
+}
+
+@keyframes smspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sm-title {
+  font-weight: bold;
+}
+
+.sm-mode {
+  opacity: .5;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.sm-count {
+  opacity: .65;
+  font-size: 11px;
+}
+
+.sm-hint {
+  margin-left: auto;
+  opacity: .4;
+  font-size: 10.5px;
+}
 
 /* ── 子 agent 监控内联卡片（final 后留在消息流，可展开看全部活动）── */
-.submon { margin: 0 0 8px 18px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); border-radius: 8px; overflow: hidden; font-size: 12px; }
-.submon.final { opacity: .8; }
-.sm-head { display: flex; align-items: center; gap: 7px; padding: 5px 10px; cursor: pointer; background: var(--vscode-editorWidget-background, rgba(128,128,128,.10)); user-select: none; }
-.submon .sm-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.16)); }
-.submon .sm-task { padding: 5px 10px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.18)); }
+.submon {
+  margin: 0 0 8px 18px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .25));
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.submon.final {
+  opacity: .8;
+}
+
+.sm-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  cursor: pointer;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
+  user-select: none;
+}
+
+.submon .sm-head:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16));
+}
+
+.submon .sm-task {
+  padding: 5px 10px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+}
 
 /* ── 输入区（Claude Code 风格卡片）── */
-#composer { margin: 0 10px 8px; position: relative; display: flex; flex-direction: column; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 10px; background: var(--vscode-input-background); }
-#composer:focus-within { border-color: var(--vscode-focusBorder, #0078d4); }
-#attachbar { display: none; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
-#ctoolbar #codechip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; line-height: 18px; padding: 1px 10px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.35)); border-radius: 999px; background: transparent; cursor: pointer; white-space: nowrap; opacity: .85; height: auto; }
-#ctoolbar #codechip:hover { border-color: var(--vscode-focusBorder, #0078d4); opacity: 1; }
-.chip-img { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 3px; border-radius: 7px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 260px; }
-.chip-img img { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; display: block; flex: none; }
+#composer {
+  margin: 0 auto 8px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, .35));
+  border-radius: 10px;
+  background: var(--vscode-input-background);
+}
+
+#composer:focus-within {
+  border-color: var(--vscode-focusBorder, #0078d4);
+}
+
+#attachbar {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+#ctoolbar #codechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 1px 10px;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, .35));
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  opacity: .85;
+  height: auto;
+}
+
+#ctoolbar #codechip:hover {
+  border-color: var(--vscode-focusBorder, #0078d4);
+  opacity: 1;
+}
+
+.chip-img {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 3px;
+  border-radius: 7px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .15));
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
+  font-size: 11px;
+  max-width: 260px;
+}
+
+.chip-img img {
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  flex: none;
+}
+
 /* 文件名/尺寸文本单独包一层才能出省略号（text-overflow 对 flex 容器里的裸文本节点不生效） */
-.chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* × 永不许被内容挤出 chip 可视区（overflow:hidden 会裁掉它 → 删不掉事故） */
-.chip-x { cursor: pointer; opacity: .6; padding: 0 2px; flex: none; }
-.chip-file .hint { opacity: .6; font-size: 10px; flex: 0 1 auto; }
-.chip-file { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 10px; border-radius: 999px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.15)); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); font-size: 11px; max-width: 240px; overflow: hidden; white-space: nowrap; }
-.chip-file .chip-label { flex: 0 1 auto; }
-.chip-file svg, .chip-img svg { flex: none; }
-.chip-x:hover { opacity: 1; }
-#suggest { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }
-.sg-item { display: flex; align-items: center; gap: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-.sg-item.active, .sg-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
-.sg-label { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sg-detail { flex: 1; min-width: 0; text-align: right; margin-left: auto; opacity: .45; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sg-header { padding: 6px 10px 2px; font-size: 10px; font-weight: bold; opacity: .45; text-transform: uppercase; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); margin-top: 2px; }
-.sg-header:first-child { margin-top: 0; border-top: none; }
-#plusmenu { display: none; position: absolute; bottom: 42px; left: 8px; min-width: 170px; background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 20; overflow: hidden; }
-.pm-item { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-.pm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
-.fp { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-.fp:hover { color: var(--vscode-textLink-foreground, #4daafc); }
-#input { display: block; width: 100%; box-sizing: border-box; resize: none; height: 54px; min-height: 54px; max-height: 220px; overflow-y: hidden; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 8px 10px; font-family: inherit; font-size: var(--vscode-font-size, 13px); line-height: 1.5; }
-#ctoolbar { display: flex; align-items: center; gap: 6px; padding: 2px 8px 7px; }
-.tb-btn { cursor: pointer; padding: 0 8px; height: 26px; display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; font-size: 12px; opacity: .8; white-space: nowrap; }
-#codechip.off { opacity: .4; text-decoration: line-through; }
-.cc-range { opacity: .6; margin-left: 1px; }
-.tb-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.2)); opacity: 1; }
-.tb-spacer { flex: 1; }
-#send, #stop { width: 34px; height: 26px; padding: 0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); display: inline-flex; align-items: center; justify-content: center; flex: none; }
-#send:hover, #stop:hover { background: var(--vscode-button-hoverBackground); }
-#stop { display: none; background: var(--vscode-inputValidation-errorBackground, #b91c1c); }
+.chip-x {
+  cursor: pointer;
+  opacity: .6;
+  padding: 0 2px;
+  flex: none;
+}
+
+.chip-file .hint {
+  opacity: .6;
+  font-size: 10px;
+  flex: 0 1 auto;
+}
+
+.chip-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 999px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .15));
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
+  font-size: 11px;
+  max-width: 240px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chip-file .chip-label {
+  flex: 0 1 auto;
+}
+
+.chip-file svg,
+.chip-img svg {
+  flex: none;
+}
+
+.chip-x:hover {
+  opacity: 1;
+}
+
+#suggest {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .4);
+  z-index: 10;
+}
+
+.sg-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sg-item.active,
+.sg-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .2));
+}
+
+.sg-label {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sg-detail {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  margin-left: auto;
+  opacity: .45;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sg-header {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  font-weight: bold;
+  opacity: .45;
+  text-transform: uppercase;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .2));
+  margin-top: 2px;
+}
+
+.sg-header:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+
+#plusmenu {
+  display: none;
+  position: absolute;
+  bottom: 42px;
+  left: 8px;
+  min-width: 170px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .4);
+  z-index: 20;
+  overflow: hidden;
+}
+
+.pm-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pm-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .2));
+}
+
+.fp {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.fp:hover {
+  color: var(--vscode-textLink-foreground, #4daafc);
+}
+
+/* 输入区/状态栏与消息列同轴。必须显式 width:100% + border-box：这些块是 .session-view（flex 列）
+ * 的子项，仅设 margin:auto 会让 stretch 失效 → 块收缩成内容宽后居中（⏳ 状态行/底栏缩水事故），
+ * 而 width:100% 不带 border-box 又会被自身 padding 撑破面板横向裁字（0.1.44 事故）——两个都要 */
+#queuebar,
+#statusline,
+#composer,
+#bottombar {
+  max-width: 800px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+#composer {
+  width: calc(100% - 20px);
+}
+
+/* 抵消原有左右 10px margin，保持贴列缘时不缩进 */
+#input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  height: 54px;
+  min-height: 54px;
+  max-height: 220px;
+  overflow-y: hidden;
+  background: transparent;
+  color: var(--vscode-input-foreground);
+  border: none;
+  outline: none;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.5;
+}
+
+#ctoolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 7px;
+}
+
+.tb-btn {
+  cursor: pointer;
+  padding: 0 8px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 5px;
+  font-size: 12px;
+  opacity: .8;
+  white-space: nowrap;
+}
+
+#codechip.off {
+  opacity: .4;
+  text-decoration: line-through;
+}
+
+.cc-range {
+  opacity: .6;
+  margin-left: 1px;
+}
+
+.tb-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
+  opacity: 1;
+}
+
+.tb-spacer {
+  flex: 1;
+}
+
+#send,
+#stop {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+#send:hover,
+#stop:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+#stop {
+  display: none;
+  background: var(--vscode-inputValidation-errorBackground, #b91c1c);
+}
 
 /* ── 底部状态栏 ── */
 /* 版本指纹（原 opacity:.45 常显，09-18 用户要求隐藏）。留着 DOM 钩子：
    查「装了新包但跑旧资源」类事故时把 display 改回 opacity 即可显形 */
-#bottombar #ver { display: none; }
-#bottombar { display: flex; align-items: center; gap: 10px; padding: 0 12px 6px; font-size: 11px; opacity: .8; }
-#bottombar #usage { margin-left: auto; white-space: nowrap; opacity: .8; }
-#statusline { display: flex; align-items: center; min-height: 16px; padding: 0 14px 2px; font-size: 11px; }
-#status.busy { font-weight: 600; color: var(--vscode-textLink-foreground, #4daafc); animation: wpulse 1.2s ease-in-out infinite; }
-#bottombar .tb-btn { padding: 0 6px; height: 20px; }
+#bottombar #ver {
+  display: none;
+}
+
+#bottombar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 6px;
+  font-size: 11px;
+  opacity: .8;
+}
+
+#bottombar #usage {
+  margin-left: auto;
+  white-space: nowrap;
+  opacity: .8;
+}
+
+#statusline {
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 14px 2px;
+  font-size: 11px;
+}
+
+#status.busy {
+  font-weight: 600;
+  color: var(--vscode-textLink-foreground, #4daafc);
+  animation: wpulse 1.2s ease-in-out infinite;
+}
+
+#bottombar .tb-btn {
+  padding: 0 6px;
+  height: 20px;
+}
+
 /* 模型名可能很长（provider preset 名等），限宽截断，全名看 title 提示 */
-#bottombar #model { max-width: 45%; min-width: 0; }
-#bottombar #model .chip-label { flex: 0 1 auto; }
-.working-row { padding: 4px 14px; font-size: 12px; opacity: .7; }
-@keyframes wpulse { 0%, 100% { opacity: 1; text-shadow: 0 0 10px rgba(77,170,252,.9); } 50% { opacity: .4; text-shadow: none; } }
+#bottombar #model {
+  max-width: 45%;
+  min-width: 0;
+}
+
+#bottombar #model .chip-label {
+  flex: 0 1 auto;
+}
+
+.working-row {
+  padding: 4px 14px;
+  font-size: 12px;
+  opacity: .7;
+}
+
+@keyframes wpulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 10px rgba(77, 170, 252, .9);
+  }
+
+  50% {
+    opacity: .4;
+    text-shadow: none;
+  }
+}
 
 /* ── 主题（🎨 切换，跟随 VS Code / CC 暗黑 / 午夜蓝）── */
-body[data-theme='cc-dark'] { background: #0a0a0c; color: #e6e6e9; }
-body[data-theme='cc-dark'] #header { border-bottom: 1px solid #22222a; }
-body[data-theme='cc-dark'] .bubble.user { background: #8a4b2f; color: #fff; }
-body[data-theme='cc-dark'] .bubble.assistant { background: #17171c; }
-body[data-theme='cc-dark'] .tool:hover, body[data-theme='cc-dark'] .tool-box { background: #121216; }
-body[data-theme='cc-dark'] pre.code { background: #121216; }
-body[data-theme='cc-dark'] #composer { background: #131318; border-color: #2a2a33; }
-body[data-theme='cc-dark'] #input { color: #e6e6e9; }
-body[data-theme='cc-dark'] #suggest, body[data-theme='cc-dark'] #plusmenu { background: #17171c; border-color: #2a2a33; }
+body[data-theme='cc-dark'] {
+  background: #0a0a0c;
+  color: #e6e6e9;
+}
 
-body[data-theme='midnight'] { background: #0b1220; color: #dbe4f0; }
-body[data-theme='midnight'] .bubble.user { background: #2b4a7a; color: #fff; }
-body[data-theme='midnight'] .bubble.assistant { background: #14203a; }
-body[data-theme='midnight'] .tool:hover, body[data-theme='midnight'] .tool-box { background: #101a30; }
-body[data-theme='midnight'] pre.code { background: #101a30; }
-body[data-theme='midnight'] #composer { background: #0e1830; border-color: #22345c; }
-body[data-theme='midnight'] #input { color: #dbe4f0; }
-body[data-theme='midnight'] #suggest, body[data-theme='midnight'] #plusmenu { background: #14203a; border-color: #22345c; }
+body[data-theme='cc-dark'] #header {
+  border-bottom: 1px solid #22222a;
+}
+
+body[data-theme='cc-dark'] .bubble.user {
+  background: #8a4b2f;
+  color: #fff;
+}
+
+body[data-theme='cc-dark'] .bubble.assistant {
+  background: #17171c;
+}
+
+body[data-theme='cc-dark'] .tool:hover,
+body[data-theme='cc-dark'] .tool-box {
+  background: #121216;
+}
+
+body[data-theme='cc-dark'] pre.code {
+  background: #121216;
+}
+
+body[data-theme='cc-dark'] #composer {
+  background: #131318;
+  border-color: #2a2a33;
+}
+
+body[data-theme='cc-dark'] #input {
+  color: #e6e6e9;
+}
+
+body[data-theme='cc-dark'] #suggest,
+body[data-theme='cc-dark'] #plusmenu {
+  background: #17171c;
+  border-color: #2a2a33;
+}
+
+body[data-theme='midnight'] {
+  background: #0b1220;
+  color: #dbe4f0;
+}
+
+body[data-theme='midnight'] .bubble.user {
+  background: #2b4a7a;
+  color: #fff;
+}
+
+body[data-theme='midnight'] .bubble.assistant {
+  background: #14203a;
+}
+
+body[data-theme='midnight'] .tool:hover,
+body[data-theme='midnight'] .tool-box {
+  background: #101a30;
+}
+
+body[data-theme='midnight'] pre.code {
+  background: #101a30;
+}
+
+body[data-theme='midnight'] #composer {
+  background: #0e1830;
+  border-color: #22345c;
+}
+
+body[data-theme='midnight'] #input {
+  color: #dbe4f0;
+}
+
+body[data-theme='midnight'] #suggest,
+body[data-theme='midnight'] #plusmenu {
+  background: #14203a;
+  border-color: #22345c;
+}
+
 /* ── 压缩横幅（工单六）+ 变更文件条（工单七）：header 下、messages 上的单行通知条，随主题走 VS Code 变量 ──
    注意：本文件注释只能用成对的星号斜杠包住，双斜杠会整段失效（老坑，别改） ── */
-#banner, #changesbar, #compactbar { display: none; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.12)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); }
-#banner .b-txt, #changesbar .b-txt, #compactbar .b-txt { flex: 1; min-width: 0; }
-#banner .b-act, #changesbar .b-act, #compactbar .b-act { flex: none; font-size: 11px; padding: 2px 8px; cursor: pointer; border: none; border-radius: 3px; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); }
-#banner .b-act:hover, #changesbar .b-act:hover, #compactbar .b-act:hover { background: var(--vscode-button-hoverBackground, rgba(0,120,212,.85)); }
-#banner .b-close, #changesbar .b-close, #compactbar .b-close { flex: none; cursor: pointer; opacity: .55; padding: 0 2px; }
-#banner .b-close:hover, #changesbar .b-close:hover, #compactbar .b-close:hover { opacity: 1; }
+#banner,
+#changesbar,
+#compactbar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .12));
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .25));
+}
+
+#banner .b-txt,
+#changesbar .b-txt,
+#compactbar .b-txt {
+  flex: 1;
+  min-width: 0;
+}
+
+#banner .b-act,
+#changesbar .b-act,
+#compactbar .b-act {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border: none;
+  border-radius: 3px;
+  background: var(--vscode-button-background, #0078d4);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+#banner .b-act:hover,
+#changesbar .b-act:hover,
+#compactbar .b-act:hover {
+  background: var(--vscode-button-hoverBackground, rgba(0, 120, 212, .85));
+}
+
+#banner .b-close,
+#changesbar .b-close,
+#compactbar .b-close {
+  flex: none;
+  cursor: pointer;
+  opacity: .55;
+  padding: 0 2px;
+}
+
+#banner .b-close:hover,
+#changesbar .b-close:hover,
+#compactbar .b-close:hover {
+  opacity: 1;
+}
+
 /* ── 子 agent 回报卡片：独立于用户气泡，左缘色条标识状态（2026-09-18）── */
-.subret { margin: 6px 0; max-width: 88%; border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding: 5px 10px 6px; background: var(--vscode-editorWidget-background, rgba(128,128,128,.1)); border-radius: 4px; }
-.subret.fail { border-left-color: var(--vscode-charts-red, #f14c4c); }
-.subret-head { font-size: 11px; opacity: .65; margin-bottom: 3px; }
-.subret-body { font-size: 12px; overflow-x: auto; }
+.subret {
+  margin: 6px 0;
+  max-width: 88%;
+  border-left: 2px solid var(--vscode-charts-purple, #b180d7);
+  padding: 5px 10px 6px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .1));
+  border-radius: 4px;
+}
+
+.subret.fail {
+  border-left-color: var(--vscode-charts-red, #f14c4c);
+}
+
+.subret-head {
+  font-size: 11px;
+  opacity: .65;
+  margin-bottom: 3px;
+}
+
+.subret-body {
+  font-size: 12px;
+  overflow-x: auto;
+}
+
 /* 子 agent 回报排队 pill（工单26）：与用户排队项同构，左缘紫条标识来源 */
-.q-item.q-native { border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding-left: 6px; }
+.q-item.q-native {
+  border-left: 2px solid var(--vscode-charts-purple, #b180d7);
+  padding-left: 6px;
+}

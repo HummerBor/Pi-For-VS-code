@@ -122,6 +122,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var suggestEl = q('#suggest'); var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
     var bannerEl = q('#banner'); var changesBarEl = q('#changesbar'); var queuebarEl = q('#queuebar');
     var compactbarEl = q('#compactbar'); // 压缩浮动条（仿改动条：完成后提示 + 点击定位折叠块）
+    var outlineEl = q('#outline'); // 消息大纲轨道（每页签一棵，随视图克隆；逻辑见 olSpy 区）
     // 视图内上行显式带自己的 tabId（不再借活动页签打标——换镜退役后归属唯一）
     function vpost(m: any) { if (m.tabId === undefined) m.tabId = id; vscodeApi.postMessage(m); }
   var toolEls = {}; var queuedItems = [];
@@ -250,6 +251,91 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
+  // ── 消息大纲轨道（用户直令 2026-09-21，对齐 DeepSeek/Codex web）：右缘一列短横线 =
+  // 每条用户消息一个锚点；hover 错峰展开文字列表、点击平滑跳转+闪烁、滚动时当前条平滑跟随。
+  // 纯视图内 DOM 零协议新增；锚点即 .bubble.user（addUser 单点打标，历史重绘同路径）。
+  // 当前条判定口径：视口上 1/3 线以上最近一条（与阅读位置一致，拉到底时最后一条必中）
+  var olAnchors: { b: HTMLElement; row: HTMLElement }[] = [];
+  var olSpyQueued = false; // rAF 合顿滚动事件，一帧一次布局读
+  var olSuspend = false; // renderAll 逐条 addUser 时挂起（每条全量重建 = O(N²)，重绘完一次建好）
+  function outlineRebuild() {
+    if (olSuspend) return;
+    olAnchors = [];
+    outlineEl.innerHTML = '';
+    var items = olScan();
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i] as any;
+      var b = it.b as HTMLElement;
+      var row = el('div', 'ol-row' + (it.queued ? ' ol-queued' : ''));
+      var txt = it.queued ? ('⏳ ' + (it._t || '')) : olText(b);
+      row.appendChild(el('span', 'ol-label', txt));
+      row.appendChild(el('span', 'ol-dash'));
+      (function (bb: HTMLElement, rr: HTMLElement) {
+        rr.addEventListener('click', function () {
+          bb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // 回流强制重启动画：连点同一条也能重新闪（排队 pill 在消息流外，无闪烁也不报错）
+          bb.classList.remove('ol-jump'); void bb.offsetWidth; bb.classList.add('ol-jump');
+        });
+      })(b, row);
+      outlineEl.appendChild(row);
+      olAnchors.push({ b: b, row: row });
+    }
+    outlineEl.style.display = olAnchors.length ? 'flex' : 'none';
+    outlineResize(); // 重建时同步量一次摆位——RO 初次回调只发一次，若当时视图还没布局（0×0）
+    // 就永远停在 height:0（实测事故：恢复会话后轨道不可见），这里自愈兑底
+    olSpy(); // 重建即校准当前条（重绘/新增后位置全变）
+  }
+  function outlineResize() {
+    if (id !== activeTabId) return; // 后台视图无布局，切回时 RO 会再调
+    // 盒子以消息区中线为轴垂直居中（CSS translateY(-50%) 配合），高度自动、最高消息区的 1/3（超出内部滚动）
+    outlineEl.style.top = Math.round(root.offsetTop + root.clientHeight / 2) + 'px';
+    outlineEl.style.maxHeight = Math.floor(root.clientHeight / 3) + 'px';
+  }
+  function olText(b: HTMLElement) {
+    var t = (b as any)._olText || b.textContent || '';
+    return t.replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+  // 排队中的用户消息（queuebar pill）也进轨道：发出即有锚点（此前只数已入列的 .bubble.user，
+  // 刚发出的几秒里轨道少一根像坏了，实测反馈）；交付后 renderAll 重绘，锚点自动换成正式气泡
+  function olScan() {
+    var out: { b: HTMLElement; row: HTMLElement; queued: boolean }[] = [];
+    var pills = queuebarEl.querySelectorAll('.q-item[data-qid]');
+    for (var p = 0; p < pills.length; p++) {
+      var qt = pills[p].querySelector('.q-text');
+      out.push({ b: pills[p] as HTMLElement, row: null as any, queued: true, _t: qt ? qt.textContent || '' : '' } as any);
+    }
+    var bs = root.querySelectorAll('.bubble.user');
+    for (var i = 0; i < bs.length; i++) out.push({ b: bs[i] as HTMLElement, row: null as any, queued: false } as any);
+    return out;
+  }
+  function olSpy() {
+    if (id !== activeTabId) return; // 后台视图无布局，切回时 RO 会再调
+    if (olSpyQueued) return;
+    olSpyQueued = true;
+    requestAnimationFrame(function () {
+      olSpyQueued = false;
+      if (!olAnchors.length) return; // 空会话无锚点，不算当前条
+      var line = root.scrollTop + root.offsetTop + root.clientHeight / 2; // 视口中线（点击跳转 block:center 后点中条必在中线上）
+      var cur = -1;
+      for (var i = 0; i < olAnchors.length; i++) {
+        if ((olAnchors[i].b as any).offsetTop <= line) cur = i; else break;
+      }
+      for (var j = 0; j < olAnchors.length; j++) {
+        olAnchors[j].row.classList.toggle('cur', j === cur);
+        // 错峰步长=离选中条的距离：展开/淡入从 cur 向两侧辐射（用户直令 2026-09-21，不再从上往下流）。
+        // 注意只错峰不位移：曾试过 rAF 钉住 cur（补偿 transform），cur 在列尾时整个轨道块被带离
+        // 垂直居中上飞（用户实测駁回 2026-09-21）——轨道块居中优先，别再加位移补偿
+        olAnchors[j].row.style.setProperty('--d', String(Math.abs(j - cur)));
+      }
+    });
+  }
+  root.addEventListener('scroll', olSpy, { passive: true });
+  // 轨道贴 .msg-root 可视区摆位：横幅/输入区高度变化、窗体缩放、切页签都触发 RO 重摆
+  var olRO = new ResizeObserver(function () {
+    outlineResize();
+    olSpy();
+  });
+  olRO.observe(root);
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
   function renderStatus() { modeBadge.textContent = modeText; }
 
@@ -382,6 +468,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       return;
     }
     var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user');
+    (b as any)._olText = text || ''; // 大纲轨道条目文案（空文本=代码上下文泡，olText 里有兑底）
     // 工单28 追加（用户直令 2026-09-20）：迁移时旧 bubble 连 sticky-open/pinned 状态一起摘、
     // 旧 sentinel 一并 unobserve；新 bubble 从未折叠原位态起步（钉住后才折，超 3 行才出 chip）
     if (stickyQ) {
@@ -393,7 +480,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 原位态量一次完整内容高（未 clamp，后续钉住判定用它，不再反复读布局）；
     // sentinel 在 bubble 前，IO 观察它判定钉住（工单28 追加二）
     observeSticky(sent, b);
-    requestAnimationFrame(function () { (b as any)._fullH = b.scrollHeight; updateStickyChip(b as any); }); }  // 主动发消息=回底意图（工单十七要点 3）
+    requestAnimationFrame(function () { (b as any)._fullH = b.scrollHeight; updateStickyChip(b as any); });
+    outlineRebuild(); // 新用户消息 → 大纲轨道补一行（历史重绘走 renderAll 出口，不在此重复）
+  }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
@@ -717,12 +806,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return d;
   }
   function renderAll(list) {
+    olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
     liveReset();
     toolEls = {};
     lastToolGroup = null; // 重绘后 DOM 全换，旧引用作废（相邻判定本身也兕底，这里显式清）
     if (!list || !list.length) {
       if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); }
+      olSuspend = false;
+      outlineRebuild(); // 空会话无锚点，轨道自动隐藏
       return;
     }
     linkifyEnabled = false; // 老消息不 linkify，循环到最近 15 条时再打开
@@ -815,6 +907,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 重挂存活的 toast（renderAll 开头清了 root；空列表 welcome 早退分支不挂——新会话无历史 toast）
     if (lastNotice) { var ln = el('div', 'notice', lastNotice); linkify(ln); root.appendChild(ln); }
     scroll();
+    olSuspend = false;
+    outlineRebuild(); // 整树重绘完 → 重建轨道（bubble 全新 DOM，旧锚点全作废）
     // 压缩完成 → 浮动条（2026-09-20 用户拍板：自动跳顶难受，仿「查看改动」条浮动提示）。
     // 折叠块在消息区最顶（压缩点前历史已被替换，它前面没有消息），平时不可见——
     // 条常驻提示本轮有压缩，「查看压缩」定位到块（点击触发的高亮不搢流）。
@@ -1195,7 +1289,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       applyState(m);
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
-    else if (m.type === 'render') { built = true; renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
