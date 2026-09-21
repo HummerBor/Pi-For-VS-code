@@ -1,12 +1,16 @@
 import { defineConfig, type Plugin } from "vite";
 import { copyFileSync } from "fs";
+import { buildPreview } from "./scripts/preview-html.mjs";
 
-/** 把 HTML 模板拷进产物目录（webview/ 源码不随 vsix 分发） */
+/** 把 HTML 模板拷进产物目录（webview/ 源码不随 vsix 分发），并重新生成浏览器调试预览页
+ *  （emptyOutDir 会把 dist 整目录清空——preview.html 不在 watch 产物里，必须每次重建，
+ *  否则 vite build --watch 首轮就把预览页清没了，实测事故 2026-09-21） */
 function copyHtmlTemplate(): Plugin {
   return {
     name: "copy-html-template",
     closeBundle() {
       copyFileSync("webview/index.html", "dist/webview/index.html");
+      try { buildPreview(); } catch { /* 预览页生成失败不挡构建（out/i18n.js 未就绪等） */ }
     },
   };
 }

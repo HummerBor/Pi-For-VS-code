@@ -5,6 +5,7 @@ scripts/**
 node_modules/**
 out/**/*.map
 dist/**/*.map
+dist/webview/preview.html
 vite.config.mts
 HANDOVER.md
 .gitignore

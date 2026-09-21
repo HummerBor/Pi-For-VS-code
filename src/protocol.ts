@@ -333,8 +333,9 @@ export interface QueuedRemoveMsg {
   type: "queuedRemove";
   qid: string;
 }
-/** 工单十六：取回完成——qid 项出队，text（sentText，含附件胶囊块）合入编辑框。
- *  与 queuedDelivered 的区别：不进气泡流，只回编辑框（用户在编辑框里删改，同 TUI alt+up） */
+/** 工单十六：取回完成——qid 项出队，text 合入编辑框。
+ *  与 queuedDelivered 的区别：不进气泡流，只回编辑框（用户在编辑框里删改，同 TUI alt+up）。
+ *  text 已剥离代码上下文包装（上下文经 codeCtx 消息还原成 chip）；附件胶囊块仍拼在文本里 */
 export interface QueuedRetrievedMsg {
   type: "queuedRetrieved";
   qid: string;

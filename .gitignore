@@ -18,3 +18,7 @@ scripts-extract.js
 scripts-debug.js
 scratch2.txt
 test.txt
+scripts/.preview-session.txt
+scripts/.stub-dump.js
+scripts/.check-out.txt
+scripts/.vm-err.txt

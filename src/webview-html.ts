@@ -50,7 +50,7 @@ export function getHtml(
       "<style>html { background: " + floorColor + " !important; }</style>",
     // 防止产物里出现 </script 提前闭合标签
     js: js.replace(/<\/script/gi, "<\\/script"),
-    // 条件片段：背景图层
+    // 条件片段：背景图层（用户直令 2026-09-21 撤掉常驻极光渐变——只在配了 backgroundImage 时才注入）
     bgLayer: bgImage ? `<div id="bg-layer" style="background-image:url('${bgImage}');opacity:${bgOpacity}"></div>` : "",
   };
 
