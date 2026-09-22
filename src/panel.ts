@@ -119,10 +119,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.restoredTabs.add(t.id);
     }
     this.tabSeq = maxSeq;
-    // 活动标签失效（如跨版本手改）兑底到最后一个，不猜第一个
-    this.activeTabId = saved.tabs.some((t) => t.id === saved.active)
-      ? saved.active
-      : saved.tabs[saved.tabs.length - 1].id;
+    // 重启聚焦 = 「pi -r 的第一个会话」所在页签（用户拍板 2026-09-22）：会话文件 mtime 最新的
+    // 页签。原语义「关闭时活动的页签」被实测否掉——用户重启前刚建的新会话（111）在另一个
+    // 页签，而活动页签往往停在长聊/常写盘的那个（如对 dev 会话的持续对话），重启后回到的
+    // 不是用户心中「当前会话」。兑底：全部页签无会话文件（未落盘/ephemeral）→ 回退 saved.active
+    const sessMap = (this.globalState.get<Record<string, Record<string, string>>>("piChat.lastSessionByWs2", {})[wsKey]) ?? {};
+    let bestId: string | undefined;
+    let bestMs = -1;
+    for (const t of saved.tabs) {
+      const f = sessMap[t.id];
+      if (!f || !fs.existsSync(f)) continue;
+      try {
+        const m = fs.statSync(f).mtimeMs;
+        if (m > bestMs) { bestMs = m; bestId = t.id; }
+      } catch { /* 文件竞态消失则跳过 */ }
+    }
+    this.activeTabId = bestId
+      ?? (saved.tabs.some((t) => t.id === saved.active)
+        ? saved.active
+        : saved.tabs[saved.tabs.length - 1].id);
   }
 
   /** 标签栏落盘（id/顺序/标题/活动标签）——按工作区分桶（globalState 跨项目共享，
