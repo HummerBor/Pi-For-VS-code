@@ -1,8 +1,11 @@
-# <img src="media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
+# <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
 一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件，把 pi 引擎进程内直连嵌进编辑器，流式体验与终端同速；交互参考 Claude Code，轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
+
+- **插件秒启动**：进程内直连 pi，面板即开即用，不 spawn 子进程、不等 CLI 冷启动
+- **历史会话秒级加载**：会话列表指纹缓存，点历史毫秒级出列，翻旧会话不转圈
 
 ## 主题
 
@@ -22,12 +25,8 @@
 
 它的每个版本都是在自己的面板里做出来的：打开项目 → 跟 pi 说「把欢迎页的鸭子换个姿势」→ 它改源码、编译、打包出新 `.vsix` → 装上重载——**它就更新了它自己**，包括你现在看的这段 README。
 
-## 计划中
-
-- 面板内多标签并行会话
-
-有需求或问题，欢迎提 [Issue](../../issues)。祝你干活愉快，记得喝水 <img src="media/pi-icon.png" width="20" align="top">
+有需求或问题，欢迎提 [Issue](https://github.com/HummerBor/Pi-For-VS-code/issues)。祝你干活愉快，记得喝水 <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="20" align="top">
 
 ## 许可
 
-[MIT](./LICENSE)
+[MIT](https://github.com/HummerBor/Pi-For-VS-code/blob/main/LICENSE)

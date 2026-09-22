@@ -1,14 +1,17 @@
-# <img src="media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
+# <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
 [English](./README_EN.md) | [简体中文](./README.md)
 
 A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) that embeds the pi engine in-process — streaming as fast as the terminal. Claude Code-style interaction; lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
+- **Starts in a second**: in-process pi, no subprocess spawn, no CLI cold start — the panel is ready the moment you open it
+- **History loads instantly**: session list served from a fingerprint cache, past sessions pop up in milliseconds
+
 ## Themes
 
 ![Themes](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/themes.png)
 
-- **Follow VS Code**: adapts to the window's color scheme; blends into wallpaper extensions too
+- **Follows VS Code**: adapts to the window's color scheme; blends into wallpaper extensions too
 
 ![Follow VS Code theme](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E8%B7%9F%E9%9A%8Fvsc.png)
 
@@ -18,16 +21,12 @@ Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/it
 
 ![Working](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E6%B5%8B%E8%AF%95.png)
 
-## Why build it
-
-Every existing option has its own kind of heaviness: **Codex** makes my machine lag; **Claude Code** burns tokens, and switching models requires proxies like cc-switch; I tried **Hermes, DSH, OpenClaw** too — all huge, all clunky to drive. pi is different — light, transparent, no black boxes, perfect for exploring token-saving and memory-saving workflows. This extension is the product of that exploration: themes are yours to play with, the source is right here, and everyone is welcome to join in.
-
 ## Built with itself
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
 
-Requests or bugs welcome at [Issues](../../issues). Happy hacking, and remember to drink water <img src="media/pi-icon.png" width="20" align="top">
+Requests or bugs welcome at [Issues](https://github.com/HummerBor/Pi-For-VS-code/issues). Happy hacking, and remember to drink water <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="20" align="top">
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](https://github.com/HummerBor/Pi-For-VS-code/blob/main/LICENSE)
