@@ -1175,6 +1175,7 @@ export class PiCore {
    *  切历史/新建/重载四条链路统一走这里；原先与 switchSession 并行的补回是竞态（谁后到谁赢）。
    *  panel 切历史链路用 reapplyModelMemory */
   private async applyModelMemory(): Promise<void> {
+    this.migrateLegacyModelMemory();
     const lastModel = this.lastModelFor();
     const lastThinking = this.lastThinkingFor();
     if (!lastModel && !lastThinking) return;
@@ -1193,6 +1194,58 @@ export class PiCore {
    *  读一次就把泄漏搬运进新键，等于没修；存量记忆作废一次可接受 */
   private wsKey(): string {
     return this.caps.getCwd().replace(/\\+$/, "").toLowerCase();
+  }
+  /** 一次性迁移旧扁平键（2026-09-22 事故后续：0.1.38 停读旧键后，用户重启前的模型
+   *  选择丢失——新建会话不继承（111 实锤：创建即 free 无补回）、重启恢复不还原，
+   *  用户报「插件默认打开了当前会话 并且模型切成了 free」）。迁移语义：首个跑 applyModelMemory
+   *  的窗口/页签代表「用户当前状态」，把全部旧键值种进**该窗口工作区**的二维键
+   *  （t1..t20 各归各位 + 当前页签/影子 "_"），然后删净旧键、打全局标记。
+   *  旧键无工作区维度，无法忠实迁到每个工作区——只种首窗一个，其余工作区保持干净
+   *  （旧键已删，不会被再次读出，跨窗口串扰不重演）。混合版本窗口并存时旧版补回会
+   *  失效（读不到旧键），以新版为准可接受。 */
+  private migrateLegacyModelMemory(): void {
+    if (this.caps.getPersist<boolean>("piChat.modelMigratedV2", false)) return;
+    this.caps.setPersist("piChat.modelMigratedV2", true);
+    const tabIds = Array.from({ length: 20 }, (_, i) => "t" + (i + 1));
+    const ws = this.wsKey();
+    const modelMap = this.caps.getPersist<Record<string, Record<string, { provider: string; id: string } | undefined>>>("piChat.lastModelByWs2", {});
+    const tmapModel = (modelMap[ws] ??= {});
+    let seededModel = false;
+    for (const t of tabIds) {
+      const legacy = this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel." + t, undefined);
+      if (legacy && !tmapModel[t]) { tmapModel[t] = legacy; seededModel = true; }
+    }
+    const legacyModelGlobal = this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel", undefined);
+    // 影子 "_" 兑底：当前页签有旧值但全局键没有时，用当前页签值充当影子（它代表「用户当前状态」）
+    if (!tmapModel["_"] && tmapModel[this.tabKey]) { tmapModel["_"] = tmapModel[this.tabKey]; seededModel = true; }
+    if (legacyModelGlobal) {
+      if (!tmapModel[this.tabKey]) { tmapModel[this.tabKey] = legacyModelGlobal; }
+      if (!tmapModel["_"]) { tmapModel["_"] = legacyModelGlobal; }
+      seededModel = true;
+    }
+    if (seededModel) this.caps.setPersist("piChat.lastModelByWs2", modelMap);
+    const thinkMap = this.caps.getPersist<Record<string, Record<string, string | undefined>>>("piChat.lastThinkingByWs2", {});
+    const tmapThink = (thinkMap[ws] ??= {});
+    let seededThink = false;
+    for (const t of tabIds) {
+      const legacy = this.caps.getPersist<string | undefined>("piChat.lastThinking." + t, undefined);
+      if (legacy && !tmapThink[t]) { tmapThink[t] = legacy; seededThink = true; }
+    }
+    const legacyThinkGlobal = this.caps.getPersist<string | undefined>("piChat.lastThinking", undefined);
+    if (!tmapThink["_"] && tmapThink[this.tabKey]) { tmapThink["_"] = tmapThink[this.tabKey]; seededThink = true; }
+    if (legacyThinkGlobal) {
+      if (!tmapThink[this.tabKey]) { tmapThink[this.tabKey] = legacyThinkGlobal; }
+      if (!tmapThink["_"]) { tmapThink["_"] = legacyThinkGlobal; }
+      seededThink = true;
+    }
+    if (seededThink) this.caps.setPersist("piChat.lastThinkingByWs2", thinkMap);
+    // 旧键删净（含全部 tabKey 变体）：残留会被误读成跨窗口串扰源
+    this.caps.setPersist("piChat.lastModel", undefined);
+    this.caps.setPersist("piChat.lastThinking", undefined);
+    for (const t of tabIds) {
+      this.caps.setPersist("piChat.lastModel." + t, undefined);
+      this.caps.setPersist("piChat.lastThinking." + t, undefined);
+    }
   }
   /** 写入本页签的模型记忆（panel pickModel 调用）：tabKey + 同工作区影子 "_" 一起写 */
   rememberModel(m: { provider: string; id: string }): void {

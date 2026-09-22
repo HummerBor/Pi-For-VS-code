@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -126,7 +126,8 @@
     "package": "node scripts/bump-version.mjs && npm run compile && npx @vscode/vsce package",
     "release": "npm run compile && npx @vscode/vsce package",
     "ship": "node scripts/bump-from-market.mjs && npm run release && node scripts/publish.js",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test:migration": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/modelMemoryMigration.test.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
