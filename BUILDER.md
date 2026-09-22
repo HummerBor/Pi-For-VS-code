@@ -4,7 +4,66 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 J 刀：会话命名/显示收口（文案精简 + 空会话「新会话」+ 时区转本地，待实测）；同日 I 刀判死 ephemeral（审计红线）
+最后更新：2026-09-22 交接 7：启动态收口七刀全实测通过（A/H/F′/E/C/I/J），剩 G/B/D——新会话读交接 7 接任
+
+# 交接 7：2026-09-22 启动态收口专项——七刀连发全实测通过，剩 G/B/D（接手先读本节）
+
+## 结局状态
+
+- **HEAD = e581206（J 刀），0.1.51 已装机、用户实测通过**。今日提交链（全本地 commit 未 push）：
+  b394fc2 A 刀诊断日志 → e94533c bump → b8f91fb H 刀空页签 → 73097d5 F′ 真值必达 →
+  41c6af0 E 刀页头占位 → c10163d C 刀去影子 → 793404c I 刀判死 ephemeral → e581206 J 刀命名收口。
+- 版本线：0.1.44（回滚基线，ee31c75 内容）→ .45(A) → .46(H + 并行会话点暂停修复 36b2c5f) →
+  .47(F′) → .48(E) → .49(C) → .50(I) → .51(J)。磁盘旧 vsix（0.1.40/41/42 问题系列）别再装。
+- 七刀一句话：A 诊断日志三埋点 / H 空页签禁 -c+不入库 / F′ 真值必达（collectState 等 init）/
+  E 页头「启动中」占位 / C 去影子（模型记忆页签间不串）/ I 判死 ephemeral+禁 --no-session /
+  J 命名收口（文案精简 + 空会话「新会话」+ 时区转本地）。逐刀细节见下方各刀回报。
+
+## 用户拍板记录（重上照办）
+
+1. **「这都是一类问题」定性**：pi 启动态从未被显式建模（真值必达无保障/占位冒充终值/启动期
+   乱灌默认值三条缝）。统一修法原则：**「启动中」显式建模 + 真值必达 + 启动期不引入默认值**。
+2. **ephemeral 判死（审计红线，AGENTS.md 已入册）**：会话必须落盘——会话文件是 pi 操作的唯一
+   审计痕迹，「无痕删东西无从追查」不可接受。插件任何路径禁 --no-session（piClient 显式抛错，
+   遇之即炸）；piChat.sessionMode 只留 continue/new（旧 settings.json 残值归一 continue）。pi 本体不动。
+3. **会话命名口径（J）**：空会话=「新会话」（不显时间）；时间戳只给「有内容无名」的老会话且
+   **本地时区**（文件名时间戳是 UTC 尾缀 Z，裸读差 8 小时）；页头镜像宿主 tabs 标题（唯一事实源，
+   判定单点收口在 fmtSessionTitle）；boot 窗口页头占位=「启动中」。
+4. **H 刀判据（三处共用）**：**文件在 ⇔ 有内容**（pi -r 同口径：没内容的会话不落盘）——
+   启动参数判定、页签持久化过滤、标题判定同用；会话记忆查询单一事实源 piCore.sessionMemoryFor。
+5. 用户文案不进开发者语境（进程内直连/审计红线/判死 留代码注释 + AGENTS.md，不进用户视野）。
+
+## 今日教训（别再交学费）
+
+- msgBrief 嵌套值只显键名——取证时模型名没进日志被挡一下，待优化为嵌套标量也显值（记债）。
+- state.vscdb 读取**必须连 -wal/-shm 一起复制**，否则 sqlite 读出空库（今日两次踩坑）。
+- 报告显示行为要**标显示位**（页头 vs 页签标题）——E/J 两句各说一半曾让用户困惑。
+- 会话文件名时间戳是 **UTC**；显示一律经 Date 转本地。
+- 并行会话共用工作区：提交前 git diff 逐 hunk 确认归属（今日双会话交错零事故）。
+
+## 关键证据（重定位直接用）
+
+- `~/.pi/agent/pi-chat-debug.log`（A 刀三埋点：`in … core=` / `out … [DROP no-view|FAIL]` /
+  `boot start|done|FAIL tab=`，另有 `gate drop: window=…`）。判读口诀：in 有痕 out 无痕 = 断在
+  核心后；in 无痕 = 断 webview/路由。msgBrief 摘要：字符串头 60 字+长度、数组条数、嵌套对象键名。
+- state.vscdb：`%APPDATA%\Code\User\globalStorage\state.vscdb{,-wal,-shm}` 三件一起复制 →
+  python sqlite3 读 ItemTable / HummerBor.pi-for-vscode（JSON 包 piChat.* 键）。
+- 会话文件语义：文件名=创建时刻 UTC；**内容首条消息才落盘**；文件在 ⇔ 有内容（pi -r 同口径）。
+- 探针：`node scripts/probe-live-merge.mjs`（headless Chrome CDP，零依赖，exit 0；Windows 清理
+  EPERM 已修）。webview 改动建议做变更前后输出 diff（逐字节比对 = 零回归实证）。
+- 回归面（每刀固定）：`npm run compile` + `test:detail / test:subagent / test:revert / test:migration`
+  四套 + webview 改动过探针 + 用户实测通过才下一刀（版本号只增不复用，同号覆盖事故不重演）。
+
+## 重上队列（一次一刀，全过才下一刀）
+
+| 刀 | 内容 | 备注 |
+|---|---|---|
+| G | 闸门挪位：postUiState 开闸移到两跳 await（restoringSession/collectState）之后，只罩同步快照块 | 有实锤 `gate drop: window=13028ms dropped=1 types=[render]`——工单24 老洞：窗尾 render 被「≤快照时刻已覆盖」规则误丢致永久空白。注意 F′ 已取回 0.1.42 另两修法（needState 不发空快照/链尾终值快照），G 只剩闸门时序一件事 |
+| B | 模型记忆一次性迁移重做 | setPersist(undefined) **真机先验证**（探针先行：写暂存键→删→回读→dbg，失败跳过删键）；迁移独立 try、绝不进 boot 链；范围 t1..t64；全局键 piChat.lastModel/lastThinking **不种只删**；影子 "_" 不补（已废弃）；用例补进 scripts/modelMemoryMigration.test.mts（C 刀已重建文件） |
+| D | 重启聚焦 = pi -r 第一个会话（会话文件 mtime 最新的页签），不是「关闭时活动页签」 | restoreTabBar 链路，per-file try/catch |
+
+待办债：①msgBrief 嵌套标量显值②已污染页签靠关掉重建（脏记忆随 id 不复用失效）③旧影子/旧扁平键
+残留清理可并入 B。
 
 # J 刀：会话命名/显示收口（2026-09-22，用户实测三连反馈）
 
