@@ -215,22 +215,6 @@ export class PiCore {
    *  单标签 continue 语义不变 */
   freshTab = false;
 
-  /** 每标签的模型记忆（工单十五刀3）：key 带 tabKey；旧全局 key 只读兑底（升级迁移）。
-   *  兑底语义：没有自己选过模型的标签跟随「最近一次任一标签的全局选择」（panel 侧影子写） */
-  private lastModelFor(): { provider: string; id: string } | undefined {
-    return (
-      this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel." + this.tabKey, undefined) ??
-      this.caps.getPersist<{ provider: string; id: string } | undefined>("piChat.lastModel", undefined)
-    );
-  }
-  /** 每标签的思考等级记忆（同上） */
-  private lastThinkingFor(): string | undefined {
-    return (
-      this.caps.getPersist<string | undefined>("piChat.lastThinking." + this.tabKey, undefined) ??
-      this.caps.getPersist<string | undefined>("piChat.lastThinking", undefined)
-    );
-  }
-
   constructor(
     private readonly caps: HostCapabilities,
     private readonly ui: UiActions,
@@ -1200,6 +1184,42 @@ export class PiCore {
     } catch {
       // 补回失败不影响使用
     }
+  }
+  /** 记忆键的工作区维度（与 getSessionForWs 同口径：去尾反斜杠 + 小写）。事故教训（2026-09-22
+   *  用户实测）：旧键 piChat.lastModel.<tabKey> 只按页签维度存，而 globalState 机器级共享、
+   *  tabId 每个窗口都从 t1 起算——A 窗口切的模型成了 B 窗口的「记忆」，跨窗口/跨项目必串；
+   *  全局兑底键 piChat.lastModel 同病。改二维键 {工作区: {tabKey: 值}}（与 lastSessionByWs2
+   *  同构）；同工作区影子兑底用 "_"（页签 id 只会是 t1/t2…，永不撞）。旧扁平键**不读**——
+   *  读一次就把泄漏搬运进新键，等于没修；存量记忆作废一次可接受 */
+  private wsKey(): string {
+    return this.caps.getCwd().replace(/\\+$/, "").toLowerCase();
+  }
+  /** 写入本页签的模型记忆（panel pickModel 调用）：tabKey + 同工作区影子 "_" 一起写 */
+  rememberModel(m: { provider: string; id: string }): void {
+    const ws = this.wsKey();
+    const tabMap = this.caps.getPersist<Record<string, Record<string, { provider: string; id: string } | undefined>>>("piChat.lastModelByWs2", {});
+    (tabMap[ws] ??= {})[this.tabKey] = m;
+    (tabMap[ws] ??= {})["_"] = m;
+    this.caps.setPersist("piChat.lastModelByWs2", tabMap);
+  }
+  /** 写入本页签的思考等级记忆（panel pickThinking 调用，同上口径） */
+  rememberThinking(level: string): void {
+    const ws = this.wsKey();
+    const tabMap = this.caps.getPersist<Record<string, Record<string, string | undefined>>>("piChat.lastThinkingByWs2", {});
+    (tabMap[ws] ??= {})[this.tabKey] = level;
+    (tabMap[ws] ??= {})["_"] = level;
+    this.caps.setPersist("piChat.lastThinkingByWs2", tabMap);
+  }
+  private lastModelFor(): { provider: string; id: string } | undefined {
+    const tabMap = this.caps.getPersist<Record<string, Record<string, { provider: string; id: string } | undefined>>>("piChat.lastModelByWs2", {});
+    const ws = tabMap[this.wsKey()];
+    return ws?.[this.tabKey] ?? ws?.["_"];
+  }
+  /** 每标签的思考等级记忆（同上口径，同工作区影子 "_" 兑底） */
+  private lastThinkingFor(): string | undefined {
+    const tabMap = this.caps.getPersist<Record<string, Record<string, string | undefined>>>("piChat.lastThinkingByWs2", {});
+    const ws = tabMap[this.wsKey()];
+    return ws?.[this.tabKey] ?? ws?.["_"];
   }
   /** panel 切历史会话后的补回入口（含页脚同步） */
   async reapplyModelMemory(): Promise<void> {

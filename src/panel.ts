@@ -1650,15 +1650,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!pick) return;
     try {
       await client.setModel(pick.model.provider, pick.model.id);
-      // 每标签记忆（工单十五刀3）+ 全局影子写（未自选模型的标签兑底跟随最近一次全局选择）
-      void this.globalState.update("piChat.lastModel." + this.activeTabId, {
-        provider: pick.model.provider,
-        id: pick.model.id,
-      });
-      void this.globalState.update("piChat.lastModel", {
-        provider: pick.model.provider,
-        id: pick.model.id,
-      });
+      // 每标签记忆 + 同工作区影子兑底（二维键，跨窗口/跨项目隔离——旧扁平键跨窗口泄漏，
+      // 2026-09-22 用户实测；读写口径都收拢在 PiCore，键布局单一真相）
+      this.core.rememberModel({ provider: pick.model.provider, id: pick.model.id });
       this.post({ type: "notice", text: this.L.modelSet + pick.label });
       await this.core.refreshState();
     } catch (err: any) {
@@ -1684,9 +1678,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (!pick) return;
     try {
       await client.setThinkingLevel(pick);
-      // 每标签记忆（工单十五刀3）+ 全局影子写（同 pickModel）
-      void this.globalState.update("piChat.lastThinking." + this.activeTabId, pick);
-      void this.globalState.update("piChat.lastThinking", pick);
+      // 每标签记忆 + 同工作区影子（同 pickModel 口径，二维键防跨窗口泄漏）
+      this.core.rememberThinking(pick);
       await this.core.refreshState();
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.setFail + (err?.message ?? err) });

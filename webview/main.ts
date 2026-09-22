@@ -180,7 +180,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // DOM 相邻（row→box→row→box 首尾相接）就并进上一行挂 ×N；中间隔思考/正文（bubble 插队）
   // 即不是「连续」各自成行；重绘后旧引用 nextElementSibling 为 null 兑底不误合。
   // 跨消息断组根因已由空壳 bubble 移除 + newLive 不干预解决（探针：pi 每 toolCall 一条独立消息）
-  var lastToolGroup: { name: string; ref: any; count: number } | null = null;
+  // 同名连续成组（0.1.37 重工，2026-09-22 用户实测截图）：并行工具批次 pi 全部先发 start
+  // 再按**完成序**发 end（agent-loop executeToolCallsParallel 实锤）——end 序 ≠ DOM 行序，
+  // 旧实现「end 到达序 + DOM 相邻判定」在乱序完成时全散（截图：4 连 read 全单、9 连 read
+  // 只头两个并上，end 序恰好前两个同序）。修法：成组判定移到 toolStart（此刻行序=事件序，
+  // 相邻判定天然成立）；toolEnd 按行反查组，把内容并进组头盒后**隐藏**自身行/盒——不 remove，
+  // 尾链（tailRow/tailBox 的 nextElementSibling）永不断，后续 start 的相邻判定永远成立；
+  // 组头 = 首条 start 的行（与 settled renderAll 重放的组头一致，两种路径观感同构）
+  var lastToolGroup: { name: string; anchor: any; count: number; hasErr: boolean; tailRow: HTMLElement; tailBox: HTMLElement } | null = null;
   var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
@@ -751,20 +758,42 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ref.box.style.display = open ? 'block' : 'none';
       if (open) t.classList.add('open'); else t.classList.remove('open');
     });
-    toolEls[id] = { row: t, box: box, full: null, outVal: null };
+    toolEls[id] = { row: t, box: box, full: null, outVal: null, grp: null as any };
     root.appendChild(t);
     root.appendChild(box);
+    // 成组判定在 start（此刻行序=事件序）：能接上当前组尾就挂进组；同名但中间隔了思考/正文
+    // （nextElementSibling 断）则开新组。组员的角色在 toolEnd 才分流：组头自己收尾 or 并入组头
+    var lt = lastToolGroup;
+    if (lt && lt.name === name && lt.tailRow.nextElementSibling === lt.tailBox && lt.tailBox.nextElementSibling === t) {
+      toolEls[id].grp = lt;
+      lt.tailRow = t; lt.tailBox = box;
+    } else {
+      // 组头的 grp 也指到自己：组头收尾时要靠它查 count/hasErr 补挂徽标
+      toolEls[id].grp = { name: name, anchor: toolEls[id], count: 1, hasErr: false, tailRow: t, tailBox: box };
+      lastToolGroup = toolEls[id].grp;
+    }
     scroll();
   }
   function toolEnd(id, name, isError, text, detail) {
     var ref = toolEls[id];
     if (!ref) {
+      // start 缺失兑底（历史数据不完整等）：建行后按 toolStart 同判挂组/开新组，
+      // 否则该行游离在组外，后续同名行也没法接上
       var b2 = el('div', 'tool-box'); b2.style.display = 'none';
-      ref = { row: el('div', 'tool'), box: b2 };
+      ref = { row: el('div', 'tool'), box: b2, full: null, outVal: null, grp: null as any };
       toolEls[id] = ref;
       root.appendChild(ref.row);
       root.appendChild(ref.box);
+      var lt0 = lastToolGroup;
+      if (lt0 && lt0.name === name && lt0.tailRow.nextElementSibling === lt0.tailBox && lt0.tailBox.nextElementSibling === ref.row) {
+        ref.grp = lt0;
+        lt0.tailRow = ref.row; lt0.tailBox = ref.box;
+      } else {
+        ref.grp = { name: name, anchor: ref, count: 1, hasErr: false, tailRow: ref.row, tailBox: ref.box };
+        lastToolGroup = ref.grp;
+      }
     }
+    var grp = ref.grp;
     var t = ref.row;
     t.className = 'tool ' + (isError ? 'err' : 'ok');
     t.innerHTML = '';
@@ -801,22 +830,28 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 完成即收一个（用户直令 2026-09-20）：不等 settled 统一收；原 wasOpen「保持展开」逻辑作废
     ref.box.style.display = 'none';
     t.classList.remove('open');
-    // 同名连续合并（0.1.29 方案回归）：DOM 相邻（row→box→row→box 首尾相接）且同名才并，
-    // 中间隔思考/正文即断；合并 = moveChild 节点搬移零复制，被合并方全量引用先展开进隐藏盒再释放
-    var lt = lastToolGroup;
-    if (lt && lt.name === name && lt.ref.row.nextElementSibling === lt.ref.box && lt.ref.box.nextElementSibling === t && t.nextElementSibling === ref.box) {
+    if (grp && grp.anchor !== ref) {
+      // 组员收尾（end 可乱序到）：内容并进组头盒，自身行/盒隐藏**不 remove**——尾链保持，
+      // 乱序期间后续 end/start 的相邻判定都成立。合并 = moveChild 节点搬移零复制，
+      // 被合并方全量引用先展开进隐藏盒再释放（同工单29口径）
       if (ref.full != null && ref.outVal) { ref.outVal.textContent = ref.full; ref.outVal.classList.add('tb-full'); ref.full = null; }
-      while (ref.box.firstChild) lt.ref.box.appendChild(ref.box.firstChild);
-      root.removeChild(t);
-      root.removeChild(ref.box);
+      while (ref.box.firstChild) grp.anchor.box.appendChild(ref.box.firstChild);
+      ref.row.style.display = 'none';
+      ref.box.style.display = 'none';
       delete toolEls[id];
-      lt.count++;
-      var cnt = lt.ref.row.querySelector('.t-count');
-      if (cnt) cnt.textContent = ' ×' + lt.count;
-      else { var nm = lt.ref.row.querySelector('.t-name'); if (nm) nm.appendChild(el('span', 't-count', ' ×' + lt.count)); }
-      if (isError) lt.ref.row.className = 'tool err';
+      grp.count++;
+      if (isError) grp.hasErr = true;
+      var cnt = grp.anchor.row.querySelector('.t-count');
+      if (cnt) cnt.textContent = ' ×' + grp.count;
+      else { var nm = grp.anchor.row.querySelector('.t-name'); if (nm) nm.appendChild(el('span', 't-count', ' ×' + grp.count)); }
+      if (isError) grp.anchor.row.className = 'tool err';
     } else {
-      lastToolGroup = { name: name, ref: ref, count: 1 };
+      // 组头收尾：×N 徽标重挂（若组员先收尾已挂过，innerHTML 重建会把它抹掉）；
+      // 任一组员报错过则整组红（hasErr），组头自身的 err/ok 被重建覆盖不能作为唯一依据
+      if (grp && grp.count > 1) {
+        var nm2 = t.querySelector('.t-name'); if (nm2) nm2.appendChild(el('span', 't-count', ' ×' + grp.count));
+      }
+      if (grp && grp.hasErr) t.className = 'tool err';
     }
     scroll();
   }
@@ -892,8 +927,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 工具组壳（历史重绘与 live 同构，用户直令 2026-09-20）：头行 工具 ×N + 收起态内容区；
     // 点击头行开合，组内每行工具可再点开各自 IN/OUT（复用 toolStart/toolEnd 全套交互）。
     // 同名合并的跨消息配合（探针实锤：pi 每 toolCall 一条独立 assistant 消息）：
-    // 历史渲染逐工具 toolStart/toolEnd，同名连续靠 toolEnd 里的 lastToolGroup + DOM 相邻判定
-    // 合并；跨消息时前工具的 box 与下一工具的 row 天然相邻（中间无 bubble 就不断）
+    // 历史渲染逐工具 toolStart/toolEnd，同名连续靠 toolStart 时的组判定 + toolEnd 的组员并入
+    // （0.1.37 起成组判定在 start，见 toolStart 头注释）；跨消息时前工具的 box 与下一工具的
+    // row 天然相邻（中间无 bubble 就不断）
     for (var i = 0; i < list.length; i++) {
       if (i >= list.length - 15) linkifyEnabled = true;
       var m = list[i];
@@ -928,8 +964,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
             else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
             else if (c && c.type === 'toolCall') {
               flushB();
-              // 每个工具一行（toolStart/toolEnd 全套交互，收起态）；同名连续靠 toolEnd 里
-              // lastToolGroup + DOM 相邻判定合并（跨消息也能接上，中间 bubble 天然断开）。
+              // 每个工具一行（toolStart/toolEnd 全套交互，收起态）；同名连续靠 toolStart 的
+              // 组判定成组、toolEnd 并入组头（跨消息也能接上，中间 bubble 天然断开）。
               // 历史 OUT 截 1000 不持全量引用（老会话内存零增长，全量在 jsonl 里）
               var hid = c.id || ('h' + i + '_' + j);
               var det = historyDetail(c.arguments);
