@@ -611,6 +611,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 该标签 tabKey 的会话记忆 switchSession 恢复历史（先清空再异步渲染，同 t1 启动口径）。
     // 不起进程的话用户切回重启前聊天的标签只看到欢迎页，「恢复现场」名存实亡。
     // 恢复后的历史由 init 链路的 render/webviewReady 全量快照送进该页签自己的树
+    this.bootRestored(tabId);
+  }
+
+  /** K 刀（2026-09-22，D 实测实锤）：恢复页签「首次激活必须 boot」不变量收口一处——
+   *  原先只挂在 handleTabSwitch 尾巴，关标签转移（handleTabClose 直改 activeTabId）漏了它，
+   *  webview 随后的 tabSwitch 又被「已活动」早退挡掉 → 恢复页签永远空显（欢迎页 + 页脚
+   *  「—」），再点它也被 webview 早退锁死。实证：pi-chat-debug.log 13:09:42
+   *  `tabClose t14 → tabSwitch t12 needState → 只有空快照、无 boot start`。
+   *  凡「页签成为活动」的路径都必须过这里。 */
+  private bootRestored(tabId: string): void {
     if (this.restoredTabs.delete(tabId)) this.ensureCore(tabId).ensureClient();
   }
 
@@ -631,6 +641,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const rest = [...this.tabMeta.keys()];
       if (rest.length) {
         this.activeTabId = rest[rest.length - 1];
+        // K 刀：转移即激活——恢复页签必须在这里 boot（原漏点：只在 handleTabSwitch 有，
+        // 这条路径直改 activeTabId，后续 tabSwitch 被「已活动」早退 → 永远空显）
+        this.bootRestored(this.activeTabId);
       } else {
         const nid = "t" + (++this.tabSeq);
         this.tabMeta.set(nid, { title: this.L.tabUntitled, busy: false });
@@ -641,8 +654,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
       const next = this.cores.get(this.activeTabId);
       // 工单24 架构归位：转移后的活动页签不再盲发快照——webview 树若未建，
-      // 会随 tabs 消息驱动的 activateTab 带 needState 来要（切页签零重拉）
-      if (next && !next.clientRef?.running) this.postEmptyUiState(this.activeTabId);
+      // 会随 tabs 消息驱动的 activateTab 带 needState 来要（切页签零重拉）。
+      // K 刀对齐 F′ 口径：启动中（有 client）不发空快照——空快照会把「—」占位钉死，
+      // 真值由 boot 链尾终值快照必达；只对真·空页签（无 client）回原子空快照
+      if (next && !next.clientRef) this.postEmptyUiState(this.activeTabId);
     }
     this.postTabs();
     this.saveTabBar(); // 标签增减/活动标签变化都要落盘，重启才还原得住
