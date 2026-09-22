@@ -4,7 +4,21 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 重上 A 刀：诊断日志三埋点（纯只读，待实测）；交接 6 全量回滚止血后按队列重上
+最后更新：2026-09-22 直令修复「点暂停清空输入内容」（piCore 两刀，待实测）；同日重上 A 刀：诊断日志三埋点（纯只读，待实测）；交接 6 全量回滚止血后按队列重上
+
+# 直令修复：点暂停把刚输入的内容清空（2026-09-22，piCore 两刀，待实测）
+
+- **改动面**（均 src/piCore.ts）：① `syncRenderKeepQueued` 的无条件 `queuedClear` 后补
+  `queuedAdd` 回灌幸存排队项（同 retrieveQueued「先清后发」款）——原先镜像留着、界面蒸发，
+  点「停止」后刚经输入框排队的消息整条消失（pi 侧队列没清，下次发送还会幽灵投递）；
+  ② abort 分支 `abortSkipRender` 挪到 `await client.abort()` **之前**（只 busy 时立，
+  pendingPrompt/catch 回置）——abort() 内部 await waitForIdle，agent_settled 就在等待窗口里
+  处理完，旧写法守卫检查时标记还没立，**从未生效**，中断现场（思考/工具行）每次都被
+  整页重绘抹掉。
+- **证据**：诊断日志实锤（2026-09-22 10:39:05 t55）：in abort → settled 重绘 .422 先跑、
+  abort 分支 .431 才续；`out queuedClear` + `out render` 抹掉排队条。
+- **验证**：npm run compile ✅（含 tsc）；test:detail / test:subagent / test:revert ✅；
+  无 webview 改动。待用户实测：忙时发消息排队 → 点停止 → 排队条保留、现场不被抹。
 
 # 重上队列开工：A 刀诊断日志（2026-09-22，纯只读零行为，待实测）
 

@@ -712,21 +712,28 @@ export class PiCore {
       case "abort":
         try {
           if (this.client?.running) {
+            // pi 不把中断时的部分内容写进会话文件（content 为空），
+            // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场。
+            // 守卫必须在 abort() **之前**立：abort() 内部 await waitForIdle()，agent_settled 就在
+            // 这个等待窗口里被处理完（实测日志 2026-09-22 10:39:05：settled 的重绘 .422 先跑、
+            // abort 分支 .431 才续），事后补标记永远迟到——旧写法这守卫从未生效过。
+            // 只在 busy 时立：空闲 abort 没有 run 可断，立了会变成吞下一次重绘的哑弹
+            //（agent_start 清标只是兑底，命令式应答不触发 agent_start）
+            if (this.busy) this.abortSkipRender = true;
             await this.client.abort();
             if (this.busy && this.pendingPrompt) {
               // 命令式应答（如 /llama，无 agent 运行）：没有可中断的东西，直接清掉乐观 busy，不弹中断提示
+              this.abortSkipRender = false; // 没有 run 被中断，没有该跳的重绘，别反过来吞掉下一次
               this.pendingPrompt = false;
               this.post({ type: "busy", value: false });
               this.dbg("busy=false (abort_while_pendingPrompt)");
               break;
             }
-            // pi 不把中断时的部分内容写进会话文件（content 为空），
-            // 下次 agent_settled 的整页重绘会把已显示的思考/工具行抹掉——跳过那一次重绘，保留现场
-            this.abortSkipRender = true;
             this.post({ type: "notice", text: this.L.aborted });
           }
         } catch {
-          // ignore
+          // abort 失败 = run 还在跑，之后的 settled 该正常重绘，不能被守卫吞掉
+          this.abortSkipRender = false;
         }
         break;
       case "retryFromLast": {
@@ -1655,7 +1662,21 @@ export class PiCore {
         this.queued = this.queued.filter(
           (q) => !histTexts.some((t: string) => t.includes(q.sentText))
         );
+        // 先清后发原子重建（同 retrieveQueued「重建 queuebar」款）：queuedClear 连 webview 的
+        // 账本（queuedItems）一起清空，不回灌就是「镜像留着、界面蒸发」——点暂停清掉排队消息
+        // 的事故根源（实测日志 2026-09-22 10:39:05：中断的 settle 走到这里，刚经输入框发进去的
+        // 排队内容整条消失；pi 侧队列其实没清，下次发送还会幽灵投递）。方法名/上注释的
+        // 「尚未进历史的排队项保留在 queuebar」由下面的回灌兑现
         this.post({ type: "queuedClear" });
+        for (const item of this.queued) {
+          this.post({
+            type: "queuedAdd",
+            qid: item.qid,
+            text: item.text,
+            imageCount: item.imageCount,
+            codeInfo: item.codeInfo,
+          });
+        }
         this.post({ type: "render", messages: msgs });
         this.replaySubagentRuns(msgs);
       } catch {
