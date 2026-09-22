@@ -17,9 +17,9 @@
   静默死零痕迹」的隐身衣从此掀掉）。
 - 回归面：npm run compile ✅；test:detail / test:subagent / test:revert ✅；无 webview 改动，
   probe-live-merge 探针面不适用。版本未 bump（package 打包时自动 bump，随下笔提交入库）。
-- 状态：**0.1.44.vsix 已装机**（code --install-extension 已验证 hummerbor.pi-for-vscode@0.1.44）。
-  等用户实测确认「回到小毛病时代基线」；确认后 npm run package 出 0.1.45（A 刀）交实测，
-  A 实测过了才开 B（迁移重做：setPersist(undefined) 真机先验、独立 try 不进 boot 链）。
+- 状态：0.1.44 基线**用户已实测确认**（2026-09-22：就是回滚版，没别的，回到小毛病时代）。
+  **0.1.45（A 刀诊断日志）已打包并装机**（版本号 bump 0.1.45 随本笔入库），待 A 实测——
+  A 过了才开 B（迁移重做：setPersist(undefined) 真机先验、独立 try 不进 boot 链）。
 
 
 # 交接 6：2026-09-22 两案修复→连环快发→P0 全量回滚（接手先读本节）
