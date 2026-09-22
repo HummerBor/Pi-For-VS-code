@@ -56,7 +56,6 @@ export class PiCore {
   static readonly viewId = "piChat.view"; // 保持与原 panel.ts 相同的视图 id 常量位
 
   private client?: PiClient;
-  private clientNoSession = false;
   /** 在途 assistant 消息的全量对象（刀5b）：pi 的 message_start/update 事件自带完整消息
    *  （同一对象 in-place 更新，agent-session.js:501），供切回 busy 页签时 liveSync 重定基；
    *  agent_start 清空（新 run 无在途）、message_start 覆写（新消息开始） */
@@ -249,9 +248,6 @@ export class PiCore {
   get isBusy(): boolean {
     return this.busy;
   }
-  get isNoSession(): boolean {
-    return this.clientNoSession;
-  }
 
   /** 横幅状态机出口（工单六）：内容变化才下发——refreshState 高频调用，不重发相同文案 */
   private setBanner(b: BannerPayload | null): void {
@@ -293,17 +289,21 @@ export class PiCore {
     return "⚡ Auto";
   }
 
-  /** 首次发消息时才启动 pi 后台进程；forceSession=true 时不用 --no-session（如切换历史会话） */
-  ensureClient(forceSession = false): PiClient {
+  /** 首次发消息时才启动 pi 后台进程。（原 forceSession 参数随 ephemeral 判死清点回收——
+   *  一切会话都落盘，「必须持久」不再需要显式强制） */
+  ensureClient(): PiClient {
     if (this.client) return this.client;
 
     const cwd = this.caps.getCwd();
     // ⚠ 会话模式读取：默认必须与 package.json 里的 default 保持一致（continue）。
     // 教训：曾默认 ephemeral(--no-session)，用户聊天全程不落盘，进程被替换后记录永久丢失。
-    // 注解为 string：getConfig 泛型会把默认值收窄成字面量类型，后面跟 "ephemeral"
-    // 比较直接 TS2367（panel.ts 原版用 vscode get<string>() 无此问题，搬运时的类型差异）
-    const mode: string = this.caps.getConfig("piChat", "sessionMode", "continue");
-    const ephemeral = mode === "ephemeral" && !forceSession;
+    // 🚫 ephemeral 档已判死（用户拍板 2026-09-22，审计红线）：会话文件是 pi 操作的唯一
+    // 审计痕迹（删文件等破坏性操作无从追查），「无痕」模式在插件里没有合法场景。归一化后
+    // 只剩 continue/new；旧 settings.json 的 "ephemeral" 残值按 continue 安全降级（宁可
+    // 恢复最近会话，绝不可不落盘）；piClient 层还有 --no-session 显式抛错兜底。
+    // 注解为 string：getConfig 泛型会把默认值收窄成字面量类型（搬运时的类型差异，panel 原版无此问题）
+    const rawMode: string = this.caps.getConfig("piChat", "sessionMode", "continue");
+    const mode: "new" | "continue" = rawMode === "new" ? "new" : "continue";
     // 工单十五刀4：freshTab（＋新建的标签）不带 -c → piClient 映射到 SessionManager.create
     // （新持久会话）；绝不 continueRecent——否则接上的是别的标签正在写的会话文件（写冲突）
     // H 刀（2026-09-22 用户实测「空页签重启后变成历史第一条/之前点过的页签」，实证见
@@ -312,10 +312,10 @@ export class PiCore {
     // 只会把「最近一条会话」强加给空页签（还会和原页签双写同一文件）；无记忆一律 [] 新建。
     const mem = this.freshTab ? undefined : this.getSessionForWs(cwd);
     const memOk = !!mem && fs.existsSync(mem);
-    const args = ephemeral ? ["--no-session"] : memOk && mode === "continue" ? ["-c"] : [];
+    // 🚫 永不传 --no-session（审计红线，判死见上）；只在 continue 且记忆有效时传 -c
+    const args = memOk && mode === "continue" ? ["-c"] : [];
     const sessionDir = this.caps.getConfig("piChat", "sessionDir", "");
     if (sessionDir) args.push("--session-dir", sessionDir);
-    this.clientNoSession = ephemeral;
 
     const client = new PiClient();
     this.client = client;
@@ -401,7 +401,7 @@ export class PiCore {
     return client;
   }
 
-  /** 强制关闭当前 pi 进程（ephemeral 会话需要重启为持久模式时用） */
+  /** 强制关闭当前 pi 进程（/reload 重建运行时等场景） */
   disposeClient(): void {
     this.client?.dispose();
     this.client = undefined;
@@ -526,7 +526,6 @@ export class PiCore {
         sessionName: foot?.sessionName ?? null,
         sessionFile: foot?.sessionFile ?? null,
         stats: foot?.stats ?? null,
-        noSession: this.clientNoSession, // E 刀（拍板 3）：页头占位分流，同 state 口径
       });
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
       // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行。
@@ -1261,23 +1260,19 @@ export class PiCore {
 
   /** 面板版 /reload：重建 pi 运行时，让新装的包/技能/扩展立即生效（pi 原生 /reload 的
    *  等价物）。此前被误归 tuiOnly 挡掉——装个技能就得重启插件，不合理（2026-09-18
-   *  用户指出）。持久会话从文件恢复、聊天不丢（会话文件就是真相）；ephemeral
-   *  （--no-session）无落盘真相可恢复，拒绝执行防聊天蒸发；busy 时拒绝（重建运行时
-   *  会把在途流拦腰截断）。-c 兑底：文件失效则停在 -c 恢复的最近会话 */
+   *  用户指出）。持久会话从文件恢复、聊天不丢（会话文件就是真相）；busy 时拒绝（重建
+   *  运行时会把在途流拦腰截断）。-c 兑底：文件失效则停在 -c 恢复的最近会话。
+   *  （原 ephemeral 拒绝分支随判死清点回收——一切会话都落盘，必有真相可恢复） */
   private async reloadBackend(): Promise<void> {
     if (this.busy) {
       this.post({ type: "notice", text: this.L.reloadBusy });
-      return;
-    }
-    if (this.clientNoSession) {
-      this.post({ type: "notice", text: this.L.reloadEphemeral });
       return;
     }
     const st = await this.client?.getState().catch(() => null);
     const file = st?.sessionFile ?? null;
     this.dbg("reload: begin file=" + (file ?? "(none)"));
     this.disposeClient();
-    const client = this.ensureClient(false);
+    const client = this.ensureClient();
     if (file) {
       try {
         await client.switchSession(file);
@@ -1335,12 +1330,12 @@ export class PiCore {
   private async sendSlashCommands(): Promise<void> {
     // 打开菜单时对比包签名：settings.json 的 packages 变了=有新装/卸载的包，自动重建
     // 运行时让技能/扩展即时生效（2026-09-18 用户诉求「打开界面新装的技能就在里面」）。
-    // busy/ephemeral 时不自动重建（busy 截断在途流 / ephemeral 无落盘真相），列表照发
-    // 并提示用 /reload；reloadBackend 内部 ensureClient 会刷新签名，此处不会死循环
+    // busy 时不自动重建（截断在途流），列表照发并提示用 /reload；reloadBackend 内部
+    // ensureClient 会刷新签名，此处不会死循环（原 ephemeral 分支随判死清点回收）
     const sig = this.readPkgsSig();
     this.dbg("slash: getSlash sig=" + sig + " cached=" + this.pkgsSig);
     if (sig !== null && this.pkgsSig !== null && sig !== this.pkgsSig) {
-      if (!this.busy && !this.clientNoSession) {
+      if (!this.busy) {
         this.post({ type: "notice", text: this.L.reloadAuto });
         await this.reloadBackend();
         return; // reloadBackend 内部已重发 slashList
@@ -1444,11 +1439,8 @@ export class PiCore {
 
   /** 从历史面板点击某条会话 → 切换过去 */
   private async openSessionFile(file: string): Promise<void> {
-    if (this.client?.running && this.clientNoSession) {
-      this.disposeClient();
-    }
     try {
-      const client = this.ensureClient(true);
+      const client = this.ensureClient();
       const r = await client.switchSession(file);
       if (r?.cancelled) return;
       const d = await client.getMessages();
@@ -1558,7 +1550,6 @@ export class PiCore {
       sessionName: foot.sessionName,
       sessionFile: foot.sessionFile,
       stats: foot.stats,
-      noSession: this.clientNoSession, // E 刀（拍板 3）：页头占位分流，见 protocol.noSession
     });
   }
 

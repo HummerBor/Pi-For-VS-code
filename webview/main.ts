@@ -1032,16 +1032,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     compactbarEl.appendChild(x);
     compactbarEl.style.display = 'flex';
   }
-  function fmtSession(file, name, noSession) {
+  function fmtSession(file, name) {
     if (name) return name;
     var s = String(file || '');
     var mm = s.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})/);
     if (mm) return mm[2] + '-' + mm[3] + ' ' + mm[4] + ':' + mm[5];
     var base = s.split(/[\\/]/).pop();
-    if (base) return base;
-    // E 刀（拍板 3）：name/file 双空的占位分流——真 ephemeral 才显「临时(未保存)」（会话
-    // 真不会留），其余（pi 启动窗口）显「启动中」：占位冒充终值会误导「会话会丢」
-    return noSession ? L.ephemeralSession : L.startingSession;
+    // 双空 = pi 启动窗口占位，显「启动中」（E 刀拍板 3：占位冒充终值会误导「会话会丢」）。
+    // 「临时(未保存)」已随 ephemeral 判死退役（审计红线：一切会话都落盘，2026-09-22）
+    return base || L.startingSession;
   }
   function applyState(m) {
     // 工单24 二期：页脚（模型/思考/用量）随页签视图走，后台直接渲进隐藏视图；
@@ -1055,7 +1054,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
     if (id === activeTabId) {
-    var sessName = fmtSession(m.sessionFile, m.sessionName, m.noSession);
+    var sessName = fmtSession(m.sessionFile, m.sessionName);
     sessionEl.textContent = L.sessionLabel + sessName;
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
     }

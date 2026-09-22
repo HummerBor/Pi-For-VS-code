@@ -356,11 +356,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         await this.core.refreshState();
       })();
-    } else if (
-      vscode.workspace.getConfiguration("piChat").get<string>("sessionMode", "continue") !== "ephemeral"
-    ) {
+    } else {
       // 首次打开面板 → 主动启动 pi（持久模式，continue/-c 恢复最近会话）：
       // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
+      // （原「!== ephemeral」门随档位判死移除：会话必须落盘，审计红线，恒启动）
       this.core.ensureClient();
     }
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
@@ -547,9 +546,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 这项真空是刀5 引入的——用户实测「新建了会话但内容还是上一个的」）
     this.postEmptyUiState(id);
     // 立即起会话（刀4 freshTab→SessionManager.create）：模型/思考记忆当场恢复上屏，
-    // 页脚不再显示「—」/「临时(未保存)」——与 t1 面板打开即 prewarm 同口径。
-    // forceSession=true：新标签=新持久会话是本单铁语义，不受 sessionMode=ephemeral 影响
-    this.ensureCore(id).ensureClient(true);
+    // 页脚不再显示「—」占位——与 t1 面板打开即 prewarm 同口径。（原 forceSession 强制/
+    // ephemeral 措辞随判死清点回收：一切会话都落盘，「新标签=新持久会话」不再需要显式强制）
+    this.ensureCore(id).ensureClient();
   }
 
   /** 工单十八：空页签的原子空快照——原先散发 state/render（部分分支还漏 queuedClear/banner/
@@ -570,9 +569,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       sessionFile: null,
       sessionName: null,
       stats: null,
-      // E 刀（拍板 3）：空快照不做 ephemeral 判定——双空占位显「启动中」；真 ephemeral 的
-      // noSession=true 由各核心的 state/uiState 真值带
-      noSession: false,
     });
   }
 
@@ -615,7 +611,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.freshTabs.add(nid);
         this.activeTabId = nid;
         this.postEmptyUiState(nid);
-        this.ensureCore(nid).ensureClient(true); // 同 handleTabNew：立即起会话恢复模型记忆
+        this.ensureCore(nid).ensureClient(); // 同 handleTabNew：立即起会话恢复模型记忆
       }
       const next = this.cores.get(this.activeTabId);
       // 工单24 架构归位：转移后的活动页签不再盲发快照——webview 树若未建，
@@ -710,12 +706,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 工单十五刀4（用户直令 2026-09-14）：多标签时代 busy 不再一刀切禁历史——
     // busy 中选中的会话开进新并行标签（写冲突由跨标签占用守卫擋），「随时可看历史」
     // （若原守卫把整个选择器摁死，用户实测吐槽：都并发多个了为啥不让看历史）
-    // ephemeral 进程没挂会话文件，需要重启为持久模式才能恢复历史
-    if (this.core.clientRef?.running && this.core.isNoSession) {
-      this.core.disposeClient();
-      this.post({ type: "status", text: this.L.restartingPi });
-    }
-
     // 注意：不能用 kind 作字段名，会和 QuickPickItem 内置的 QuickPickItemKind 枚举冲突
     type Item = {
       label: string;
@@ -827,7 +817,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     try {
       if (pick.action === "newTab") {
         // 入口收敛后唯一的「开新标签」选择器项（头部＋同款语义）
@@ -862,9 +852,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           // 新标签 freshTab=true → SessionManager.create 后立刻 switch 到目标文件
           this.handleTabNew();
           const nc = this.ensureCore(this.activeTabId);
-          const r2 = await nc.ensureClient(true).switchSession(pick.file);
+          const r2 = await nc.ensureClient().switchSession(pick.file);
           if (r2?.cancelled) { this.post({ type: "notice", text: this.L.switchCancelled }); return; }
-          const d2 = await nc.ensureClient(true).getMessages();
+          const d2 = await nc.ensureClient().getMessages();
           this.post({ type: "render", messages: d2?.messages ?? [] });
           const name2 = (pick.label ?? "").replace(/^\$\(history\) /, "");
           this.post({ type: "notice", text: this.L.sessionRestored + name2 });
@@ -1105,10 +1095,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** ⚡ 命令菜单：对应 pi 命令行里的各种操作指令 */
   private async runCommand(): Promise<void> {
-    if (this.core.clientRef?.running && this.core.isNoSession) {
-      this.core.disposeClient();
-    }
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     this.post({ type: "status", text: "" });
 
     type Item = vscode.QuickPickItem & { run?: () => Promise<void> };
@@ -1206,7 +1193,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 压缩上下文。withNote=true 时先问可选指令（⚡ 菜单入口，用户主动选的不算打扰）；
    *  /compact 直接压不二次确认——用户实测：敲完命令再弹框属于繁琐 */
   private async compactSession(withNote = false): Promise<void> {
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     let inst: string | undefined;
     if (withNote) {
       inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });
@@ -1227,7 +1214,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 导出会话为 HTML（⚡ 菜单与 /export 共用） */
   private async exportSession(): Promise<void> {
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     const target = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(os.homedir(), "Desktop", "pi-session.html")),
       filters: { HTML: ["html"] },
@@ -1242,7 +1229,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 克隆当前会话（⚡ 菜单与 /clone 共用） */
   private async cloneSession(): Promise<void> {
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     const r = await client.clone();
     if (r?.cancelled) return;
     this.post({ type: "notice", text: this.L.cloned });
@@ -1250,7 +1237,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 会话树导航：列出活跃分支上的用户消息，选一条从那里继续（对应 pi TUI 的 /tree，RPC 走 fork） */
   private async forkToMessage(): Promise<void> {
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     try {
       const d = await client.getForkMessages();
       const msgs: any[] = d?.messages ?? [];
@@ -1292,10 +1279,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.post({ type: "notice", text: this.L.importTooLarge });
       return;
     }
-    if (this.core.clientRef?.running && this.core.isNoSession) {
-      this.core.disposeClient();
-    }
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     try {
       const destDir = path.join(os.homedir(), ".pi", "agent", "sessions");
       fs.mkdirSync(destDir, { recursive: true });
@@ -1314,7 +1298,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 分享会话：导出 HTML 并在浏览器打开，把文件发给对方即可（GitHub gist 自动分享需终端版 /share） */
   private async shareSession(): Promise<void> {
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     try {
       const out = path.join(os.tmpdir(), "pi-session-" + new Date().toISOString().replace(/[:.]/g, "-") + ".html");
       const r = await client.exportHtml(out);
@@ -1421,7 +1405,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       run: async () => {
         const pick2 = await vscode.window.showQuickPick(
           [
-            { label: this.L.sModeEphemeral, value: "ephemeral" },
             { label: this.L.sModeContinue, value: "continue" },
             { label: this.L.sModeNew, value: "new" },
           ],
@@ -1475,10 +1458,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** ⚙ 设置菜单（/ 菜单入口用） */
   private async settingsMenu(): Promise<void> {
-    if (this.core.clientRef?.running && this.core.isNoSession) {
-      this.core.disposeClient();
-    }
-    const client = this.core.ensureClient(true);
+    const client = this.core.ensureClient();
     const items = await this.buildSettingsItems(client);
     const pick = await vscode.window.showQuickPick(items, { placeHolder: this.L.settingsPh });
     if (!pick?.run) return;

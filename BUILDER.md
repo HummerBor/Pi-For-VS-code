@@ -4,7 +4,33 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 C 刀提前：去影子（重启模型串扰差点压缩长会话，拍板 1）；同日 E 刀、F′ 实测通过、启动态收口专项定性
+最后更新：2026-09-22 I 刀：判死 ephemeral 整档 + 全链路禁 --no-session（审计红线，用户拍板）+ RPC→直连文案修正
+
+# I 刀：判死 ephemeral + 禁用 --no-session（2026-09-22，用户拍板「砍掉，而且禁止 Pi 插件使用这种模式」）
+
+- **定性：审计红线，不是便利问题**——会话文件是 pi 操作的唯一审计痕迹（删文件等破坏性
+  操作无从追查），「访客模式无痕」不可接受。用户原话：「万一别人用这种模式删了我电脑里的
+  东西还无痕，就傻逼了」。
+- **砍除范围（31 刀口，成对清点）**：①设置档 piChat.sessionMode 只留 continue/new（旧
+  settings.json 残值 "ephemeral" 归一 continue 安全降级）②ensureClient 永不传
+  --no-session、mode 归一化③piClient 删 inMemory 映射 + **遇 --no-session 显式抛错**
+  （禁令用 fail-loud 而非静默忽略——静默语义错位比崩溃危险：调用方以为跑临时实际在落盘）
+  ④clientNoSession/isNoSession/forceSession 全链清点回收（panel 四处「重启为持久」死分支、
+  reloadBackend/slash/openSessionFile 守卫）⑤协议 noSession 字段删除（StateMsg/UiStateMsg
+  三处同步）⑥i18n 四键退役（ephemeralSession/reloadEphemeral/sModeEphemeral×中英）
+  ⑦「临时(未保存)」文案随模式退役，页头双空占位一律「启动中」（E 刀的 ephemeral 分流项
+  就此作废，「启动中」为唯一存续语义）。
+- **顺手修（用户圈出）**：设置描述「pi RPC 进程的会话模式」→「pi 进程的会话模式（进程内
+  直连，非 RPC）」——直连架构后的陈旧文案。
+- **约定入册**：AGENTS.md「不可破坏的约定」新增「会话必须落盘（审计红线）」条（piClient
+  抛错把禁令焊死在适配器入口）。pi 本体不动：终端 `pi --no-session` 是用户自由（壳不阉割
+  pi，只收窄自己的产品面）。
+- 回归面：compile ✅；四套用例 ✅；probe-live-merge ✅（webview 改动）；判死清单核对
+  （grep 全库，产品面零残留，仅剩禁令注释/历史留痕 + 过时注释一条已修）✅。
+- 实测点：设置里只剩 continue/new 两档（旧 ephemeral 残值按 continue 跑）；重启一切正常、
+  页头双空显「启动中」；一切会话照常落盘。
+- 队列：F′ ✅ → E ✅（ephemeral 分流项随判死作废）→ C ✅ → **I ✅（本刀）** → G 闸门挪位 →
+  B 迁移重做 → D 重启聚焦。
 
 # C 刀提前：去影子（2026-09-22 拍板 1，重启模型串扰「差点压缩长会话」事故实锤）
 

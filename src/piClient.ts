@@ -74,17 +74,21 @@ export class PiClient {
       }
 
       // 启动参数映射（对应 panel.ensureClient 的 sessionMode，默认值契约见那边的注释）
-      // --no-session → inMemory（不落盘）；-c → continueRecent（接最近一次）；默认 create（新会话）
-      // --session-dir <dir> → sessionManager 的 sessionDir 参数
+      // -c → continueRecent（接最近一次）；默认 create（新会话）；--session-dir <dir> → sessionDir
+      // 🚫 --no-session 禁用并显式拒绝（审计红线，用户拍板 2026-09-22 判死 ephemeral）：
+      // 会话文件是 pi 操作的唯一审计痕迹（删文件等破坏性操作无从追查），「无痕」不可接受，
+      // inMemory 映射随之删除。禁令用抛错而非静默忽略——静默落到 create/continue 会让调用方
+      // 以为在跑临时会话实际在落盘（或反之），静默语义错位比崩溃危险。pi 本体能力不动
+      // （终端 pi --no-session 是用户自由）；插件任何路径不得传该参数（AGENTS.md 约定）。
+      if (extraArgs.includes("--no-session")) {
+        throw new Error("--no-session disabled: sessions must persist (audit trail)");
+      }
       const dirIdx = extraArgs.indexOf("--session-dir");
       const sessionDir = dirIdx >= 0 ? extraArgs[dirIdx + 1] : undefined;
-      const ephemeral = extraArgs.includes("--no-session");
       const useContinue = extraArgs.includes("-c");
-      const sessionManager = ephemeral
-        ? sdk.SessionManager.inMemory(cwd)
-        : useContinue
-          ? sdk.SessionManager.continueRecent(cwd, sessionDir)
-          : sdk.SessionManager.create(cwd, sessionDir);
+      const sessionManager = useContinue
+        ? sdk.SessionManager.continueRecent(cwd, sessionDir)
+        : sdk.SessionManager.create(cwd, sessionDir);
 
       // 官方 runtime 工厂姿势（sdk.md「Session Management」）：services 绑定 cwd，
       // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）

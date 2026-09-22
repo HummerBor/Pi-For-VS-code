@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -70,17 +70,15 @@
         "piChat.sessionMode": {
           "type": "string",
           "enum": [
-            "ephemeral",
             "continue",
             "new"
           ],
           "enumDescriptions": [
-            "不保存会话（关闭即丢失，慎用）",
             "启动时继续最近一次会话（默认，历史自动保存）",
             "新建持久会话（保存到 ~/.pi/agent/sessions）"
           ],
           "default": "continue",
-          "description": "pi RPC 进程的会话模式（修改后重启调试生效）"
+          "description": "pi 进程的会话模式（进程内直连，非 RPC；修改后重启生效）。ephemeral 已判死：会话必须落盘（审计红线）"
         },
         "piChat.sessionDir": {
           "type": "string",
