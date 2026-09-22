@@ -129,10 +129,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
   // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
   var stickyQ: HTMLElement | null = null;
-  // 钉住态检测（工单28 追加二，用户直令 2026-09-20）：原位不折叠、钉住才折——sticky 的 pinned
-  // 状态 CSS 感知不到，用 IntersectionObserver 观察 bubble 前的 0 高 sentinel：sentinel 滚出视
-  // 口顶 = bubble 到顶（钉住）。每视图一个 IO 实例；内容高超 3 行才折（line-clamp 自带 …），
-  // 右下角「展开/收起」chip 走 attr(data-st)。零滚动监听器，IO 是浏览器原生高效回调
+  // 钉住态检测（工单28 追加二，用户直令 2026-09-20）：原位不折叠、钉住才折——用
+  // IntersectionObserver 观察 bubble 前的 0 高 sentinel：sentinel 滚出视口顶 = bubble 到顶（钉住）。
+  // 每视图一个 IO 实例；内容高超 3 行才折（line-clamp 自带 …），右下角「展开/收起」chip
+  // 走 attr(data-st)。零滚动监听器，IO 是浏览器原生高效回调。
+  //
+  // 追加三（闪烁修正，用户实测 2026-09-21：下滑或流式输出时气泡高频「折叠↔展开」，整页闪烁）：
+  // 根因是钉住态自激振荡——line-clamp 把 bubble 的流内高度从 _fullH 砍到 3 行，内容总高随之
+  // 缩短；若缩短后最大滚动量掉到 sentinel 偏移以下，浏览器把 scrollTop 往上一钳，sentinel 又
+  // 露头 → IO 摘钉 → 展开（总高回涨）→ scroll() 又拉到底 → 再钉……每轮重排整页 = 闪烁。
+  // 判据（stickyWants）：只有「bubble 下方内容 ≥ 一个视口高」才允许钉住折叠——此时折叠省下的
+  // 高度（最多一个 bubble 高）不足以把 sentinel 从视口上方拽回来，钉住态自洽、不再翻转。
+  // 内容还短的回合干脆不钉（短答时原样滚动，比钉一个溢出屏幕的大气泡更合适）。
   var stickyIO: any = null;
   function updateStickyChip(b: any) {
     if (!b._fullH) return; // 未量到内容高（rAF 前）
@@ -141,13 +149,28 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (pinned && b._fullH > 78) b.setAttribute('data-st', open ? L.stickyCollapse : L.stickyExpand); // 3 行 ≈ 13px×1.55×3+padding14 ≈ 74.5，取 78
     else b.removeAttribute('data-st');
   }
+  function stickyWants(b: any, sent: any) {
+    var rootRect = root.getBoundingClientRect();
+    var sentRect = sent.getBoundingClientRect();
+    if (sentRect.top >= rootRect.top) return false; // sentinel 仍在视口内 → 不钉
+    var flowTop = sentRect.top - rootRect.top + root.scrollTop; // sentinel 在滚动内容坐标系里的偏移
+    var below = root.scrollHeight - (flowTop + (b._fullH || b.offsetHeight || 0));
+    return below >= root.clientHeight; // 折叠后 sentinel 仍在视口上方（见追加三注释）
+  }
+  // 钉住 = sticky-q（position:sticky）+ pinned（line-clamp + chip）同进同退，避免出现
+  // 「钉住但不折」把大气泡糊在视口顶的状态；短内容直接不钉，保持正常滚动
+  function applySticky(b: any) {
+    var want = stickyWants(b, b._sent);
+    b.classList.toggle('sticky-q', want);
+    b.classList.toggle('pinned', want);
+    updateStickyChip(b);
+  }
   function observeSticky(sent: any, b: any) {
     if (!stickyIO) stickyIO = new IntersectionObserver(function (es: any) {
       for (var i = 0; i < es.length; i++) {
         var tgt = (es[i].target as any)._stickyBubble;
         if (!tgt) continue;
-        tgt.classList.toggle('pinned', !es[i].isIntersecting);
-        updateStickyChip(tgt);
+        applySticky(tgt);
       }
     }, { root: root, threshold: 0 });
     sent._stickyBubble = b; b._sent = sent;
@@ -248,6 +271,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!followingEnd) return;
     // 后台视图 display:none 无布局，scrollTop 写不进去——切回时由 activateTab 按跟随标志补拉底
     if (id !== activeTabId) return;
+    // 追加三：回复变长后补一次钉住判定（IO 只在 sentinel 越界瞬间回调，内容从短到长时不会再触发）
+    if (stickyQ && (stickyQ as any)._sent && !stickyQ.classList.contains('pinned')) applySticky(stickyQ);
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
@@ -487,7 +512,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       stickyQ.classList.remove('sticky-q'); stickyQ.classList.remove('sticky-open'); stickyQ.classList.remove('pinned');
       if (stickyIO && (stickyQ as any)._sent) stickyIO.unobserve((stickyQ as any)._sent);
     }
-    stickyQ = b; b.classList.add('sticky-q');
+    stickyQ = b; // sticky-q 由 applySticky 在「可钉」时加（追加三：短内容不钉，避免振荡）
     b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; }
     // 工单31：原图缩略图（data URI，CSP img-src data: 已放行）——限高等比在 CSS；点击 → openImage
     // 交宿主写临时文件走 VS Code 内置预览器开原图（自带缩放），不造 lightbox；stopPropagation
