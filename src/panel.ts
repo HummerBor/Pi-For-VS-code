@@ -570,6 +570,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       sessionFile: null,
       sessionName: null,
       stats: null,
+      // E 刀（拍板 3）：空快照不做 ephemeral 判定——双空占位显「启动中」；真 ephemeral 的
+      // noSession=true 由各核心的 state/uiState 真值带
+      noSession: false,
     });
   }
 

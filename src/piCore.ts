@@ -526,6 +526,7 @@ export class PiCore {
         sessionName: foot?.sessionName ?? null,
         sessionFile: foot?.sessionFile ?? null,
         stats: foot?.stats ?? null,
+        noSession: this.clientNoSession, // E 刀（拍板 3）：页头占位分流，同 state 口径
       });
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
       // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行。
@@ -1553,6 +1554,7 @@ export class PiCore {
       sessionName: foot.sessionName,
       sessionFile: foot.sessionFile,
       stats: foot.stats,
+      noSession: this.clientNoSession, // E 刀（拍板 3）：页头占位分流，见 protocol.noSession
     });
   }
 

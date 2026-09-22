@@ -404,6 +404,10 @@ export interface StateMsg {
   sessionFile?: string | null;
   sessionName?: string | null;
   stats?: { contextPercent?: number | null; cost?: number } | null;
+  /** E 刀（拍板 3）：真 ephemeral（--no-session）无持久会话。name/file 双空时的页头占位
+   *  分流：true 才显「临时(未保存)」（会话真不会留），缺省/false 显「启动中」（启动窗口占位
+   *  冒充终值会误导「会话会丢」）。UiStateMsg 同字段同口径。 */
+  noSession?: boolean;
 }
 export interface ThemeMsg {
   type: "theme";
@@ -471,6 +475,8 @@ export interface UiStateMsg {
   sessionFile?: string | null;
   sessionName?: string | null;
   stats?: { contextPercent?: number | null; cost?: number } | null;
+  /** E 刀（拍板 3）：同 StateMsg.noSession——页头占位分流（「启动中」vs「临时(未保存)」） */
+  noSession?: boolean;
 }
 /** 工单七：单个变更文件的 webview 展示信息（还原/diff 所需细节留在宿主，不进 webview） */
 export interface ChangesFileInfo {

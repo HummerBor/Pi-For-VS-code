@@ -4,7 +4,24 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 启动态收口专项开工：一类问题定性（用户）+ F′ 真值必达根因刀；同日 H 刀实测通过、A 刀诊断日志、交接 6 全量回滚止血
+最后更新：2026-09-22 E 刀页头启动占位 noSession（拍板 3，协议三处，待实测）；同日 F′ 实测通过、启动态收口专项定性、H 刀实测通过
+
+# E 刀：页头启动占位 noSession（2026-09-22，拍板 3，协议三处同步，待实测）
+
+- 修法：name/file 双空的页头占位分流——真 ephemeral（--no-session）才显「临时(未保存)」
+  （会话真不会留），其余（pi 启动窗口）显「启动中」（新 i18n startingSession 中英双表）。
+  占位冒充终值的最后一条缝（拍板 3 原话：误导「会话会丢」）。
+- 协议三处同步（AGENTS.md 纪律）：protocol.ts（StateMsg/UiStateMsg 增 noSession?: boolean）
+  + 发送方（piCore.refreshState/postUiState 带 clientNoSession 真值；panel.postEmptyUiState
+  恒 false——空快照不做 ephemeral 判定）+ 接收方（webview fmtSession 双空分流，applyState
+  两入口 state/uiState 共吃，字段自动流转）。
+- 回归面：compile ✅；三套用例 ✅；probe-live-merge ✅（webview 改动必过）——另做变更前后
+  输出 diff：合成事件输出逐字节一致（仅临时目录随机名不同），零回归实证。探针收尾保洁
+  顺手修（Windows EPERM 重试，清理失败不再把全过断言标成 exit 1；其余 probe-* 同款清理
+  未修，记债）。
+- 实测点：冷启动/新建页签过程中页头显「启动中」→ 秒级变会话名/时间戳；sessionMode=ephemeral
+  的页签才显「临时(未保存)」。
+- 队列：F′ ✅（实测通过）→ **E ✅（本轮，待实测）** → G 闸门挪位 → C 去影子 → B 迁移重做 → D 重启聚焦。
 
 # 启动态收口专项：一类问题定性 + F′ 真值必达根因刀（2026-09-22，用户定性「这都是一类问题吧」）
 

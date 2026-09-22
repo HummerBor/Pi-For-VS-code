@@ -67,6 +67,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionOpFail: "会话操作失败: ",
     openSessionFileFail: "打开会话文件失败: ",
     ephemeralSession: "临时(未保存)",
+    startingSession: "启动中",
 
     // ── 主题 ──
     themePicker: "面板主题 / 背景",
@@ -486,6 +487,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sessionOpFail: "Session operation failed: ",
     openSessionFileFail: "Failed to open session file: ",
     ephemeralSession: "Ephemeral (unsaved)",
+    startingSession: "Starting…",
 
     themePicker: "Panel theme / background",
     themeMidnight: "Midnight Blue (default)",

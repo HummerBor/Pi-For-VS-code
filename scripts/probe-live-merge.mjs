@@ -125,5 +125,12 @@ console.log('root children:', await ev(`JSON.parse(JSON.stringify((function(){
 })()))`));
 
 chrome.kill();
-rmSync(tmp, { recursive: true, force: true });
+// Windows 教训（2026-09-22 E 刀）：chrome.kill 后进程/文件句柄不会立刻释放，rmSync 撞
+// EPERM 会把整个探针标成失败（断言全过却 exit 1）——清理是保洁不是断言，重试几轮后
+// 放弃即过，绝不影响退出码。
+for (let i = 0; i < 5; i++) {
+  try { rmSync(tmp, { recursive: true, force: true }); break; } catch {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
 process.exit(0);
