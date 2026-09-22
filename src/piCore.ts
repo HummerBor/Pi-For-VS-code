@@ -357,6 +357,10 @@ export class PiCore {
     // 注意顺序：先等恢复（可能 switchSession）完成再刷新状态/重绘，
     // 否则标题是 -c 恢复的会话、内容却是记住的会话，两边对不上
     this.restoringSession = (async () => {
+      // A 刀诊断日志：boot 链三埋点（start/done/FAIL）。此前 catch 全静默是 P0 排查
+      // 最大盲区——applyModelMemory 迁移这类早期一炸整链死，零痕迹（空白视图/页脚「—」
+      // 全对不上号）。吞掉语义不变：这里只加留痕，不改任何行为。
+      this.dbg("boot start tab=" + this.tabKey + (this.freshTab ? " freshTab" : ""));
       try {
         // 工单十五刀4：freshTab 跳过按工作区恢复——新标签的会话记忆由它自己首次会话写入，
         // 不能把别的标签存的会话文件抢过来当恢复目标（同根因：写冲突）
@@ -375,8 +379,10 @@ export class PiCore {
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
         this.replaySubagentRuns(d?.messages ?? []);
-      } catch {
-        // 忽略
+        this.dbg("boot done tab=" + this.tabKey);
+      } catch (err: any) {
+        // 仍然吞掉（行为零变更，A 刀纯诊断）：FAIL 必须留痕，静默整链死是 P0 的隐身衣
+        this.dbg("boot FAIL tab=" + this.tabKey + ": " + ((err && err.message) || String(err)));
       } finally {
         this.restoringSession = null;
       }
@@ -436,6 +442,9 @@ export class PiCore {
 
   /** webview 消息路由入口（adapter 的 onDidReceiveMessage 直连本方法） */
   async onWebviewMessage(m: WebviewToHost): Promise<void> {
+    // A 刀诊断日志：in 落盘——消息进核心的到达证明（「消息到 webview 一跳」断链排查的
+    // 对向锚点：in 有痕 out 无痕 = 断在核心之后；in 无痕 = 断在 webview/路由）
+    this.dbg("in " + msgBrief(m) + " core=" + this.tabKey);
     // 兜底 catch：case 内未自行接住的抛错不得静默蒸发（async 方法无人接 reject，
     // compactSession 抛错零反馈事故的类级修复，2026-09-09）；各 case 自身的
     // try/catch 优先生效，此处只接漏网之鱼
@@ -2031,6 +2040,29 @@ const GATE_PASS_TYPES = new Set<string>([
 ]);
 
 /** 从消息 content 里抽纯文本（核心与 adapter 共用；adapter 的会话预览读取也用它） */
+/** 诊断日志行摘要（A 刀）：任意跨边界消息 → 一行紧凑线索（type + 字段形状）。
+ *  「out 过滤落盘」就是指这里：render/uiState 整包可达 MB 级，全量 JSON 落盘会瞬间
+ *  打穿 5MB 轮转、把真正要看的线索冲掉——字符串只留头 60 字 + 长度，数组留条数，
+ *  嵌套对象留键名。纯函数零副作用，out（panel.post）/ in（onWebviewMessage）共用。 */
+export function msgBrief(m: unknown): string {
+  const o = m as Record<string, unknown> | null | undefined;
+  if (!o || typeof o !== "object") return String(m);
+  const parts: string[] = [];
+  for (const k of Object.keys(o)) {
+    if (k === "type" || k === "tabId") continue;
+    const v = o[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string")
+      parts.push(k + "=" + (v.length > 60 ? JSON.stringify(v.slice(0, 60)) + "…" + v.length : JSON.stringify(v)));
+    else if (Array.isArray(v)) parts.push(k + "=arr(" + v.length + ")");
+    else if (typeof v === "object") parts.push(k + "={" + Object.keys(v).join(",") + "}");
+    else parts.push(k + "=" + String(v));
+  }
+  const t = (o as { type?: unknown }).type;
+  const head = (typeof t === "string" ? t : "?") + (o.tabId != null ? " tab=" + String(o.tabId) : "");
+  return head + (parts.length ? " " + parts.join(" ") : "");
+}
+
 export function extractText(content: any): string {
   if (typeof content === "string") return content;
   let out = "";

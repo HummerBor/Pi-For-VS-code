@@ -4,7 +4,23 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 交接 6：两案修复后连环快发酿 P0，全量回滚至 0.1.38（ee31c75）止血
+最后更新：2026-09-22 重上 A 刀：诊断日志三埋点（纯只读，待实测）；交接 6 全量回滚止血后按队列重上
+
+# 重上队列开工：A 刀诊断日志（2026-09-22，纯只读零行为，待实测）
+
+- **A 刀（队列第一刀）落地**：诊断日志三埋点，全进既有 `~/.pi/agent/pi-chat-debug.log`：
+  ①out 过滤落盘——panel.post 出口逐条留痕（msgBrief 摘要化：字符串头 60 字+长度、数组条数、
+  嵌套对象键名，防 render/uiState 整包打穿 5MB 轮转）；no-view / postMessage 被拒如实标
+  DROP/FAIL（「日志说发了其实没发」比没日志更害人）。②in 落盘——piCore.onWebviewMessage
+  入口 + panel 级拦截消息（webviewReady/tab*）补痕，in 时间线无盲区。③boot 链
+  start/done/FAIL——restoringSession IIFE 静默 catch 只加留痕不改吞掉语义（P0「boot 链
+  静默死零痕迹」的隐身衣从此掀掉）。
+- 回归面：npm run compile ✅；test:detail / test:subagent / test:revert ✅；无 webview 改动，
+  probe-live-merge 探针面不适用。版本未 bump（package 打包时自动 bump，随下笔提交入库）。
+- 状态：**0.1.44.vsix 已装机**（code --install-extension 已验证 hummerbor.pi-for-vscode@0.1.44）。
+  等用户实测确认「回到小毛病时代基线」；确认后 npm run package 出 0.1.45（A 刀）交实测，
+  A 实测过了才开 B（迁移重做：setPersist(undefined) 真机先验、独立 try 不进 boot 链）。
+
 
 # 交接 6：2026-09-22 两案修复→连环快发→P0 全量回滚（接手先读本节）
 

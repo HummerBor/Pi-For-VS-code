@@ -12,7 +12,7 @@ import { getHtml } from "./webview-html";
 import { loadPiSdk } from "./piSdk";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
-import { extractText, PiCore, UiActions } from "./piCore";
+import { extractText, msgBrief, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -339,6 +339,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.core.ensureClient();
     }
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
+      // A 刀诊断日志：panel 级拦截消息（webviewReady/tab*）不进 core.onWebviewMessage，
+      // 这里补留痕——否则 in 时间线有盲区（清单核对教训：漏一条就少一个锚点）
+      if (m.type === "webviewReady" || m.type === "tabNew" || m.type === "tabSwitch" || m.type === "tabClose")
+        dbgLog("in " + msgBrief(m) + " [panel 拦截]");
       // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢
       if (m.type === "webviewReady") {
         // 工单七：变更条随握手重发（横幅同款语义），webview 重建后不丢——三期 per-tab：逐页签各发各的
@@ -444,7 +448,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private post(msg: HostToWebviewTagged, tabId?: string): void {
     if (tabId !== undefined) msg.tabId = tabId;
     else if (msg.tabId === undefined) msg.tabId = this.activeTabId;
-    void this.view?.webview.postMessage(msg);
+    // A 刀诊断日志：out 过滤落盘（摘要化见 msgBrief）。view 不在 / postMessage 被拒时
+    // 如实标 DROP/FAIL——「日志说发了其实没发」比没日志更害人（盲区事故教训）。
+    // 行为零变更：no-view 原样不发，postMessage 只是多接一个拒绝留痕回调。
+    if (!this.view) {
+      dbgLog("out " + msgBrief(msg) + " [DROP no-view]");
+      return;
+    }
+    dbgLog("out " + msgBrief(msg));
+    void this.view.webview.postMessage(msg).then(undefined, (e) =>
+      dbgLog("out FAIL " + msgBrief(msg) + ": " + String(e))
+    );
   }
 
   // ════════ 工单十五刀2：标签栏宿主侧 ════════
