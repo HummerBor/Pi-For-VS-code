@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 
 /** 标签栏持久化条目（按工作区分桶，见 TAB_BAR_BY_WS_KEY） */
-interface SavedTabBar { tabs: { id: string; title: string }[]; active: string; }
+interface SavedTabBar { tabs: { id: string; title: string }[]; active: string; /** H 刀：页签 id 序号水位——防重启后 id 复用继承脏记忆；老数据无此字段走全量 id 扫描兑底 */ seq?: number; }
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -12,7 +12,7 @@ import { getHtml } from "./webview-html";
 import { loadPiSdk } from "./piSdk";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
-import { extractText, msgBrief, PiCore, UiActions } from "./piCore";
+import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -110,29 +110,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (legacy?.tabs?.length) { saved = legacy; byWs[wsKey] = saved; void this.globalState.update(ChatPanelProvider.TAB_BAR_BY_WS_KEY, byWs); }
     }
     if (!saved?.tabs?.length) return;
-    let maxSeq = 0;
+    // H 刀（2026-09-22 用户拍板）：空页签不恢复——记忆文件不在⇔ 没内容（pi -r 同口径）。
+    // 老数据按当年「新标签立刻入册」存过空页签，恢复时一律过滤。id 扫描必须在过滤之前：
+    // seq 照收（saved.seq 与全量 id 取大）——被滤掉的页签 id 绝不能复用，它的记忆键可能
+    // 已被污染指向别人的会话文件（复用 = 新页签继承脏记忆，换马甲复发同一事故）。
+    let maxSeq = saved.seq ?? 0;
     for (const t of saved.tabs) {
       if (typeof t?.id !== "string" || !/^t\d+$/.test(t.id)) return;
       const n = parseInt(t.id.slice(1), 10);
       if (n > maxSeq) maxSeq = n;
+    }
+    for (const t of saved.tabs) {
+      if (!this.tabSessionRemembered(t.id)) continue;
       this.tabMeta.set(t.id, { title: t.title || this.L.tabUntitled, busy: false });
       this.restoredTabs.add(t.id);
     }
     this.tabSeq = maxSeq;
-    // 活动标签失效（如跨版本手改）兑底到最后一个，不猜第一个
-    this.activeTabId = saved.tabs.some((t) => t.id === saved.active)
+    if (!this.tabMeta.size) return; // 全是空页签 = 回单标签语义（activeTabId 保持 t1）
+    // 活动标签失效（如跨版本手改/被空页签过滤掉）兑底到最后一个幸存者，不猜第一个
+    this.activeTabId = this.tabMeta.has(saved.active)
       ? saved.active
-      : saved.tabs[saved.tabs.length - 1].id;
+      : [...this.tabMeta.keys()][this.tabMeta.size - 1];
   }
 
   /** 标签栏落盘（id/顺序/标题/活动标签）——按工作区分桶（globalState 跨项目共享，
    *  不分桶会把 A 项目的标签长进 B 项目，2026-09-20 串项目事故） */
   private saveTabBar(): void {
-    const tabs = [...this.tabMeta.entries()].map(([id, m]) => ({ id, title: m.title }));
-    const saved: SavedTabBar = { tabs, active: this.activeTabId };
+    // H 刀（2026-09-22 用户拍板「没有内容的新会话不应该在重启时展示或记录」）：空页签
+    // 不入库——pi 同口径：没内容的会话没有文件（pi -r 不列），记忆文件不在⇔ 没内容。
+    // 空页签被重启拉出来只会被 -c 强加「最近一条会话」（污染源 + 双写冲突）。seq 必须
+    // 照存：被滤掉的页签 id 不许在重启后复用（记忆键可能已被污染，复用 = 继承脏记忆）。
+    const tabs = [...this.tabMeta.entries()]
+      .filter(([id]) => this.tabSessionRemembered(id))
+      .map(([id, m]) => ({ id, title: m.title }));
+    const saved: SavedTabBar = { tabs, active: this.activeTabId, seq: this.tabSeq };
     const byWs = this.globalState.get<Record<string, SavedTabBar>>(ChatPanelProvider.TAB_BAR_BY_WS_KEY, {});
     byWs[this.wsKey()] = saved;
     void this.globalState.update(ChatPanelProvider.TAB_BAR_BY_WS_KEY, byWs);
+  }
+
+  /** H 刀：该页签是否有「有内容的会话记忆」——记忆文件在⇔ 有内容（pi -r 同口径：
+   *  没内容的会话不落盘）。查询走 piCore.sessionMemoryFor 单一事实源（t1 legacy 兑底同款）。 */
+  private tabSessionRemembered(tabId: string): boolean {
+    const file = sessionMemoryFor(
+      <T>(key: string, defaultValue: T): T => this.globalState.get<T>(key, defaultValue),
+      this.wsKey(),
+      tabId
+    );
+    return !!file && fs.existsSync(file);
   }
 
   private wsKey(): string {
@@ -512,7 +537,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.freshTabs.add(id); // 刀4：新标签=新持久会话（ensureCore 时置 core.freshTab）
     this.activeTabId = id;
     this.postTabs();
-    this.saveTabBar(); // 新标签立刻入册，中途崩进程也不丢标签栏
+    // H 刀改口径（2026-09-22 用户拍板）：空页签不入册（saveTabBar 会滤掉无内容页签）——
+    // 「立刻入册」只对有内容的页签成立（首条消息落盘后 titleDirty 即入册，中途崩也不丢）。
+    this.saveTabBar();
     // 刀5：单一渲染上下文，新页签的一切旧现场都得显式清（刀2 时代每页签自带欢迎页 DOM，
     // 这项真空是刀5 引入的——用户实测「新建了会话但内容还是上一个的」）
     this.postEmptyUiState(id);

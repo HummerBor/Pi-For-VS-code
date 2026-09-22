@@ -306,7 +306,13 @@ export class PiCore {
     const ephemeral = mode === "ephemeral" && !forceSession;
     // 工单十五刀4：freshTab（＋新建的标签）不带 -c → piClient 映射到 SessionManager.create
     // （新持久会话）；绝不 continueRecent——否则接上的是别的标签正在写的会话文件（写冲突）
-    const args = ephemeral ? ["--no-session"] : this.freshTab ? [] : mode === "continue" ? ["-c"] : [];
+    // H 刀（2026-09-22 用户实测「空页签重启后变成历史第一条/之前点过的页签」，实证见
+    // pi-chat-debug.log t56 时间线）：无会话记忆或记忆文件不在的页签**同样禁 -c**。pi 同
+    // 口径：没内容的会话没有文件（pi -r 不列）——文件在⇔ 有内容可恢复。-c（continueRecent）
+    // 只会把「最近一条会话」强加给空页签（还会和原页签双写同一文件）；无记忆一律 [] 新建。
+    const mem = this.freshTab ? undefined : this.getSessionForWs(cwd);
+    const memOk = !!mem && fs.existsSync(mem);
+    const args = ephemeral ? ["--no-session"] : memOk && mode === "continue" ? ["-c"] : [];
     const sessionDir = this.caps.getConfig("piChat", "sessionDir", "");
     if (sessionDir) args.push("--session-dir", sessionDir);
     this.clientNoSession = ephemeral;
@@ -408,11 +414,11 @@ export class PiCore {
    *  自然写入新 key），其余标签不抢旧值（避免多标签启动互相踩同一恢复目标） */
   private getSessionForWs(cwd: string): string | undefined {
     const key = cwd.replace(/\\+$/, "").toLowerCase();
-    const tabMap = this.caps.getPersist<Record<string, Record<string, string>>>("piChat.lastSessionByWs2", {});
-    const hit = tabMap[key]?.[this.tabKey];
-    if (hit) return hit;
-    const legacy = this.caps.getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
-    return this.tabKey === "t1" ? legacy[key] : undefined;
+    return sessionMemoryFor(
+      <T>(key2: string, defaultValue: T): T => this.caps.getPersist<T>(key2, defaultValue),
+      key,
+      this.tabKey
+    );
   }
 
   /** 写入当前项目对应的“上次会话”（每标签一份，工单十五刀3；旧 key 不再写，可回滚） */
@@ -2065,6 +2071,21 @@ const GATE_PASS_TYPES = new Set<string>([
  *  「out 过滤落盘」就是指这里：render/uiState 整包可达 MB 级，全量 JSON 落盘会瞬间
  *  打穿 5MB 轮转、把真正要看的线索冲掉——字符串只留头 60 字 + 长度，数组留条数，
  *  嵌套对象留键名。纯函数零副作用，out（panel.post）/ in（onWebviewMessage）共用。 */
+/** 会话记忆查询（H 刀抽出的单一事实源）：{工作区: {tabKey: 会话文件}} 二维键 + t1 的
+ *  旧全局键兑底（只读迁移不回写）。piCore（boot 恢复/启动参数判定）与 panel（页签持久化
+ *  过滤）同口径消费——同一查询双实现必漂移（bindViewEvents 教训：两处不一致编译器不报）。 */
+export function sessionMemoryFor(
+  getPersist: <T>(key: string, defaultValue: T) => T,
+  wsKey: string,
+  tabKey: string
+): string | undefined {
+  const tabMap = getPersist<Record<string, Record<string, string>>>("piChat.lastSessionByWs2", {});
+  const hit = tabMap[wsKey]?.[tabKey];
+  if (hit) return hit;
+  const legacy = getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
+  return tabKey === "t1" ? legacy[wsKey] : undefined;
+}
+
 export function msgBrief(m: unknown): string {
   const o = m as Record<string, unknown> | null | undefined;
   if (!o || typeof o !== "object") return String(m);
