@@ -375,6 +375,10 @@ export class PiCore {
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
         this.replaySubagentRuns(d?.messages ?? []);
+        // 启动终值原子快照（2026-09-22 页脚「一直是—」修复的另一半）：boot 链尾以完整真值
+        // （页脚+历史）收尾，确保任何更早到达的空快照/中途态必被覆盖。panel 侧 needState
+        // 已不再对启动中的页签发空快照，这里是最后一道保险
+        await this.postUiState();
       } catch {
         // 忽略
       } finally {

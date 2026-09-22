@@ -375,7 +375,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if ((m as { needState?: boolean }).needState) {
           const c = this.ensureCore(m.tabId);
           if (c.clientRef?.running) void c.postUiState();
-          else this.postEmptyUiState(m.tabId, c.isNoSession);
+          // clientRef 存在但未 running = pi 启动中（initPromise 在途）：不发空快照——
+          // 进程内直连后 boot 只要几百 ms，若空快照晚于 boot 链的 state 到达，会把页脚
+          // 重置成 null 且再没人刷新（用户实测新建页签模型「一直是—」，2026-09-22。
+          // RPC 子进程时代 spawn+握手 ≥1s，空快照恒在前面，故旧版从未中招）。
+          // boot 链尾的 refreshState/postUiState 会送来最终真值；boot 失败已有 onError 状态
+          else if (!c.clientRef) this.postEmptyUiState(m.tabId, c.isNoSession);
         }
         return;
       }
@@ -589,7 +594,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const next = this.cores.get(this.activeTabId);
       // 工单24 架构归位：转移后的活动页签不再盲发快照——webview 树若未建，
       // 会随 tabs 消息驱动的 activateTab 带 needState 来要（切页签零重拉）
-      if (next && !next.clientRef?.running) this.postEmptyUiState(this.activeTabId, next.isNoSession);
+      if (next && !next.clientRef) this.postEmptyUiState(this.activeTabId, next.isNoSession);
     }
     this.postTabs();
     this.saveTabBar(); // 标签增减/活动标签变化都要落盘，重启才还原得住
