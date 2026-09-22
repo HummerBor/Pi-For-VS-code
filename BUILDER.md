@@ -4,7 +4,80 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-21 直令留痕：ship 闸门 commit 容忍「无变更」（bump 已提前入库场景）
+最后更新：2026-09-22 交接 6：两案修复后连环快发酿 P0，全量回滚至 0.1.38（ee31c75）止血
+
+# 交接 6：2026-09-22 两案修复→连环快发→P0 全量回滚（接手先读本节）
+
+## 结局状态
+
+- **HEAD = adcdcff「回滚至 ee31c75」，代码内容 = 0.1.38（ee31c75，两案修复版）原样**；
+  发行物 **pi-for-vscode-0.1.44.vsix**（>已装 0.1.42 可直接覆盖），等用户装后实测回归。
+- 两案 bug 在回滚版里**依然修着**（ee31c75 本身就含）：①跨窗口模型记忆串扰（二维键
+  piChat.lastModelByWs2/thinkingByWs2，0.1.38 落地）②并行工具乱序完成致 live 成组全散
+  （webview 成组判定 toolEnd→toolStart）。回归用例：scripts/probe-readmerge*.mjs、
+  probe-live-merge*.mjs（零依赖 Chrome CDP 探针，均在 ee31c75 前已入库，未随回滚丢失）。
+- 磁盘遗留 pi-for-vscode-0.1.40/41/42.vsix（问题系列，**别再装**）；0.1.43 歧义包已删
+  （同版本号覆盖事故：中午废案与回滚版曾同号）。
+
+## 起因与用户拍板记录（当日有效，重上时照办）
+
+1. 去影子：同工作区页签间模型/思考记忆也**不串**（0.1.40 实测：111 选 free 经影子 "_"
+   污染全工作区，用户拍板废弃工单十五刀3「新页签跟随最近选择」）。
+2. 重启聚焦 = **pi -r 第一个会话**（会话文件 mtime 最新的页签），不是「关闭时活动页签」。
+3. 页头不能把 pi 启动窗口显成「临时(未保存)」（误导会话会丢）；启动中显「启动中」，
+   真 ephemeral 才显「临时(未保存)」。
+4. 新会话必须带 pi 默认模型上屏（页脚不能长期「—」）。
+5. 迁移范围 t1..t64（用户页签已到 t38+）；全局旧键 piChat.lastModel/lastThinking
+   不种只删（兑底语义随影子废弃）。
+
+## 今日叠的刀（0.1.39 → 0.1.43，全部已回滚）与 P0
+
+- 0.1.39 模型记忆一次性迁移：跑在 boot 链 applyModelMemory 首调，旧扁平键种进二维键。
+  **P0 头号嫌疑**：`setPersist(key, undefined)`（= globalState.update(key, undefined)）
+  真机行为未验证，若同步抛错 → boot 链 catch 全静默 → 整链死 → 空白视图/页脚「—」/
+  busy 卡死（× 关不掉），且每装一版首启必发（症状与用户实测全部吻合）。
+- 0.1.40 去影子 + 重启聚焦 mtime + 迁移范围/兑底修正。
+- 0.1.41 noSession 协议三处（UiStateMsg 加字段 + postUiState/postEmptyUiState 发送 +
+  webview 页头分流）。
+- 0.1.42 needState 对启动中页签不发空快照 + boot 链尾 postUiState。
+- 0.1.43（未验证废案）boot 链失败弹错/终值快照必发 + 恢复页签无记忆禁 -c + 闸门挪位
+  + in/out/boot 链日志。
+
+**纪律事故**：每刀编译全绿+用例全过就发下一刀，没等用户实测验收就叠加；根因未定
+就开始修“症状”。用户最终指令：「不用恢复定位问题，直接回滚」。
+
+## 关键证据（重定位时直接用）
+
+- `~/.pi/agent/pi-chat-debug.log` 实锤一行：`gate drop: window=13028ms dropped=1
+  types=[render]`——postUiState 开闸在两跳 await（restoringSession 全程 + collectState
+  的 ready/统计）之前，闸窗可达 13 秒，窗尾入队的 render 被「≤快照时刻已覆盖」规则
+  丢弃 → 视图永久空白。**工单24 老代码自带的洞，非今日引入**，今日改动叠加放大。
+  修法（已写在 0.1.43 废案里，重上时取回）：开闸移到两跳 await 之后，只罩同步快照块。
+- 同一日志：宿主侧全程健康（prompt→agent_start→agent_settled 正常、会话文件正常建
+  命名）→ 断的是「消息到 webview」一跳或 boot 链静默死。
+- 无头探针（可复跑）：`SessionManager.create` 直建 runtime → model=Free Models Router、
+  boot≈1.7s（命令行）→ pi 层无恙。探针脚本 /tmp 里不入库，写法见本次会话：路径
+  `C:/Users/Administrator/AppData/Roaming/nvm/v24.19.0/node_modules/@earendil-works/
+  pi-coding-agent/dist/index.js`，createAgentSessionServices+FromServices+Runtime 三段。
+- globalState 实况读法：复制 `%APPDATA%\Code\User\globalStorage\state.vscdb` 再用
+  python sqlite3 读（键 HummerBor.pi-for-vscode，值是 JSON 包着 piChat.* 键）。
+
+## 重上队列（一次一刀，编译+用例+用户实测全过才下一刀）
+
+| 刀 | 内容 | 备注 |
+|---|---|---|
+| A | 诊断日志（panel.post out 过滤落盘 + piCore.onWebviewMessage in 落盘 + boot 链 start/done/FAIL） | 纯只读，零行为影响，优先 |
+| B | 迁移重做 | setPersist(undefined) 真机先验证；迁移独立 try、绝不跑在 boot 链里；范围 t1..t64；全局键不种只删 |
+| C | 去影子（用户拍板 1） | 记忆/迁移用例同步重建（回滚时 modelMemoryMigration.test.mts 已删） |
+| D | 重启聚焦 mtime（拍板 2） | restoreTabBar，per-file try/catch |
+| E | 页头启动占位 noSession（拍板 3） | 协议三处同步 |
+| F | needState 不发空快照 + boot 链终值快照 + 失败必弹错（拍板 4） | |
+| G | 闸门挪位（开闸移至两跳 await 后） | 有 log 实锤的老洞 |
+| H | 恢复页签无会话记忆禁 -c | 「新会话显示 111 内容」+ 双写冲突根因；已污染页签靠关掉重建 |
+
+**每刀必须带的回归面**：npm run compile；npm run test:detail / test:subagent /
+ test:revert（test:migration 已随回滚删除，刀 B 重建时恢复）；webview 改动过
+ probe-live-merge 探针；用户实测通过才发下一版（版本号只增不复用）。
 
 ## 直令留痕：ship 闸门修复（2026-09-21，用户 ship 撞死 commit 步骤）
 
