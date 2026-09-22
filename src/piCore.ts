@@ -505,6 +505,8 @@ export class PiCore {
         thinkingLevel: foot?.thinkingLevel ?? null,
         sessionName: foot?.sessionName ?? null,
         sessionFile: foot?.sessionFile ?? null,
+        // 页头占位分流：真临时（--no-session）显「临时(未保存)」，启动窗口显「启动中」
+        noSession: this.clientNoSession,
         stats: foot?.stats ?? null,
       });
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——

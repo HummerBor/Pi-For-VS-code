@@ -470,6 +470,10 @@ export interface UiStateMsg {
   thinkingLevel?: number | null;
   sessionFile?: string | null;
   sessionName?: string | null;
+  /** 真·临时会话（--no-session，sessionMode=ephemeral）：页头「临时(未保存)」只对它显示。
+   *  false 且无 sessionFile = pi 还在启动，页头显示「启动中」占位——用户实测把启动窗口
+   *  误读成「会话是临时的会丢」（2026-09-22），两态必须分开 */
+  noSession?: boolean;
   stats?: { contextPercent?: number | null; cost?: number } | null;
 }
 /** 工单七：单个变更文件的 webview 展示信息（还原/diff 所需细节留在宿主，不进 webview） */
