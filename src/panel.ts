@@ -490,11 +490,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   // ════════ 工单十五刀2：标签栏宿主侧 ════════
 
-  /** 会话标题格式化（webview fmtSession 同款口径：名字 > 文件名内的时间戳 > 裸文件名） */
+  /** 会话标题格式化（webview fmtSession 同款口径：名字 > 文件名内的时间戳（本地时区） > 裸文件名）。
+   *  J 刀（2026-09-22 用户实测两修）：①文件名时间戳是 UTC（尾缀 Z），裸读差一个时区
+   *  （20:00 建的会话显示 12:00）——经 Date 转本地；②空会话（文件未落盘）显「新会话」
+   *  不显时间——pi -r 同口径：没内容的会话没有文件（H 刀判据复用：文件在 ⇔ 有内容），
+   *  时间戳对用户无意义。判定收口在此一处，webview 页头镜像宿主 tabs 标题（唯一事实源）。 */
   private fmtSessionTitle(file: string | null): string {
-    if (!file) return this.L.tabUntitled;
+    if (!file || !fs.existsSync(file)) return this.L.tabUntitled;
     const mm = file.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})/);
-    if (mm) return mm[2] + "-" + mm[3] + " " + mm[4] + ":" + mm[5];
+    if (mm) {
+      const d = new Date(`${mm[1]}-${mm[2]}-${mm[3]}T${mm[4]}:${mm[5]}:00Z`);
+      const p = (n: number) => (n < 10 ? "0" + n : String(n));
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
     return path.basename(file) || this.L.tabUntitled;
   }
 

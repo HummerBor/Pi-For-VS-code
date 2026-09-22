@@ -1036,7 +1036,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (name) return name;
     var s = String(file || '');
     var mm = s.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})/);
-    if (mm) return mm[2] + '-' + mm[3] + ' ' + mm[4] + ':' + mm[5];
+    // J 刀：文件名时间戳是 UTC（尾缀 Z），必须转本地——裸读差一个时区（用户实测 20:00 建
+    // 的会话显示 12:00）。与宿主 fmtSessionTitle 同款口径（此处只是 tabs 未到时的兑底）
+    if (mm) {
+      var dd = new Date(mm[1] + '-' + mm[2] + '-' + mm[3] + 'T' + mm[4] + ':' + mm[5] + ':00Z');
+      var p2 = function (n) { return (n < 10 ? '0' + n : '' + n); };
+      return p2(dd.getMonth() + 1) + '-' + p2(dd.getDate()) + ' ' + p2(dd.getHours()) + ':' + p2(dd.getMinutes());
+    }
     var base = s.split(/[\\/]/).pop();
     // 双空 = pi 启动窗口占位，显「启动中」（E 刀拍板 3：占位冒充终值会误导「会话会丢」）。
     // 「临时(未保存)」已随 ephemeral 判死退役（审计红线：一切会话都落盘，2026-09-22）
@@ -1054,7 +1060,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
     if (id === activeTabId) {
-    var sessName = fmtSession(m.sessionFile, m.sessionName);
+    // J 刀：页头优先用宿主 tabs 标题（唯一事实源：空会话「新会话」/时区本地化都在宿主
+    // fmtSessionTitle 收口），fmtSession 只作 tabs 未到时的兑底
+    var hostTitle = '';
+    for (var hTi = 0; hTi < tabsList.length; hTi++) if (tabsList[hTi].id === activeTabId) { hostTitle = tabsList[hTi].title; break; }
+    var sessName = hostTitle || fmtSession(m.sessionFile, m.sessionName);
     sessionEl.textContent = L.sessionLabel + sessName;
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
     }
@@ -1932,6 +1942,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 宿主标签清单（唯一事实源）：未读点由宿主记账（后台跑完置位，切回时清） */
   function handleTabs(m: TabsMsg) {
     tabsList = m.tabs || [];
+    // J 刀：页头随宿主标题刷新（宿主是标题唯一事实源）；无标题不覆盖，applyState 仍兑底
+    for (var tTi = 0; tTi < tabsList.length; tTi++) {
+      if (tabsList[tTi].id === activeTabId && tabsList[tTi].title) {
+        sessionEl.textContent = L.sessionLabel + tabsList[tTi].title;
+        break;
+      }
+    }
     if (activeTabId === null || m.activeTabId !== activeTabId) {
       // 宿主驱动换页签（新建/关标签转移/重启重建）：同款 O(1) 换根+账本重渲；
       // 换的是非活动标签时 activateTab 内部直接返回
