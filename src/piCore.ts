@@ -385,10 +385,15 @@ export class PiCore {
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
         this.replaySubagentRuns(d?.messages ?? []);
+        // F′ 刀：boot 链尾终值快照（0.1.42 修法取回）——真值必达兕底：中途丢的 state/render
+        // 由这次原子 uiState 一次补齐（含页脚模型/思考/会话名），此后不再「无人再刷」
+        void this.postUiState();
         this.dbg("boot done tab=" + this.tabKey);
       } catch (err: any) {
-        // 仍然吞掉（行为零变更，A 刀纯诊断）：FAIL 必须留痕，静默整链死是 P0 的隐身衣
+        // 吞掉语义保留（不重抛，async 链无人接 reject）；但失败必弹错（F′，拍板 4）——
+        // 静默整链死是 P0 的隐身衣：留痕（A 刀）+ 用户可见 notice 双保险
         this.dbg("boot FAIL tab=" + this.tabKey + ": " + ((err && err.message) || String(err)));
+        this.post({ type: "notice", text: this.L.opFail + ((err && err.message) || String(err)) });
       } finally {
         this.restoringSession = null;
       }
@@ -1562,7 +1567,12 @@ export class PiCore {
     stats: { contextPercent: number | null; cost: number } | null;
   } | null> {
     const client = this.client;
-    if (!client?.running) return null;
+    // F′ 刀（2026-09-22 启动态收口·根因）：只判「client 在不在」，不判 running——running 是
+    // init 翻真标志，旧守卫「不等就回 null」让 boot 链 refreshState 撞上 init 未完成时静默
+    // 跳过 state 真值（日志实锤 t24/25/26 只有 render 无 state → 页脚永久「— 思考 —」/
+    // 页头永久「临时(未保存)」，且无人再刷）。piClient 全部方法内部 await ready()，getState
+    // 会等 init 完成；未建/已 dispose 的 client 都是 undefined（dispose 均置空），仍回 null。
+    if (!client) return null;
     try {
       const st = await client.getState();
       let stats: GetSessionStatsResult | null = null;

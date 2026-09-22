@@ -388,7 +388,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 工单24 架构归位：webview 未建树的页签随切换要一次快照（切页签零重拉的唯一例外）
         if ((m as { needState?: boolean }).needState) {
           const c = this.ensureCore(m.tabId);
-          if (c.clientRef?.running) void c.postUiState();
+          // F′ 刀：启动中的页签不发空快照（0.1.42 修法取回）——空快照会把「—/临时(未保存)」
+          // 占位钉死（真值之后无人再刷）。有 client 就要真值快照（postUiState 内部 getState
+          // 等 init 完成）；没 client 才是真·空页签，回原子空快照。
+          if (c.clientRef) void c.postUiState();
           else this.postEmptyUiState(m.tabId);
         }
         return;
