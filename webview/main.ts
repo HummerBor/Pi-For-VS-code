@@ -1051,15 +1051,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
     thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
     if (id === activeTabId) {
-    var sessName;
-    if (!m.sessionFile) {
-      // 无会话文件的两态分流（协议 noSession，2026-09-22）：真临时（--no-session）显
-      // 「临时(未保存)」；否则是 pi 还在启动，显「启动中」——原实现全落「临时(未保存)」，
-      // 用户把新建页签的启动窗口误读成会话是临时的
-      sessName = m.noSession ? L.ephemeralSession : L.startingPi;
-    } else {
-      sessName = fmtSession(m.sessionFile, m.sessionName);
-    }
+    var sessName = fmtSession(m.sessionFile, m.sessionName);
     sessionEl.textContent = L.sessionLabel + sessName;
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
     }
