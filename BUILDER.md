@@ -4,7 +4,27 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 交接 7：启动态收口七刀全实测通过（A/H/F′/E/C/I/J），剩 G/B/D——新会话读交接 7 接任
+最后更新：2026-09-22 收口补记：D 刀重启聚焦落地（拍板 2）+ G/B 转债（用户拍板「a」）——八刀完，队列清空
+
+# 收口补记：D 刀落地 + G/B 转债（2026-09-22，用户拍板「a」——体验已好，账按需挂）
+
+- **D 刀（拍板 2 对齐）**：重启聚焦 = **pi -r 第一个会话**（会话文件 mtime 最新的幸存页签），
+  不再是「关闭时活动页签」——最后干活的地方才是回来时该在的地方。**per-file try/catch**（拍板）：
+  单个会话文件被删/被锁只跳过这一签，不拖垮整个恢复；全部取不到 mtime 时退回 saved.active
+  （若幸存）→ 最后一个幸存者。实现：restoreTabBar 幸存者中 statSync(file).mtimeMs 取最大；
+  会话文件查询走 tabSessionFile（sessionMemoryFor 单一事实源，H 刀判据「文件在 ⇔ 有内容」同源）。
+- **G 转观察项（债务）**：F′ 已堵主症状（boot 链尾终值快照必达 + needState 不发空快照，13s
+  闸窗被拆解），剩语义正确性尾巴。**触发再切的判据（写死）**：debug log 再现
+  `gate drop types=[render]` 或视图空白复发 → 立即切闸门时序刀（开闸移到两跳 await 后）。
+- **B 判死**：迁移目标（升级前旧扁平键里的模型选择）已过期（用户当日已重选）；旧键 0.1.38
+  起就不读、躺着无害；setPersist(undefined) 真机验证风险不值。规格留档备查（若再现「升级
+  丢模型」实证再启）：范围 t1..t64；全局键 piChat.lastModel/lastThinking **不种只删**；影子 "_"
+  不补；迁移独立 try、绝不进 boot 链；setPersist(undefined) 先探针（写暂存键→删→回读→dbg，
+  失败跳过删键）；用例补进 scripts/modelMemoryMigration.test.mts。
+- 回归面：compile ✅；四套用例 ✅（宿主侧无 webview，探针面不适用）。
+- 实测点：开着几个有内容的页签，在非「关闭时活动」的那个页签上干活/发消息 → 关窗重启 →
+  焦点落在**最后干活的页签**（mtime 最新），不是关闭时选中的那个。
+- 至此 A/H/F′/E/C/I/J/D **八刀完**；G 观察项、B 判死。下一步候选：ship 发市场（等用户发话）。
 
 # 交接 7：2026-09-22 启动态收口专项——七刀连发全实测通过，剩 G/B/D（接手先读本节）
 
@@ -54,13 +74,13 @@
 - 回归面（每刀固定）：`npm run compile` + `test:detail / test:subagent / test:revert / test:migration`
   四套 + webview 改动过探针 + 用户实测通过才下一刀（版本号只增不复用，同号覆盖事故不重演）。
 
-## 重上队列（一次一刀，全过才下一刀）
+## 重上队列（已收口，2026-09-22 用户拍板 a，见顶部「收口补记」）
 
 | 刀 | 内容 | 备注 |
 |---|---|---|
-| G | 闸门挪位：postUiState 开闸移到两跳 await（restoringSession/collectState）之后，只罩同步快照块 | 有实锤 `gate drop: window=13028ms dropped=1 types=[render]`——工单24 老洞：窗尾 render 被「≤快照时刻已覆盖」规则误丢致永久空白。注意 F′ 已取回 0.1.42 另两修法（needState 不发空快照/链尾终值快照），G 只剩闸门时序一件事 |
-| B | 模型记忆一次性迁移重做 | setPersist(undefined) **真机先验证**（探针先行：写暂存键→删→回读→dbg，失败跳过删键）；迁移独立 try、绝不进 boot 链；范围 t1..t64；全局键 piChat.lastModel/lastThinking **不种只删**；影子 "_" 不补（已废弃）；用例补进 scripts/modelMemoryMigration.test.mts（C 刀已重建文件） |
-| D | 重启聚焦 = pi -r 第一个会话（会话文件 mtime 最新的页签），不是「关闭时活动页签」 | restoreTabBar 链路，per-file try/catch |
+| ~~G~~ | 闸门挪位 | **转观察项**：F′ 已堵主症状，剩语义尾巴。触发再切判据：debug log 再现 `gate drop types=[render]` 或空白复发 |
+| ~~B~~ | 模型记忆一次性迁移重做 | **判死**：目标已过期/旧键无害/风险不值；规格见「收口补记」备查 |
+| ~~D~~ | 重启聚焦 = mtime 最新页签 | **✅ 已落地**（拍板 2 对齐，per-file try/catch） |
 
 待办债：①msgBrief 嵌套标量显值②已污染页签靠关掉重建（脏记忆随 id 不复用失效）③旧影子/旧扁平键
 残留清理可并入 B。

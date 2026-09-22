@@ -127,10 +127,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     this.tabSeq = maxSeq;
     if (!this.tabMeta.size) return; // 全是空页签 = 回单标签语义（activeTabId 保持 t1）
-    // 活动标签失效（如跨版本手改/被空页签过滤掉）兑底到最后一个幸存者，不猜第一个
-    this.activeTabId = this.tabMeta.has(saved.active)
-      ? saved.active
-      : [...this.tabMeta.keys()][this.tabMeta.size - 1];
+    // D 刀（2026-09-22 拍板 2）：重启聚焦 = pi -r 第一个会话——会话文件 mtime 最新的幸存页签
+    // （「最后干活的地方」才是回来时该在的地方），不是「关闭时活动页签」。per-file try/catch：
+    // 单个会话文件被删/被锁只跳过这一签，不拖垮整个恢复；全部取不到 mtime 时退回 saved.active
+    // （若幸存）再到最后一个幸存者，不猜第一个。
+    let bestId = "";
+    let bestMtime = -1;
+    for (const id of this.tabMeta.keys()) {
+      const file = this.tabSessionFile(id);
+      if (!file) continue;
+      try {
+        const m = fs.statSync(file).mtimeMs;
+        if (m > bestMtime) { bestMtime = m; bestId = id; }
+      } catch { /* per-file 兑底（拍板 2）：stat 失败只跳过这一签 */ }
+    }
+    this.activeTabId =
+      bestId ||
+      (this.tabMeta.has(saved.active) ? saved.active : [...this.tabMeta.keys()][this.tabMeta.size - 1]);
   }
 
   /** 标签栏落盘（id/顺序/标题/活动标签）——按工作区分桶（globalState 跨项目共享，
@@ -149,15 +162,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void this.globalState.update(ChatPanelProvider.TAB_BAR_BY_WS_KEY, byWs);
   }
 
-  /** H 刀：该页签是否有「有内容的会话记忆」——记忆文件在⇔ 有内容（pi -r 同口径：
-   *  没内容的会话不落盘）。查询走 piCore.sessionMemoryFor 单一事实源（t1 legacy 兑底同款）。 */
-  private tabSessionRemembered(tabId: string): boolean {
+  /** 该页签的会话文件（有内容才存在）——记忆文件在 ⇔ 有内容（pi -r 同口径：没内容的
+   *  会话不落盘）。查询走 piCore.sessionMemoryFor 单一事实源（t1 legacy 兑底同款）。
+   *  H 刀判据（持久化过滤）与 D 刀（mtime 聚焦）共用本查询。 */
+  private tabSessionFile(tabId: string): string | undefined {
     const file = sessionMemoryFor(
       <T>(key: string, defaultValue: T): T => this.globalState.get<T>(key, defaultValue),
       this.wsKey(),
       tabId
     );
-    return !!file && fs.existsSync(file);
+    return file && fs.existsSync(file) ? file : undefined;
+  }
+  /** H 刀：该页签是否有「有内容的会话记忆」（判据见 tabSessionFile） */
+  private tabSessionRemembered(tabId: string): boolean {
+    return !!this.tabSessionFile(tabId);
   }
 
   private wsKey(): string {
