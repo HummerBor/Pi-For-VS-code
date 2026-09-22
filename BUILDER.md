@@ -4,7 +4,28 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-22 E 刀页头启动占位 noSession（拍板 3，协议三处，待实测）；同日 F′ 实测通过、启动态收口专项定性、H 刀实测通过
+最后更新：2026-09-22 C 刀提前：去影子（重启模型串扰差点压缩长会话，拍板 1）；同日 E 刀、F′ 实测通过、启动态收口专项定性
+
+# C 刀提前：去影子（2026-09-22 拍板 1，重启模型串扰「差点压缩长会话」事故实锤）
+
+- **事故实锤（用户实测 ephemeral 时踩中，A 刀日志定位）**：重启后本会话（t55）模型被从
+  MiMo-V2.6-Pro 覆写成 Free Models Router → 模型窗口变小 → 上下文被重算成 123.8% →
+  「上下文已用 124%，建议压缩」横幅弹出，**差点把长会话压缩掉**。证据链：①会话文件里
+  只有 MiMo（switchSession 恢复的必是它）②boot 前无任何 pickModel（排除主动切换）③
+  12:00:20 banner contextWarning(pct=124) 一开闸即中 ④10:33:37 用户曾在测试页签 t57 选过
+  Free Models Router（当时 rememberModel 写影子 "_"）→ applyModelMemory 对无记忆页签
+  兑底读影子覆写。用户当场手动切回 MiMo（12:00:42 pickModel）自行止血。
+- **修法（拍板 1：页签间模型/思考记忆也不串）**：影子 "_" 读写两端除名——rememberModel/
+  rememberThinking 只写本页签（并清遗留影子条目）；lastModelFor/lastThinkingFor 不再
+  兑底影子，无记忆返回 undefined → applyModelMemory 不动手，会话自带模型原样保留
+  （启动期不引入默认值，与 H 刀同一条原则）。
+- 回归面：compile ✅；test:detail / test:subagent / test:revert ✅；**test:migration 重建
+  并入列**（modelMemoryMigration.test.mts 五用例：写端只写本页签+清影子 / 读端不兜底
+  影子 / 正向读写 / 页签间零串 / 跨工作区零串）✅；宿主侧无 webview，探针面不适用。
+- 记债：①msgBrief 嵌套值只显键名（本次取证被挡：模型名没进日志），待优化为嵌套标量也显；
+  ②state.vscdb 读取要带 -wal/-shm（不然 sqlite 读出空库）已写进交接证据节的读法旁注。
+- 队列：F′ ✅ → E（主路径实测过；ephemeral 显示分流被本事故打断，待复测）→ **C ✅（本刀）** →
+  G 闸门挪位 → B 迁移重做 → D 重启聚焦。
 
 # E 刀：页头启动占位 noSession（2026-09-22，拍板 3，协议三处同步，待实测）
 
