@@ -102,15 +102,20 @@ export class PiClient {
         sessionManager: any;
         sessionStartEvent?: any;
       }) => {
+        const tS = Date.now();
         const services = await sdk.createAgentSessionServices({
           cwd: opts.cwd,
         });
+        this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms)");
+        const tE = Date.now();
+        const sess = await sdk.createAgentSessionFromServices({
+          services,
+          sessionManager: opts.sessionManager,
+          sessionStartEvent: opts.sessionStartEvent,
+        });
+        this.onDebug?.("[boot] session +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tE) + "ms)");
         return {
-          ...(await sdk.createAgentSessionFromServices({
-            services,
-            sessionManager: opts.sessionManager,
-            sessionStartEvent: opts.sessionStartEvent,
-          })),
+          ...sess,
           services,
           diagnostics: services.diagnostics,
         };
