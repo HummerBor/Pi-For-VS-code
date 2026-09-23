@@ -12,7 +12,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     // ── 状态栏 / 全局 ──
     statusBarTooltip: "打开 pi 聊天面板",
     langBtnTitle: "切换语言 / Switch language",
-    startingPi: "正在启动 pi…",
+    startingPi: "pi 启动中…就绪后即可发消息",
     restartingPi: "正在以持久模式重启 pi…",
     piExitedPre: "pi 进程已退出 (code ",
     piExitedSuf: ")",
@@ -432,7 +432,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
   en: {
     statusBarTooltip: "Open pi chat panel",
     langBtnTitle: "切换语言 / Switch language",
-    startingPi: "Starting pi…",
+    startingPi: "Starting pi… ready for messages shortly",
     restartingPi: "Restarting pi in persistent mode…",
     piExitedPre: "pi process exited (code ",
     piExitedSuf: ")",

@@ -375,10 +375,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         await this.core.refreshState();
       })();
     } else {
-      // 首次打开面板 → 主动启动 pi（持久模式，continue/-c 恢复最近会话）：
-      // 启动完成后 webviewReady 握手会拉历史重绘，重开插件立刻看到上次聊天
-      // （原「!== ephemeral」门随档位判死移除：会话必须落盘，审计红线，恒启动）
-      this.core.ensureClient();
+      // 首次打开面板的 pi 预热挪到 webviewReady 握手（postTabs 之后）——R 刀时序修正
+      //（2026-09-23 用户报「会话信息比页签先出」）：快路径 render 是同步发的，预热跑在
+      // 建视图时会抢在标签清单前面。恒启动（会话必须落盘，审计红线；原「!== ephemeral」
+      // 门随档位判死移除）
     }
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
       // A 刀诊断日志：panel 级拦截消息（webviewReady/tab*）不进 core.onWebviewMessage，
@@ -391,6 +391,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         for (const [tid, s] of this.changesTab) if (s.files.length) this.postChangesList(tid);
         // 工单十五刀2：标签清单随握手下发（webview 启动即渲染标签条）
         this.postTabs();
+        // R 刀时序修正（2026-09-23）：pi 预热必须在 postTabs **之后**——快路径 render 同步发，
+        // 早跑会抢在标签条前面（用户报「会话信息比页签先出」）。ensureClient 幂等（有 client 即返）
+        this.core.ensureClient();
         // 工单24 架构归位：webview 重载后每页签的树都空了，给所有已建核心各发一次快照——
         // 后台页签的流式事件要写进它们自己的隐藏树，没有历史底子就会从半截开始累积
         for (const [, c] of this.cores) void c.postUiState();
