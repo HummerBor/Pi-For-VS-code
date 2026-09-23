@@ -81,6 +81,11 @@ void core.postUiState();
 setTimeout(() => {
   core.onWebviewMessage({ type: "prompt", text: "smoke-启动中消息" });
 }, 30);
+// A′刀判据⑤：agent_start 晚 820ms 到（=pi 验收窗口）——busy 计时必须连续不归零（可证伪：
+// 旧代码此处 post busy elapsedMs:0，本判据必红）
+setTimeout(() => {
+  client.events.emit("event", { type: "agent_start" });
+}, 850);
 // —— 启动期切页签重绘（postUiState 不许挂起）——
 let switchLatency = null;
 setTimeout(() => {
@@ -111,6 +116,16 @@ setTimeout(() => {
   check("④ 启动期 postUiState 不挂起（<500ms）",
     switchLatency !== null && switchLatency < 500,
     "耗时=" + switchLatency + "ms");
+  // ⑤ 真不变量：agent_start 的计时锚点必须 = 发送锚点（两帧 busy:true 的墙钟差）——
+  // 旧代码 elapsedMs:0 恒红；新代码 elapsed≈锚点差恒绿。不拍绝对阈值（smoke 里 prompt
+  // 落地时刻受 pi 包模块加载影响，晚 0~250ms 不等）
+  const busyTrue = busies.filter((p) => p.m.value === true);
+  const firstBusy = busyTrue[0];
+  const lastBusy = busyTrue[busyTrue.length - 1];
+  const expected = firstBusy && lastBusy && lastBusy !== firstBusy ? lastBusy.t - firstBusy.t : -1;
+  check("⑤ agent_start 不归零（计时锚点=发送锚点）",
+    !!(expected >= 0 && typeof lastBusy.m.elapsedMs === "number" && lastBusy.m.elapsedMs >= expected - 100),
+    "agent_start elapsed=" + String(lastBusy && lastBusy.m.elapsedMs) + "ms，锚点差=" + expected + "ms");
 
   const fail = results.some((r) => !r.ok);
   console.log(fail ? "\n冒烟 FAIL" : "\n冒烟 PASS");

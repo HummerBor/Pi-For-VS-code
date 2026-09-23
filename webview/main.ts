@@ -24,6 +24,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     getState: function () { return vscodeApi.getState(); },
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
+  // ── 输入历史（↑↓ 回溯）：输入框自身功能，刻意不挂 pi 链路。模块级一份 = 所有会话/页签
+  // 通用；内存态不落盘，webview 重建即失（用户口径：本次 VSC 启动期间生效）。发送即入账
+  //（含排队插话——插队走同一个 send()）；只记文字，附件/图片/代码上下文不随行复现 ──
+  var sentHistory: string[] = [];
 
   // ── 三期整树搬迁（交接 4 六步法）：每页签一个完全隔离的 SessionView 工厂闭包 ──
   // 自己的 DOM/状态/定时器/输入框；routeMsg 经 viewFor(tid).handleMsg 一行直达。换镜机制
@@ -222,7 +226,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     thinkEl.addEventListener('click', function () { vpost({ type: 'pickThinking' }); });
     modeBadge.addEventListener('click', function () { vpost({ type: 'pickMode' }); });
     codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChipAll(); });
-    input.addEventListener('input', function () { updateSuggest(); autoSize(); });
+    input.addEventListener('input', function () { histIdx = -1; histDraft = ''; updateSuggest(); autoSize(); }); // 用户一编辑即退出回溯（程序化赋值不触发 input，不影响 histNav）
     input.addEventListener('keydown', inputKeydown);
     input.disabled = false; // V 刀：按键已绑才放开输入框（模板里 disabled，消灭死窗口）
     input.addEventListener('paste', inputPaste);
@@ -1294,12 +1298,35 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     hideSuggest();
     input.focus();
   }
+  // 回溯状态（per 视图）：histIdx=-1 未在回溯中；histDraft 存首次回溯前的草稿，
+  // 回到底部位（== sentHistory.length）时还原。sentHistory 是模块级全局一份
+  var histIdx = -1; var histDraft = '';
+  function histNav(dir) {
+    if (!sentHistory.length) return false;
+    if (histIdx === -1) {
+      if (dir > 0) return false; // 未在回溯中：↓ 不接管（默认光标行为）
+      histDraft = input.value; // 首次回溯：暂存当前草稿
+      histIdx = sentHistory.length;
+    }
+    var ni = histIdx + dir;
+    if (ni < 0) return true; // 已到最老一条：吞掉按键，不再跳行
+    if (ni > sentHistory.length) return false; // 草稿位再 ↓：交还默认行为
+    histIdx = ni;
+    var s = ni === sentHistory.length ? histDraft : sentHistory[ni];
+    input.value = s;
+    input.setSelectionRange(s.length, s.length);
+    autoSize();
+    return true;
+  }
   function send() {
     var t = input.value.trim();
     if (!t && !pendingImages.length && !pendingFiles.length) return;
     var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
     var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
     var attachCode = codeCtx && codeOn;
+    // 输入历史入账（所有会话通用，含排队）：只记文字，连续重复不入账
+    if (t && sentHistory[sentHistory.length - 1] !== t) { sentHistory.push(t); if (sentHistory.length > 200) sentHistory.shift(); }
+    histIdx = -1; histDraft = ''; // 回溯复位：下次 ↑ 从最新一条重新开始
     input.value = '';
     autoSize();
     pendingImages = []; pendingFiles = []; renderAttach();
@@ -1329,6 +1356,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         hideSuggest();
       }
       if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); return; }
+    }
+    // ↑↓ 回溯输入历史：↑ 在首行 / ↓ 在末行时接管（多行中间的光标移动不受影响）；修饰键按下不抢
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && input.selectionStart === input.selectionEnd) {
+      var dir = e.key === 'ArrowUp' ? -1 : 1;
+      var edgeOk = dir < 0
+        ? input.value.slice(0, input.selectionStart).indexOf('\n') < 0   // 光标在首行
+        : input.value.slice(input.selectionEnd).indexOf('\n') < 0;       // 光标在末行
+      if (edgeOk && histNav(dir)) { e.preventDefault(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     else if (e.key === 'Escape' && !sgOpen && !e.isComposing) { vpost({ type: 'abort' }); }
@@ -1464,7 +1499,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       renderNativeQueue();
     }
     else if (m.type === 'notice') notice(m.text);
-    else if (m.type === 'fillInput') { followingEnd = true; input.value = m.text || ''; input.focus(); scroll(); } // 主动动作回底（工单十七要点 3）
+    else if (m.type === 'fillInput') { followingEnd = true; histIdx = -1; histDraft = ''; input.value = m.text || ''; input.focus(); scroll(); } // 程序化填充同样退出回溯，防旧草稿盖掉回填内容 // 主动动作回底（工单十七要点 3）
     else if (m.type === 'status') {
       // N 刀：启动状态接秒表（实时走秒）；其余状态走普通通道并停秒表
       if (m.text === L.startingPi) startBootTick(m.text); else { stopBootTick(); setStatus(m.text); }
@@ -1478,6 +1513,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'queuedRetrieved') {
       // 工单十六：取回文本合入编辑框——已有内容时换行追加，不覆盖正在输入的内容
       removeQueued(m.qid);
+      histIdx = -1; histDraft = ''; // 程序化合入同 fillInput 口径：退出回溯
       input.value = input.value ? input.value + '\n\n' + (m.text || '') : (m.text || '');
       followingEnd = true; // 取回排队消息=主动动作回底（工单十七验收条，同 fillInput 口径）
       input.focus(); scroll();

@@ -1055,6 +1055,9 @@ export class PiCore {
     // 将永久卡死。事件管线整体停摆 >4s 也会触发，那本身就是必须暴露的故障
     if (!wasBusy) {
       this.pendingPrompt = true;
+      // A′刀：本轮计时起点 = 发送时刻（webview 从此刻开表）——agent_start 处「无才记」保连续，
+      // 计时跨过 pi 验收窗口不归零（用户实测「Working 2s 后归零重算」的修法）
+      this.runStartTs = Date.now();
       setTimeout(() => {
         // 刀6：agent_start 已清 pendingPrompt 的话本条件不成立；isStreaming 真跑起来时
         // busy 恒真——4s 兜底只清乐观窗口，不再有镜像可清
@@ -1769,7 +1772,12 @@ export class PiCore {
         this.pendingPrompt = false;
         this.liveMessage = null; // 刀5b：新 run 无在途消息，防陈旧 liveSync
         this.liveStreaming = false; // 工单24：新 run 无在途
-        this.runStartTs = Date.now();
+        // A′刀（2026-09-23 用户实测「Working 2s 后归零重算」）：原代码在此把 run 起点重置为
+        // 「现在」并硬编码 post busy elapsedMs:0——发送时已开的表被归零。起点改「无才记」：
+        // 发送时记下的保留，计时跨过 pi 验收窗口连续走——与 sendPromptCore 头注释「计时起点
+        // 被重置是 bug」的既有契约一致；settled 的「本轮耗时」口径同步为「发送→完成」，
+        // 与用户眼睛看到的表对得上（旧口径「agent_start→完成」比回合中显示的数短一截）
+        if (!this.runStartTs) this.runStartTs = Date.now();
         // 工单七：新 run 开始——上一轮清单作废，通知 adapter 做 git 快照（baseline 用）
         this.runChangedFiles.clear();
         this.toolCallPaths.clear();
@@ -1777,7 +1785,7 @@ export class PiCore {
         try { this.onRunStart?.(); } catch { /* 快照失败不阻断 agent 运行 */ }
         // 空闲时的 abort 会遗留 skipRender 标记，新运行开始时清掉，避免吞掉下次 settled 重绘
         this.abortSkipRender = false;
-        this.post({ type: "busy", value: true, elapsedMs: 0 });
+        this.post({ type: "busy", value: true, elapsedMs: Date.now() - this.runStartTs });
         this.dbg("busy=true (agent_start)");
         if (this.queued.length) void this.deliverQueuedInHistory();
         break;
