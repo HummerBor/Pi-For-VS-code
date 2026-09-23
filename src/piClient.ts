@@ -45,6 +45,11 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
     const modelRuntime = await sdk.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
+      // U 刀（2026-09-23 真凶结案）：create 内部 model-runtime.js:97 会做整段初始化刷新
+      //（逐 provider 可用性/鉴权状态构建），实测在扩展宿主里 2.8~9s 抖动（裸进程77ms，
+      // 新进程冷缓存放大）。pi 官方留了开关 refreshOnCreate:false——跳过它，可用性由
+      // 后台队列（queueAvailabilityRefresh）随后补齐，不挡启动/发消息
+      refreshOnCreate: false,
     });
     dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
     return sdk.createAgentSessionServices({ cwd, modelRuntime });
