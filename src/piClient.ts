@@ -42,6 +42,23 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
     // 选择权在 session 上）。剩余（ctor+reload+refresh）= services 单跳减本行
     const { join } = require("path");
     const agentDir = sdk.getAgentDir();
+    // X 刀（2026-09-23 用户拍板方向：不是 pi 慢是执行环境慢）：create 期间连续采样——
+    // tick 全断3.9s = 同步卡死（GC/大同步块）；tick 正常但 create 不回 = 异步干等（IO/spawn）。
+    // 只记慤 tick（>200ms）防日志洪水；结束后记最大 lag + 堆内存（GC 旁证）
+    let maxLag = 0;
+    let gapCount = 0;
+    const heap0 = process.memoryUsage().heapUsed;
+    const sampler = setInterval(() => {
+      const ts = Date.now();
+      void new Promise((r) => setImmediate(r)).then(() => {
+        const lag = Date.now() - ts;
+        if (lag > maxLag) maxLag = lag;
+        if (lag > 200) {
+          gapCount++;
+          dbg("[boot] tick lag=" + lag + "ms");
+        }
+      });
+    }, 150);
     const tm = Date.now();
     const modelRuntime = await sdk.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
@@ -52,7 +69,13 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
       // 后台队列（queueAvailabilityRefresh）随后补齐，不挡启动/发消息
       refreshOnCreate: false,
     });
-    dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
+    clearInterval(sampler);
+    const heap1 = process.memoryUsage().heapUsed;
+    dbg(
+      "[boot] bench mr-create=" + (Date.now() - tm) +
+        "ms tickMaxLag=" + maxLag + "ms gaps=" + gapCount +
+        " heapDelta=" + Math.round((heap1 - heap0) / 1048576) + "MB"
+    );
     return sdk.createAgentSessionServices({ cwd, modelRuntime });
   })().then((v: any) => {
     bench("post");
