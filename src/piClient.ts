@@ -21,74 +21,16 @@ const sharedServices = new Map<string, Promise<any>>();
 function getSharedServices(sdk: any, cwd: string): Promise<any> {
   const hit = sharedServices.get(cwd);
   if (hit) return hit;
-  // S 刀（2026-09-23 环境差归案）：创建前后各测一次「事件循环停顿」（setImmediate 延迟）
-  // 与小 fs 计时——若它们随 services 单跳唼到秒级 = 扩展宿主线程被卡（别的扩展/GC/IO）
-  // 实锤；若它们干净而 services 独慢 = pi 内部在等东西。两行读数定方向
-  const bench = (tag: string) => {
-    const tb = Date.now();
-    void new Promise((r) => setImmediate(r)).then(() => {
-      const tf = Date.now();
-      let st = 0;
-      try {
-        st = fs.statSync(__filename).size;
-      } catch { /* ignore */ }
-      if (st >= 0) dbg(`[boot] bench ${tag} loop=${tf - tb}ms fs=${Date.now() - tf}ms`);
-    });
-  };
-  bench("pre");
-  // Z3 刀（2026-09-23 Z2 判决后补刀）：哨兵探针启动——先于 Y 刀 io 块，覆盖 boot 重负载窗口
-  void z3Sentinel(sdk);
-  // Y 刀（2026-09-23 X 刀判决：异步干等）：外部资源逐个异步撜表点名——谁慢谁就是等待源。
-  // 覆盖 create/picker 共同依赖的五类：配置 json / 可用性缓存 / 会话目录 / 会话文件
-  void (async () => {
-    const { join } = require("path");
-    const agentDir = sdk.getAgentDir();
-    const sessDir = join(agentDir, "sessions");
-    const t0 = Date.now();
-    const mark = (name: string) => dbg("[boot] io " + name + "=" + (Date.now() - t0) + "ms");
-    try {
-      await fs.promises.readFile(join(agentDir, "auth.json"));
-      mark("auth");
-      await fs.promises.readFile(join(agentDir, "models.json"));
-      mark("models");
-      await fs.promises.readFile(join(agentDir, "models-store.json"));
-      mark("store");
-      const dirs = await fs.promises.readdir(sessDir);
-      mark("sessdir");
-      const one = dirs.find((d: string) => d.endsWith("--")) || dirs[0];
-      if (one) {
-        const files = await fs.promises.readdir(join(sessDir, one));
-        mark("onesessdir");
-        if (files.length) {
-          await fs.promises.readFile(join(sessDir, one, files[files.length - 1]));
-          mark("sessfile");
-        }
-      }
-    } catch { /* 目录结构变化不影响主链 */ }
-  })().then(() => z2Probe(sdk.getAgentDir()));
+  // 【探针清场 2026-09-23】S/X/Y/Z2/Z3 五把计时探针（bench/io 逐项掋表/位置×读法矩阵/
+  // 哨兵）已拆除——判案结论见 交接-启动慢战役.md：慢在服务通道排队过闸，不在内核/文件/位置。
+  // 血泪教训：这些探针自己会往同一条服务闸插异步 IO（Z3 每 400ms 三笔、Z2 一轮 24 笔），
+  // 污染被测对象；再加探针前先想清楚会不会插队，计时用纯 Date.now 包主链，别自带 IO。
   const p: Promise<any> = (async () => {
     // T 刀（2026-09-23 四行归案）：工厂的 modelRuntime 可注入——把它拆出来单独掋表
     //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
     // 选择权在 session 上）。剩余（ctor+reload+refresh）= services 单跳减本行
     const { join } = require("path");
     const agentDir = sdk.getAgentDir();
-    // X 刀（2026-09-23 用户拍板方向：不是 pi 慢是执行环境慢）：create 期间连续采样——
-    // tick 全断3.9s = 同步卡死（GC/大同步块）；tick 正常但 create 不回 = 异步干等（IO/spawn）。
-    // 只记慤 tick（>200ms）防日志洪水；结束后记最大 lag + 堆内存（GC 旁证）
-    let maxLag = 0;
-    let gapCount = 0;
-    const heap0 = process.memoryUsage().heapUsed;
-    const sampler = setInterval(() => {
-      const ts = Date.now();
-      void new Promise((r) => setImmediate(r)).then(() => {
-        const lag = Date.now() - ts;
-        if (lag > maxLag) maxLag = lag;
-        if (lag > 200) {
-          gapCount++;
-          dbg("[boot] tick lag=" + lag + "ms");
-        }
-      });
-    }, 150);
     const tm = Date.now();
     const modelRuntime = await sdk.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
@@ -99,191 +41,15 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
       // 后台队列（queueAvailabilityRefresh）随后补齐，不挡启动/发消息
       refreshOnCreate: false,
     });
-    clearInterval(sampler);
-    const heap1 = process.memoryUsage().heapUsed;
-    dbg(
-      "[boot] bench mr-create=" + (Date.now() - tm) +
-        "ms tickMaxLag=" + maxLag + "ms gaps=" + gapCount +
-        " heapDelta=" + Math.round((heap1 - heap0) / 1048576) + "MB"
-    );
+    dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
     return sdk.createAgentSessionServices({ cwd, modelRuntime });
-  })().then((v: any) => {
-    bench("post");
-    return v;
-  });
+  })();
   sharedServices.set(cwd, p);
   p.catch(() => {
     if (sharedServices.get(cwd) === p) sharedServices.delete(cwd);
   });
   return p;
 }
-/** Z3 刀（2026-09-23 Z2 判决后补刀）：哨兵探针——Z2 实锤「慢不认位置、认挨刀」
- * （同进程同文件：Y 刀窗口 readFile 2~3.5s，0.3s 后同一文件 2ms；sync 全程 0ms；
- * 慢值聚在 ~2s 整数倍）。指纹指向 libuv 线程池被占（fs 异步/getaddrinfo 同池），
- * 但差最后一块：挨刀同一刻 dns.lookup（同池）与 readdir 挨不挨刀。
- * 每 400ms 同刻并发测 readFile ∥ readdir ∥ dns.lookup(localhost)，另在 300ms 中途
- * 插一发 readFileSync（主线程直读不进池）作「卡顿时刻内核路径是否也慢」的对照。
- * 只记 >150ms 的卡样本防洪水。判读：dns+fs 同慢 = 池被占（UV_THREADPOOL_SIZE 抬线程验证）；
- * 只有 readFile 慢 = 内容读路径特有；中途 sync 也慢 = 内核/过滤驱动层。 */
-let z3Done = false;
-async function z3Sentinel(sdk: any): Promise<void> {
-  if (z3Done) return;
-  z3Done = true;
-  try {
-    const os = require("os");
-    const dns = require("dns");
-    const { join: pj } = require("path");
-    const agentDir = sdk.getAgentDir();
-    const tiny = pj(os.tmpdir(), "pi-z3-sentinel.json");
-    const smallDir = pj(agentDir, "sessions");
-    fs.writeFileSync(tiny, "{}");
-    const timed = (run: (done: () => void) => void) =>
-      new Promise<number>((r) => {
-        const t = Date.now();
-        let called = false;
-        const done = () => {
-          if (!called) {
-            called = true;
-            r(Date.now() - t);
-          }
-        };
-        try {
-          run(done);
-        } catch {
-          done();
-        }
-      });
-    const t0 = Date.now();
-    let n = 0;
-    let stalls = 0;
-    let maxRd = 0;
-    let busy = false;
-    const timer = setInterval(() => {
-      const elapsed = Date.now() - t0;
-      if (elapsed > 45000 || stalls >= 12) {
-        clearInterval(timer);
-        dbg("[boot] z3 done n=" + n + " stalls=" + stalls + " maxRd=" + maxRd + "ms");
-        return;
-      }
-      if (busy) return;
-      busy = true;
-      n++;
-      let midSync = -1;
-      setTimeout(() => {
-        const t = Date.now();
-        try {
-          fs.readFileSync(tiny);
-        } catch { /* ignore */ }
-        midSync = Date.now() - t;
-      }, 300);
-      const pRd = timed((d) => {
-        void fs.promises.readFile(tiny).then(d, d);
-      });
-      const pDir = timed((d) => {
-        void fs.promises.readdir(smallDir).then(d, d);
-      });
-      const pDns = timed((d) => {
-        try {
-          dns.lookup("localhost", () => d());
-        } catch {
-          d();
-        }
-      });
-      void Promise.all([pRd, pDir, pDns]).then(([rd, dir, dnsMs]) => {
-        busy = false;
-        if (rd > maxRd) maxRd = rd;
-        if (rd > 150 || dir > 150 || dnsMs > 150) {
-          stalls++;
-          let res = "";
-          try {
-            res = ((process as any).getActiveResourcesInfo?.() ?? []).join(",");
-          } catch { /* 版本不支持就少个旁证 */ }
-          dbg(
-            "[boot] z3 stall rd=" + rd + " dir=" + dir + " dns=" + dnsMs +
-              " midSync=" + midSync + " n=" + n + " res=" + res
-          );
-        }
-      });
-    }, 400);
-  } catch { /* 探针失败不影响主链 */ }
-}
-
-/** Z2 刀（2026-09-23 实验18 刀口，用户点头打的对照探针）：位置×读法矩阵，
- *  归案「Code.exe 读 ~/.pi 文件内容慢」。
- *  轴一（位置）：原位 vs %TEMP% 副本 vs D 盘副本（顺带 __filename 对照 = 方法开销基线）；
- *  轴二（读法/相位）：statSync / promises.readFile / open+read 拆分 / readFileSync。
- *  判读：副本快 = 路径/文件属性相关（ADS/加密位/盯目录的过滤驱动）；副本一样慢 = 进程级；
- *  open 慢 = 打开被拦，read 慢 = 读内容被拦。
- *  纪律：排在 Y 刀 io 块之后串行跑（两探针并发互相陪绑会污染计时）；z2Done 保证一次性；
- *  sync 组放最后跑（若 sync 也慢会短暂冻结扩展宿主——那本身就是答案，但别冻在探针中途）。 */
-let z2Done = false;
-async function z2Probe(agentDir: string): Promise<void> {
-  if (z2Done) return;
-  z2Done = true;
-  try {
-    const os = require("os");
-    const { join: pj } = require("path");
-    const src = pj(agentDir, "auth.json");
-    const locs: Array<[string, string]> = [["self", __filename], ["orig", src]];
-    let copyT = "";
-    const tmpCopy = pj(os.tmpdir(), "pi-z2-auth-copy.json");
-    const tc = Date.now();
-    try {
-      fs.copyFileSync(src, tmpCopy);
-      locs.push(["tmp", tmpCopy]);
-      copyT += " tmp=" + (Date.now() - tc) + "ms";
-    } catch { /* 复制失败就少一个对照 */ }
-    const dCopy = "D:\\pi-z2-auth-copy.json";
-    const td = Date.now();
-    try {
-      fs.copyFileSync(src, dCopy);
-      locs.push(["droot", dCopy]);
-      copyT += " droot=" + (Date.now() - td) + "ms";
-    } catch { /* D 盘根不可写就少一个对照 */ }
-    dbg("[boot] z2 copy" + copyT);
-    for (const [tag, p] of locs) {
-      const stat: number[] = [];
-      const asyncR: number[] = [];
-      const open: number[] = [];
-      const read: number[] = [];
-      const sync: number[] = [];
-      for (let i = 0; i < 2; i++) {
-        const t = Date.now();
-        try { fs.statSync(p); } catch { /* ignore */ }
-        stat.push(Date.now() - t);
-      }
-      for (let i = 0; i < 2; i++) {
-        const t = Date.now();
-        await fs.promises.readFile(p).catch(() => {});
-        asyncR.push(Date.now() - t);
-      }
-      for (let i = 0; i < 2; i++) {
-        let fh: any = null;
-        const to = Date.now();
-        try { fh = await fs.promises.open(p, "r"); } catch { /* ignore */ }
-        open.push(Date.now() - to);
-        const tr = Date.now();
-        if (fh) await fh.readFile().catch(() => {});
-        read.push(Date.now() - tr);
-        if (fh) await fh.close().catch(() => {});
-      }
-      for (let i = 0; i < 2; i++) {
-        const t = Date.now();
-        try { fs.readFileSync(p); } catch { /* ignore */ }
-        sync.push(Date.now() - t);
-      }
-      dbg(
-        "[boot] z2 loc=" + tag +
-          " stat=" + stat.join(",") +
-          " async=" + asyncR.join(",") +
-          " open=" + open.join(",") +
-          " read=" + read.join(",") +
-          " sync=" + sync.join(",")
-      );
-    }
-  } catch { /* 探针失败不影响主链 */ }
-}
-
 /** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」；
    *  W 刀：顺带全量预载 bundle 懒加载 chunks（首次 import = 模块加载+杀软扫描，
    *  唯一未排除的冷载卡顿嫌疑；提前到激活期全付掉，不命中也无害） */
