@@ -334,6 +334,7 @@ export class PiCore {
       if (detail) this.post({ type: "notice", text: this.L.piExitedNotice + code + this.L.piExitedSuf + String.fromCharCode(10) + detail });
     };
     client.onError = (err) => this.ui.startError(err);
+    client.onDebug = (s: string) => this.dbg(s); // N 刀：init 分段计时经此落盘
     client.events.on("event", (e: PiEvent) => void this.onPiEvent(e));
 
     this.post({ type: "status", text: this.L.startingPi });
@@ -367,6 +368,12 @@ export class PiCore {
       // 最大盲区——applyModelMemory 迁移这类早期一炸整链死，零痕迹（空白视图/页脚「—」
       // 全对不上号）。吞掉语义不变：这里只加留痕，不改任何行为。
       this.dbg("boot start tab=" + this.tabKey + (this.freshTab ? " freshTab" : ""));
+      // N 刀分段计时（2026-09-23 慢启动定位器）：phase 标记钉运行时各跳——
+      // switch(=SDK init+历史加载，细分见 piClient [boot] 标记)/model-mem/state/render，
+      // 与 webview 启动秒表互为印证；探针层见 scripts/probe-boot-timing.mjs
+      const t0 = Date.now();
+      const mark = (ph: string) =>
+        this.dbg("boot phase=" + ph + " tab=" + this.tabKey + " +" + (Date.now() - t0) + "ms");
       try {
         // 工单十五刀4：freshTab 跳过按工作区恢复——新标签的会话记忆由它自己首次会话写入，
         // 不能把别的标签存的会话文件抢过来当恢复目标（同根因：写冲突）
@@ -374,21 +381,26 @@ export class PiCore {
         if (last && fs.existsSync(last)) {
           try {
             await client.switchSession(last);
+            mark("switch");
           } catch {
             // 文件失效则退回 -c 恢复的最近会话
           }
         }
+        mark("ready");
         // 模型/思考记忆补回必须在 switchSession **之后**（顺序即正确性），随后的
         // refreshState 把补回结果同步到页脚（用户报「一切会话模型就变了」的修复）
         await this.applyModelMemory();
-        await this.refreshState(); // 切换后立刻同步标题，杜绝「内容 A 标题 B」
+        mark("model-mem");
+        await this.refreshState();
+        mark("state");
         const d = await client.getMessages();
         this.post({ type: "render", messages: d?.messages ?? [] });
+        mark("render");
         this.replaySubagentRuns(d?.messages ?? []);
         // F′ 刀：boot 链尾终值快照（0.1.42 修法取回）——真值必达兕底：中途丢的 state/render
         // 由这次原子 uiState 一次补齐（含页脚模型/思考/会话名），此后不再「无人再刷」
         void this.postUiState();
-        this.dbg("boot done tab=" + this.tabKey);
+        this.dbg("boot done tab=" + this.tabKey + " total=" + (Date.now() - t0) + "ms");
       } catch (err: any) {
         // 吞掉语义保留（不重抛，async 链无人接 reject）；但失败必弹错（F′，拍板 4）——
         // 静默整链死是 P0 的隐身衣：留痕（A 刀）+ 用户可见 notice 双保险

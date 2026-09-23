@@ -4,7 +4,20 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-23 M 刀：启动慢根因实锤并修复——loadPiSdk 换 bundle 入口（15.7s→0.26s，待实测）；前日 K/D 收官
+最后更新：2026-09-23 N 刀：启动秒表 + boot 分段计时（用户点名，待实测读数）；M 刀 bundle 入口修复已装机
+
+# N 刀：启动计时器（2026-09-23，用户点名「没感觉秒开，往这里加个计时器」）
+
+- **用户反证收档**：「昨晚浏览器 10+ 页 + VSC 三开都秒」——负载理论也死；M 的 bundle 修复
+  （15.7s→0.26s）装机后用户仍无感 → 剩余慢跳未知，不猜了，上计时器让数字说话。
+- **UI 秒表**（用户点名的位置）：「正在启动 pi… Ns」实时走秒（webview 旁路直写，
+  自守卫：状态行被接管即停，防「白 Working」同款串写残留）；首帧 applyState 收表。
+- **分段计时**（debug log）：piClient `[boot] load-pkg/runtime/init-done +Nms`（onDebug 钩子
+  镜像 onError）+ piCore `boot phase=ready/switch/model-mem/state/render +Nms` +
+  `boot done total=Nms`。探针层已有 probe-boot-timing.mjs。
+- 回归面：compile ✅；四套用例 ✅；probe-live-merge exit=0 ✅（webview 改动已过）。
+- 实测点：重启 VSC → 状态行秒表走秒读总时长；debug log 搜 `boot phase=`/`[boot]` 看
+  哪一跳吃时间 → 把读数发我，对症下一刀。
 
 # M 刀：启动慢根因（2026-09-23，probe-boot-timing 实锤，非版本倒退）
 

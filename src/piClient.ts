@@ -43,6 +43,9 @@ export class PiClient {
     return this.session?.isStreaming ?? false;
   }
   private unsubscribe: (() => void) | null = null;
+  /** N 刀（2026-09-23 启动分段计时）：init 各跳耗时上报（piCore.dbg 落 debug log），
+   *  与 webview 启动秒表互为印证——慢启动定位器 */
+  onDebug: ((msg: string) => void) | null = null;
   private initPromise: Promise<void> | null = null;
   private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string } | null = null;
   /** 扩展 UI 对话框的挂起请求：id → resolver（panel respondUi 回来时配对） */
@@ -61,8 +64,10 @@ export class PiClient {
   }
 
   private async init(): Promise<void> {
+    const t0 = Date.now();
     try {
       const sdk = await loadPiSdk();
+      this.onDebug?.("[boot] load-pkg +" + (Date.now() - t0) + "ms");
       const { cwd, extraArgs, proxyUrl } = this.startOpts!;
 
       // 代理：RPC 时代透传给子进程环境；进程内直接写当前进程环境（pi 的网络栈读环境变量）
@@ -115,11 +120,13 @@ export class PiClient {
         agentDir: sdk.getAgentDir(),
         sessionManager,
       });
+      this.onDebug?.("[boot] runtime +" + (Date.now() - t0) + "ms");
       this.bindSession();
       // 扩展 UI：0.84.4 不在创建参数里收 uiContext，创建后经 extensionRunner 注入
       // （与 TUI/RPC 模式同款接法）。mode 传 "rpc"：扩展看到的 ctx.mode 语义不变
       // （hasUI=true，TUI 专属方法已在 uiContext 里安全降级）
       this.session.extensionRunner?.setUIContext?.(this.createUiContext(), "rpc");
+      this.onDebug?.("[boot] init-done +" + (Date.now() - t0) + "ms");
     } catch (err) {
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
       throw err;

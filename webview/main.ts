@@ -369,6 +369,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   });
   olRO.observe(root);
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!streaming) { statusEl.textContent = ''; } }
+  // N 刀（2026-09-23 用户点名「没感觉秒开，往这里加个计时器」）：启动秒表——
+  // 「正在启动 pi… Ns」实时走秒。旁路 setStatus 直写（同 ⏱/busy 帧先例）；
+  // 自守卫：状态行被任何人接管（busy 类/别的文案）即自杀停摆，杜绝「白 Working」
+  // 同款串写残留（2026-09-20 事故教训）。宿主侧 boot phase=… 分段计时与本表互为印证。
+  var bootTickTimer: any = 0;
+  var bootTickStart = 0;
+  function startBootTick(base) {
+    stopBootTick();
+    bootTickStart = Date.now();
+    statusEl.textContent = base;
+    bootTickTimer = setInterval(function () {
+      var cur = statusEl.textContent || '';
+      if (statusEl.classList.contains('busy') || cur.indexOf(base) !== 0) { stopBootTick(); return; }
+      statusEl.textContent = base + ' ' + fmtDur(Date.now() - bootTickStart);
+    }, 1000);
+  }
+  function stopBootTick() { if (bootTickTimer) { clearInterval(bootTickTimer); bootTickTimer = 0; } }
   function renderStatus() { modeBadge.textContent = modeText; }
 
   /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
@@ -1054,6 +1071,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
     // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
+    stopBootTick(); // N 刀：首帧状态到达 = 启动结束，秒表收表（文本由下方清理）
     if (!compacting && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
     // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
     modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
@@ -1409,7 +1427,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'notice') notice(m.text);
     else if (m.type === 'fillInput') { followingEnd = true; input.value = m.text || ''; input.focus(); scroll(); } // 主动动作回底（工单十七要点 3）
-    else if (m.type === 'status') setStatus(m.text);
+    else if (m.type === 'status') {
+      // N 刀：启动状态接秒表（实时走秒）；其余状态走普通通道并停秒表
+      if (m.text === L.startingPi) startBootTick(m.text); else { stopBootTick(); setStatus(m.text); }
+    }
     else if (m.type === 'compacting') setCompacting(m.value);
     else if (m.type === 'mode') { modeText = m.text || ''; renderStatus(); }
     else if (m.type === 'queuedAdd') addQueued(m);
