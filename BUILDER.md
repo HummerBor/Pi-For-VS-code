@@ -1395,3 +1395,9 @@ steer 命令接受。坑：rpc 子进程任务跑完不退出，完成信号必�
 - **直令**：用户实测重启后打开的是陈旧会话（t1 名下记忆），要求按方案 1 治本：标签栏（id/顺序/标题/活动标签）落 globalState（`piChat.tabBar`），重启按原样重建。
 - **改动面**：panel.ts——构造器 restoreTabBar()（先于一切 ensureCore，tabKey 决定会话记忆恢复目标）；saveTabBar() 挂在 新建/切换/关闭/标题变化 四处；restoredTabs 集合：重启恢复的标签首次切到时 ensureClient() 起进程按该标签记忆恢复会话（普通无进程标签维持欢迎页旧语义）。freshTabs 绝不落盘——恢复标签一律走记忆恢复，只有「＋新建」开新会话。
 - **验证**：npm run compile 全绿；package 0.1.4 打包成功。实测项：重启后标签栏按原序重建、活动标签=重启前活动标签、各标签恢复各自会话。
+
+## 直令留痕（09-23）窗口期回显粘性刀——启动渲染窗口期发消息气泡 1s 才出
+
+- **直令**：用户令「他说的这些点能改就改了」，点交接 §八.1 粘性回显刀（刀口已备未出）。
+- **改动面**：webview/main.ts——①`'user'` 移出 deferDuringRender 延后名单（重绘窗口期回显立即画上，addUser 追加 bubble 与 liveReset 互不触碰、无序可破，权威 render 覆盖属设计）；②P 刀探针回收（定罪已完成，账目交接 §八）：lastSentAt/userEcho/renderAll 计时、probeNote 回传链（webview→protocol WvProbeNoteMsg→piCore case）全拆，grep 零残留。
+- **验证**：compile 绿 + tsc 双零报错 + smoke-boot 5 判据 PASS + test:listfast PASS + subagent 34 项全过；出包 0.1.63。实测项：启动渲染窗口期发消息气泡应立即上屏（不再等重绘落地）。

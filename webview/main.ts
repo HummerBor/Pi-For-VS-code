@@ -1331,7 +1331,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     autoSize();
     pendingImages = []; pendingFiles = []; renderAttach();
     lastNotice = ''; // 新回合开始：瞬时反馈（含压缩完成）不再跨回合存活，与 pi TUI 状态行语义一致
-    lastSentAt = Date.now();
     vpost({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
   }
   // 自适应高度：随内容增长，到 220px 上限后改为内部滚动（消息区不会被挤没）
@@ -1386,7 +1385,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var renderPending: SessionMessage[] | null = null;
   var liveSyncPending: SessionMessage | null = null;
   var renderTimer: number | null = null;
-  var lastSentAt = 0; // P 刀探针基准：发送时刻（userEcho 画上时回差值）
   function scheduleRender() {
     // 三期④：换镜舞蹈退役（原「先换回发起页签再重绘」——闭包天然绑定，无需换）
     if (!renderTimer) renderTimer = setTimeout(function () {
@@ -1398,9 +1396,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     renderTimer = null;
     if (renderPending) {
       var list = renderPending; renderPending = null;
-      var tR = Date.now(); // P 刀探针：重绘实测（长会话重绘若秒级，事件分发被堵就是「2s 才展示」的元凶）
       renderAll(list);
-      vpost({ type: 'probeNote', text: 'renderAll=' + (Date.now() - tR) + 'ms n=' + list.length });
     }
     if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
     drainPendingStream();
@@ -1433,12 +1429,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
     if (m.type === 'user') {
       addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
-      // P 刀探针（2026-09-23 用户报「发消息 2s 才展示」）：host 回显 3ms 已实锤（out user 留痕），
-      // 慢在 webview 段——发送→画上实测 + 路由去向（防串页签），一读数定罪。零 IO，仅发消息时回一条
-      if (lastSentAt) {
-        vpost({ type: 'probeNote', text: 'userEcho latency=' + (Date.now() - lastSentAt) + 'ms tab=' + String(m.tabId) + ' active=' + String(activeTabId) });
-        lastSentAt = 0;
-      }
     }
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     // 探针实锤（probe-toolblocks.mjs）：pi 每输出一个 toolCall 就是一条独立 assistant 消息——
@@ -1976,8 +1966,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
   var pendingStream: HostToWebviewTagged[] = [];
   function deferDuringRender(t: string): boolean {
+    // 粘性回显刀（2026-09-23 交接 §八.1，用户令「能改就改了」）：'user' 移出延后名单。
+    // 病灶：启动渲染窗口期（renderTimer 非空）发的消息，回显被排进 pendingStream，压到重绘
+    // 落地才画——用户体感「气泡 1s 才出」。顺序风险原是「renderAll 的 liveReset 抹先到事件」，
+    // 但 addUser 追加 bubble 与 liveReset（只清 live 区）互不触碰，立即画上无序可破；
+    // 且历史重绘以 pi session.messages 为唯一真相，回显 bubble 被权威 render 覆盖是设计而非事故。
     return t === 'delta' || t === 'thinking' || t === 'newLive' || t === 'toolCallStart' ||
-      t === 'toolCallDelta' || t === 'toolStart' || t === 'toolEnd' || t === 'user' ||
+      t === 'toolCallDelta' || t === 'toolStart' || t === 'toolEnd' ||
       t === 'queuedAdd' || t === 'queuedDelivered' || t === 'queuedRemove' || t === 'queuedClear';
   }
   function drainPendingStream() {

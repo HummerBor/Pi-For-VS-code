@@ -130,15 +130,8 @@ export interface WvQueuedRetrieveMsg {
   type: "queuedRetrieve";
   qid: string;
 }
-/** P 刀（2026-09-23）：webview 端纯计时探针（发送→画上/重绘耗时/路由去向），零 IO——
- *  用户报「发消息 2s 才展示」，host 侧回显 3ms 已实锤，慢在 webview 段，一读数定罪 */
-export interface WvProbeNoteMsg {
-  type: "probeNote";
-  text: string;
-}
 export type WebviewToHost =
   | WvReadyMsg
-  | WvProbeNoteMsg
   | WvPromptMsg
   | WvAbortMsg
   | WvRetryFromLastMsg
