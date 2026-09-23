@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import * as fs from "fs";
+import { join } from "path";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "./protocol";
 import { loadPiSdk } from "./piSdk";
 
@@ -63,10 +64,32 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
   });
   return p;
 }
-/** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」 */
+/** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」；
+   *  W 刀：顺带全量预载 bundle 懒加载 chunks（首次 import = 模块加载+杀软扫描，
+   *  唯一未排除的冷载卡顿嫌疑；提前到激活期全付掉，不命中也无害） */
 export function prewarmPiServices(cwd: string): void {
   void loadPiSdk()
-    .then((sdk: any) => getSharedServices(sdk, cwd))
+    .then((sdk: any) => {
+      try {
+        const { findPiPackageRoot } = require("./piSdk");
+        const { pathToFileURL } = require("url");
+        const root = findPiPackageRoot();
+        const dir = join(root, "dist", "bundle", "chunks");
+        const dynImport = new Function("u", "return import(u)") as (u: string) => Promise<any>;
+        const files = fs.readdirSync(dir).filter((f: string) => f.endsWith(".js"));
+        const tp = Date.now();
+        let left = files.length;
+        for (const f of files) {
+          void dynImport(pathToFileURL(join(dir, f)).href)
+            .catch(() => {})
+            .then(() => {
+              left--;
+              if (left === 0) dbg("[boot] chunks-preload=" + (Date.now() - tp) + "ms count=" + files.length);
+            });
+        }
+      } catch { /* chunks 目录形态变化时静默 */ }
+      return getSharedServices(sdk, cwd);
+    })
     .catch(() => {});
 }
 
