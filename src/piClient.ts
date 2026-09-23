@@ -36,6 +36,34 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
     });
   };
   bench("pre");
+  // Y 刀（2026-09-23 X 刀判决：异步干等）：外部资源逐个异步撜表点名——谁慢谁就是等待源。
+  // 覆盖 create/picker 共同依赖的五类：配置 json / 可用性缓存 / 会话目录 / 会话文件
+  void (async () => {
+    const { join } = require("path");
+    const agentDir = sdk.getAgentDir();
+    const sessDir = join(agentDir, "sessions");
+    const t0 = Date.now();
+    const mark = (name: string) => dbg("[boot] io " + name + "=" + (Date.now() - t0) + "ms");
+    try {
+      await fs.promises.readFile(join(agentDir, "auth.json"));
+      mark("auth");
+      await fs.promises.readFile(join(agentDir, "models.json"));
+      mark("models");
+      await fs.promises.readFile(join(agentDir, "models-store.json"));
+      mark("store");
+      const dirs = await fs.promises.readdir(sessDir);
+      mark("sessdir");
+      const one = dirs.find((d: string) => d.endsWith("--")) || dirs[0];
+      if (one) {
+        const files = await fs.promises.readdir(join(sessDir, one));
+        mark("onesessdir");
+        if (files.length) {
+          await fs.promises.readFile(join(sessDir, one, files[files.length - 1]));
+          mark("sessfile");
+        }
+      }
+    } catch { /* 目录结构变化不影响主链 */ }
+  })();
   const p: Promise<any> = (async () => {
     // T 刀（2026-09-23 四行归案）：工厂的 modelRuntime 可注入——把它拆出来单独掋表
     //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
