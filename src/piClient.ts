@@ -2,6 +2,31 @@ import { EventEmitter } from "events";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "./protocol";
 import { loadPiSdk } from "./piSdk";
 
+/** Q 刀（2026-09-23 services 真身实锤）：createAgentSessionServices 内部是
+ *  resourceLoader.reload() 全树扫描（skills/提示模板/AGENTS/扩展 + 工作区），
+ *  冷 5~10s / 热 10ms（同窗实测：t59 冷 boot 16s、t11 热 boot 223ms）。
+ *  services 绑 cwd（官方语义）且无 dispose（runtime.dispose 只 dispose session，
+ *  agent-session-runtime.js:112/302 核过）——进程级按 cwd 共享一份：扫一次，
+ *  全页签/全会话替换复用（每个页签一个 PiClient，不共享就每开一页签扫一遍）。
+ *  Promise 缓存 = 并发 boot 共享同一次扫描；失败不缓存（用户可能刚装好配置）。 */
+const sharedServices = new Map<string, Promise<any>>();
+function getSharedServices(sdk: any, cwd: string): Promise<any> {
+  const hit = sharedServices.get(cwd);
+  if (hit) return hit;
+  const p: Promise<any> = sdk.createAgentSessionServices({ cwd });
+  sharedServices.set(cwd, p);
+  p.catch(() => {
+    if (sharedServices.get(cwd) === p) sharedServices.delete(cwd);
+  });
+  return p;
+}
+/** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」 */
+export function prewarmPiServices(cwd: string): void {
+  void loadPiSdk()
+    .then((sdk: any) => getSharedServices(sdk, cwd))
+    .catch(() => {});
+}
+
 /**
  * piClient：进程内直连 pi 的适配器。
  *
@@ -96,16 +121,15 @@ export class PiClient {
         : sdk.SessionManager.create(cwd, sessionDir);
 
       // 官方 runtime 工厂姿势（sdk.md「Session Management」）：services 绑定 cwd，
-      // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）
+      // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）。
+      // Q 刀：createRuntime 回调每次会话替换都会被调，services 走进程级共享缓存（见文件头）
       const createRuntime = async (opts: {
         cwd: string;
         sessionManager: any;
         sessionStartEvent?: any;
       }) => {
         const tS = Date.now();
-        const services = await sdk.createAgentSessionServices({
-          cwd: opts.cwd,
-        });
+        const services = await getSharedServices(sdk, opts.cwd);
         this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms)");
         const tE = Date.now();
         const sess = await sdk.createAgentSessionFromServices({
