@@ -175,17 +175,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // this 方法会在运行时炸（this 形状随调用环境漂），常量捕获后结构上不可能复发
     const slotKey = "piChat.sessSlot." + this.wsKey();
     setSessionSlotPersistence(
-      () => {
-        const s = this.globalState.get<any>(slotKey, null);
-        // 事故教训（2026-09-23 二号炸点，用户实测）：Memento 持久化把 Date 存成字符串，
-        // 回读必须复活——e.modified.getTime is not a function 就是没复活炸的
-        if (s && Array.isArray(s.result)) {
-          s.result = s.result.map((e: any) =>
-            e && e.modified ? { ...e, modified: new Date(e.modified) } : e
-          );
-        }
-        return s;
-      },
+      () => this.globalState.get<any>(slotKey, null),
       (s) => void this.globalState.update(slotKey, s)
     );
     this.restoreTabBar();
