@@ -96,17 +96,26 @@ export class PiClient {
         : sdk.SessionManager.create(cwd, sessionDir);
 
       // 官方 runtime 工厂姿势（sdk.md「Session Management」）：services 绑定 cwd，
-      // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）
+      // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）。
+      // O 刀（2026-09-23 services 单跳实锤 8.6s/7.4s 连付两发）：createRuntime 回调在每次
+      // 会话替换都会被调，原实现每发重建全套 services——官方语义 services 绑 cwd 就该建一次
+      // 用到底（同 cwd 复用安全，本适配器 cwd 恒定；缓存键带 cwd 防未来多工作区）
+      const svcCache = new Map<string, any>();
       const createRuntime = async (opts: {
         cwd: string;
         sessionManager: any;
         sessionStartEvent?: any;
       }) => {
         const tS = Date.now();
-        const services = await sdk.createAgentSessionServices({
-          cwd: opts.cwd,
-        });
-        this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms)");
+        let services = svcCache.get(opts.cwd);
+        const reused = !!services;
+        if (!services) {
+          services = await sdk.createAgentSessionServices({
+            cwd: opts.cwd,
+          });
+          svcCache.set(opts.cwd, services);
+        }
+        this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms" + (reused ? " 复用" : "") + ")");
         const tE = Date.now();
         const sess = await sdk.createAgentSessionFromServices({
           services,
