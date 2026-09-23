@@ -1122,11 +1122,17 @@ export class PiCore {
         ...(Array.isArray(r?.followUp) ? r.followUp : []).map((t: unknown) => ({ text: String(t), kind: "followUp" as const })),
       ];
       this.lastQueueTotal = 0; // pi 真相：队列已清空（抑制期事件只记账，这里直接落真相）
-      if (!snap.some((x) => x.text === q.sentText)) {
-        // 竞态：取回前 agent 刚把这条取走 → 回填编辑框必造成重复发送；队列条交还既有转正
-        // 链路（agent_start 的 deliverQueuedInHistory / queue_update 变短）收口
+      // 竞态：取回前 agent 刚把这条取走 → 回填编辑框必造成重复发送，不回填（内容见消息流）。
+      // 但本条必须从镜像/队列条撤下：转正链路（queue_update 变短 / agent_start 的
+      // deliverQueuedInHistory）不是必来——插话→点暂停→点取回的复现（用户实测）里 steer 文本
+      // 落进历史但 pi 队列已丢这条，settled 又走 abortSkipRender 跳过 syncRenderKeepQueued，
+      // 两道收口都不会再来，旧写法早退留 pill 成幽灵（消息流一份+队列条一份），每点一次取回
+      // 叠一条同文提示。也不能早退：clearQueue 已清空 pi 队列，事务不走完，其余保留项
+      //（kept 重排队）全部死在队列外，永不再投递
+      const takenByAgent = !snap.some((x) => x.text === q.sentText);
+      if (takenByAgent) {
+        this.post({ type: "queuedRemove", qid: q.qid });
         this.post({ type: "notice", text: this.L.retrieveTaken });
-        return;
       }
       // 被 agent 取走的（镜像有、pi 快照没有）：保留在镜像与队列条，等既有转正链路收口
       const taken = this.queued.filter((y) => y.qid !== q.qid && !snap.some((x) => x.text === y.sentText));
@@ -1141,8 +1147,11 @@ export class PiCore {
             : { qid: "q" + Date.now() + "-" + Math.floor(Math.random() * 10000), sentText: x.text, text: x.text, imageCount: 0, kind: x.kind };
         });
       this.queued = [...taken, ...kept];
-      // 被取回项文本回填编辑框（webview 合入：编辑框非空时换行追加，不覆盖正在输入的内容）
-      this.post({ type: "queuedRetrieved", qid: q.qid, text: q.sentText });
+      // 被取回项文本回填编辑框（webview 合入：编辑框非空时换行追加，不覆盖正在输入的内容）；
+      // 被 agent 取走的那条（takenByAgent）不回填——回填再发就是重复发送
+      if (!takenByAgent) {
+        this.post({ type: "queuedRetrieved", qid: q.qid, text: q.sentText });
+      }
       // 重排队：busy → 按原类型直入 pi 队列（steering 先于 followUp 送达的语义由 pi 队列
       // 结构保证，各队列内部保序）；idle → 第一项走 prompt 链路（乐观 busy/4s 兜底/steer
       // 自愈全套语义），其余照常排队——session.steer/followUp 对 idle 只入队不下跑

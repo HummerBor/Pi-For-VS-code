@@ -11,11 +11,87 @@ import { PiClient, setPiClientDebug } from "./piClient";
 setPiClientDebug(dbgLog);
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
-import { loadPiSdk } from "./piSdk";
+import { findPiPackageRoot, loadPiSdk } from "./piSdk";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "./piCore";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
+
+/**
+ * 有界广度搜索同名文件（2026-09-23「这些都点不开」刀2）：点开聊天里的光文件名时，
+ * pi 内部文件（~/.pi/agent 下的 agent 数据、装的技能/扩展）不在工作区，工作区 findFiles
+ * 必然扑空 → 永远「找不到文件」。用 BFS（浅层优先）而不是 DFS：basename 同名时浅层的
+ * 数据文件（如 agent/models-store.json）不该被 git 仓库里的深层同名文件截胡。
+ * 跳 node_modules/.git、访问条目封顶，防大目录拖死宿主。
+ */
+function findUnderDir(rootDir: string, base: string, budget = 4000): string | undefined {
+  const queue: string[] = [rootDir];
+  while (queue.length && budget > 0) {
+    const dir = queue.shift()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (budget-- <= 0) return undefined;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === "node_modules" || e.name === ".git") continue;
+        queue.push(full);
+      } else if (e.isFile() && e.name === base) {
+        return full;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * （2026-09-23「这些都点不开」刀3）：在 pi 包源码里搜符号首个命中并回报文件+行列。
+ * 对象是 ModelRuntime.create 这类 pi 私有类.成员——用户截图实锤「全是 pi 私有类、没导出」，
+ * 公开 API/工作区符号都到顶，文本搜索是唯一可行的「点开」。
+ * 有界：BFS 只扫 js/mjs/cjs/ts/mts，跳 node_modules/.git，文件数封顶——点击时一次性动作，
+ * 不许拖死宿主。命中边界校验防 ModelRuntime.createX 误配。
+ */
+function grepInPiPackage(sym: string): { file: string; line: number; col: number } | undefined {
+  const root = findPiPackageRoot();
+  if (!root) return undefined;
+  const queue: string[] = [root];
+  let files = 0;
+  while (queue.length && files < 1500) {
+    const dir = queue.shift()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === "node_modules" || e.name === ".git") continue;
+        queue.push(full);
+      } else if (e.isFile() && /\.(?:m?js|cjs|m?ts)$/.test(e.name)) {
+        files++;
+        let text: string;
+        try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+        if (text.length > 8 * 1024 * 1024) continue;
+        const idx = findToken(text, sym);
+        if (idx >= 0) {
+          const before = text.slice(0, idx);
+          return { file: full, line: before.split("\n").length, col: idx - (before.lastIndexOf("\n") + 1) + 1 };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** 符号边界查找：命中位置前后不能是标识符字符 */
+function findToken(text: string, sym: string): number {
+  for (let from = 0; ; ) {
+    const i = text.indexOf(sym, from);
+    if (i < 0) return -1;
+    const a = i > 0 ? text[i - 1] : "";
+    const b = text[i + sym.length] ?? "";
+    if (!/[\w$]/.test(a) && !/[\w$]/.test(b)) return i;
+    from = i + 1;
+  }
+}
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
@@ -1072,28 +1148,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 剩尾 :行号（或 :行:列）
     const mm = raw.match(/^(.*?)(?::(\d{1,5})(?::(\d{1,5}))?)?$/);
     let p = mm ? mm[1] : raw;
-    const line = mm && mm[2] ? parseInt(mm[2], 10) : undefined;
-    const col = mm && mm[3] ? parseInt(mm[3], 10) : undefined;
+    let line = mm && mm[2] ? parseInt(mm[2], 10) : undefined;
+    let col = mm && mm[3] ? parseInt(mm[3], 10) : undefined;
     if (!p || /^[a-z]+:\/\//i.test(p)) return; // http(s):// 等非文件开头不处理
-    // 解析为绝对路径：相对路径依次尝试各工作区文件夹
+    // 解析（真名由存在性决定）：先按原文；纯中文名可能被散文吞头（已入库交接-启动慢战役.md），
+    // 再逐个去头重试——「役.md」事故家族兜底，去头上限 8 刀防长串扫爆
     let resolved: string | undefined;
-    const candidates = [p];
-    if (!path.isAbsolute(p)) {
-      for (const f of vscode.workspace.workspaceFolders ?? []) {
-        candidates.push(path.join(f.uri.fsPath, p));
+    const tries = [p];
+    if (p.indexOf("/") === -1 && p.indexOf("\\") === -1 && /[\u4e00-\u9fff]/.test(p)) {
+      for (let k = 1; k < p.length && k <= 8; k++) tries.push(p.slice(k));
+    }
+    for (const cand of tries) {
+      resolved = await this.resolveFileAny(cand);
+      if (resolved) break;
+    }
+    // 刀3：p 其实是符号引用（ModelRuntime.create 这类 类.成员，不是文件）→ pi 包里搜源码首命中；
+    // 搜不到（工作区符号等）交 VS Code 搜索面板，比弹「找不到文件」诚实（见 grepInPiPackage 头注释）
+    if (!resolved && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(p)) {
+      const hit = grepInPiPackage(p);
+      if (hit) { resolved = hit.file; line = hit.line; col = hit.col; }
+      else {
+        await vscode.commands.executeCommand("workbench.action.findInFiles", { query: p, triggerSearch: true });
+        return;
       }
-    }
-    for (const c of candidates) {
-      try {
-        if (fs.existsSync(c) && fs.statSync(c).isFile()) { resolved = c; break; }
-      } catch { /* ignore */ }
-    }
-    // 直接路径没找到 → 全工作区按文件名搜（兜底光文件名/深层相对路径）
-    if (!resolved) {
-      try {
-        const hits = await vscode.workspace.findFiles("**/" + path.basename(p), "**/node_modules/**", 2);
-        if (hits.length) resolved = hits[0].fsPath;
-      } catch { /* ignore */ }
     }
     if (!resolved) {
       this.post({ type: "notice", text: this.L.fileNotFound + raw });
@@ -1130,6 +1207,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.openFail + (err?.message ?? err) });
     }
+  }
+
+  /** 文件解析三步：直接/工作区相对路径 → 全工作区按文件名搜 → pi 家目录 ~/.pi（见 findUnderDir 头注释） */
+  private async resolveFileAny(p: string): Promise<string | undefined> {
+    // 解析为绝对路径：相对路径依次尝试各工作区文件夹
+    const candidates = [p];
+    if (!path.isAbsolute(p)) {
+      for (const f of vscode.workspace.workspaceFolders ?? []) {
+        candidates.push(path.join(f.uri.fsPath, p));
+      }
+    }
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
+      } catch { /* ignore */ }
+    }
+    // 直接路径没找到 → 全工作区按文件名搜（兜底光文件名/深层相对路径）
+    try {
+      const hits = await vscode.workspace.findFiles("**/" + path.basename(p), "**/node_modules/**", 2);
+      if (hits.length) return hits[0].fsPath;
+    } catch { /* ignore */ }
+    // 工作区还搜不到 → 搜 pi 的家目录 ~/.pi（见 findUnderDir 头注释）
+    return findUnderDir(path.join(os.homedir(), ".pi"), path.basename(p));
   }
 
   // 目标编辑器列：优先活动编辑器组，否则第一组

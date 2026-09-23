@@ -879,7 +879,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var lastNotice = '';
   var seenCompactions = -1; // 折叠块计数基线：-1=未立基线（首渲不跳顶），增大=新压缩
   var compactBarShownAt = -1; // 已弹过条的压缩计数（防同轮重渲重弹；dismiss 后置 = seenCompactions）
-  function notice(text) { if (/扩展已加载/.test(text)) return; var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll(); }
+  function notice(text) {
+    if (/扩展已加载/.test(text)) return;
+    // 同文 toast 不叠挂（插话→点暂停→点取回事故实测）：retrieveTaken 被流式思考块隔开后不再命中
+    // 下方「root 末尾同文」判定，幽灵 pill 每点一次取回就叠一条同文提示。lastNotice 在 send/render
+    // 清零 = toast 周期边界，跨回合的同文提示照常再出；已知取舍：同周期内同文只显示首条
+    //（pill/队列条自身的增删即是后续反馈）
+    if (lastNotice === text) return;
+    var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll();
+  }
   function textOf(content) {
     if (typeof content === 'string') return content;
     var out = '';
@@ -1559,15 +1567,28 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.slice(0, head) + '…' + s.slice(s.length - tail);
   }
   // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──
-  var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-]*\.(?:tsx|jsx|json|mjs|ts|js|md|txt|html?|css|scss|less|py|java|cpp|hpp|c|h|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?![\w\-])(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验。
+  var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-\u4e00-\u9fff]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-\u4e00-\u9fff]*\.(?:tsx|jsx|json|mjs|ts|js|md|txt|html?|css|scss|less|py|java|cpp|hpp|c|h|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?![\w\-])(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验。
   // 扩展名必须长项前置 + 尾边界 (?![\w\-])：短项前置又无边界时 js 吃掉 json/tsx/jsx、裸 c 吃掉
   // create/cpp/conf——models-store.json→models-store.js、ModelRuntime.create→ModelRuntime.c 的假链
-  // 点开必「找不到文件」（2026-09-23 用户实测「这些都点不开」，口径钉在 scripts/linkify.test.mts）
+  // 点开必「找不到文件」（2026-09-23 用户实测「这些都点不开」，口径钉在 scripts/linkify.test.mts）。
+  // 名字段同理必须放开中文重复：只许开头一个中文字符时「交接-启动慢战役.md」被吃到「役.md」
+  // （2026-09-23 第二张截图）；混排吞头由 cleanPath 砍，纯中文过吞由宿主 openFilePath 去头重试兜底
   function cleanPath(p) {
     p = p.replace(/[.,;:!?)}\]⟩】»]+$/, '');
     var parts = p.split(' ');
     while (parts.length > 1 && parts[parts.length - 1].indexOf('/') === -1 && parts[parts.length - 1].indexOf('\\') === -1) parts.pop();
-    return parts.join(' ');
+    p = parts.join(' ');
+    // 中文混排纠偏（「役.md」事故续）：散文吞头（改main.ts一行 → 改main.ts）时，名里有英数段
+    // 就砍掉开头非 ASCII，只留 ASCII 起的真名；纯中文名（交接-启动慢战役.md）不动
+    if (p.indexOf('/') === -1 && p.indexOf('\\') === -1) {
+      var dm = p.lastIndexOf('.');
+      var nm = dm > 0 ? p.slice(0, dm) : p;
+      if (/[A-Za-z0-9]/.test(nm) && !/^[\x00-\x7F]/.test(nm)) {
+        var cut = nm.replace(/^[^\x00-\x7F]+/, '');
+        if (cut) p = cut + p.slice(dm);
+      }
+    }
+    return p;
   }
   var linkifyEnabled = true; // renderAll 批量重绘时关掉老消息的 linkify，只留最近几条（全量扫正则是大会话卡顿的主因）
   function linkify(root: HTMLElement | null) {

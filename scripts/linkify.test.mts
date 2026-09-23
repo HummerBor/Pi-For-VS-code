@@ -129,4 +129,14 @@ check("code 内多级符号", links("看 `PiCore.onWebviewMessage` 和 `piCore.t
 check("敌文里的裸符号不点", links("残值全在 ModelRuntime.create 附近"), []);
 check("code 内文件名优先于符号（models-store.json 不是符号）", links("`models-store.json`"), ["models-store.json"]);
 
+/* 第 4 组：中文文件名全量捕获（2026-09-23「役.md」事故）——名字段曾只许开头一个中文
+ * 字符，`交接-启动慢战役.md` 被链到「役.md」，点开必弹「工作区里没找到文件: 役.md」
+ * （工具行 detail 与行内 code 同病）。混排（改main.ts）砍中文头取 ASCII 真名，
+ * 纯中文过吞的残局交宿主 openFilePath 去头重试（存在性定真名）。 */
+check("code 内中文文件名不截断", links("交接已入库：`交接-启动慢战役.md`（99d63b）"), ["交接-启动慢战役.md"]);
+check("工具行式中文文件名不截断", links("write 交接-启动慢战役.md 完成"), ["交接-启动慢战役.md"]);
+check("中文相对路径不截断", links("读 docs/交接-启动慢战役.md 一行"), ["docs/交接-启动慢战役.md"]);
+check("中文散文混排砍头取 ASCII 真名", links("改main.ts一行"), ["main.ts"]);
+check("ASCII 开头混排名不误砍", links("pi核心模块.md 在这"), ["pi核心模块.md"]);
+
 console.log(`linkify 口径用例 ${passed} 项全部通过`);
