@@ -36,6 +36,8 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
     });
   };
   bench("pre");
+  // Z3 刀（2026-09-23 Z2 判决后补刀）：哨兵探针启动——先于 Y 刀 io 块，覆盖 boot 重负载窗口
+  void z3Sentinel(sdk);
   // Y 刀（2026-09-23 X 刀判决：异步干等）：外部资源逐个异步撜表点名——谁慢谁就是等待源。
   // 覆盖 create/picker 共同依赖的五类：配置 json / 可用性缓存 / 会话目录 / 会话文件
   void (async () => {
@@ -115,6 +117,97 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
   });
   return p;
 }
+/** Z3 刀（2026-09-23 Z2 判决后补刀）：哨兵探针——Z2 实锤「慢不认位置、认挨刀」
+ * （同进程同文件：Y 刀窗口 readFile 2~3.5s，0.3s 后同一文件 2ms；sync 全程 0ms；
+ * 慢值聚在 ~2s 整数倍）。指纹指向 libuv 线程池被占（fs 异步/getaddrinfo 同池），
+ * 但差最后一块：挨刀同一刻 dns.lookup（同池）与 readdir 挨不挨刀。
+ * 每 400ms 同刻并发测 readFile ∥ readdir ∥ dns.lookup(localhost)，另在 300ms 中途
+ * 插一发 readFileSync（主线程直读不进池）作「卡顿时刻内核路径是否也慢」的对照。
+ * 只记 >150ms 的卡样本防洪水。判读：dns+fs 同慢 = 池被占（UV_THREADPOOL_SIZE 抬线程验证）；
+ * 只有 readFile 慢 = 内容读路径特有；中途 sync 也慢 = 内核/过滤驱动层。 */
+let z3Done = false;
+async function z3Sentinel(sdk: any): Promise<void> {
+  if (z3Done) return;
+  z3Done = true;
+  try {
+    const os = require("os");
+    const dns = require("dns");
+    const { join: pj } = require("path");
+    const agentDir = sdk.getAgentDir();
+    const tiny = pj(os.tmpdir(), "pi-z3-sentinel.json");
+    const smallDir = pj(agentDir, "sessions");
+    fs.writeFileSync(tiny, "{}");
+    const timed = (run: (done: () => void) => void) =>
+      new Promise<number>((r) => {
+        const t = Date.now();
+        let called = false;
+        const done = () => {
+          if (!called) {
+            called = true;
+            r(Date.now() - t);
+          }
+        };
+        try {
+          run(done);
+        } catch {
+          done();
+        }
+      });
+    const t0 = Date.now();
+    let n = 0;
+    let stalls = 0;
+    let maxRd = 0;
+    let busy = false;
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - t0;
+      if (elapsed > 45000 || stalls >= 12) {
+        clearInterval(timer);
+        dbg("[boot] z3 done n=" + n + " stalls=" + stalls + " maxRd=" + maxRd + "ms");
+        return;
+      }
+      if (busy) return;
+      busy = true;
+      n++;
+      let midSync = -1;
+      setTimeout(() => {
+        const t = Date.now();
+        try {
+          fs.readFileSync(tiny);
+        } catch { /* ignore */ }
+        midSync = Date.now() - t;
+      }, 300);
+      const pRd = timed((d) => {
+        void fs.promises.readFile(tiny).then(d, d);
+      });
+      const pDir = timed((d) => {
+        void fs.promises.readdir(smallDir).then(d, d);
+      });
+      const pDns = timed((d) => {
+        try {
+          dns.lookup("localhost", () => d());
+        } catch {
+          d();
+        }
+      });
+      void Promise.all([pRd, pDir, pDns]).then(([rd, dir, dnsMs]) => {
+        busy = false;
+        if (rd > maxRd) maxRd = rd;
+        if (rd > 150 || dir > 150 || dnsMs > 150) {
+          stalls++;
+          let res = "";
+          try {
+            res = ((process as any).getActiveResourcesInfo?.() ?? []).join(",");
+          } catch { /* 版本不支持就少个旁证 */ }
+          dbg(
+            "[boot] z3 stall rd=" + rd + " dir=" + dir + " dns=" + dnsMs +
+              " midSync=" + midSync + " n=" + n + " res=" + res
+          );
+        }
+      });
+    }, 400);
+  } catch { /* 探针失败不影响主链 */ }
+}
+
 /** Z2 刀（2026-09-23 实验18 刀口，用户点头打的对照探针）：位置×读法矩阵，
  *  归案「Code.exe 读 ~/.pi 文件内容慢」。
  *  轴一（位置）：原位 vs %TEMP% 副本 vs D 盘副本（顺带 __filename 对照 = 方法开销基线）；
