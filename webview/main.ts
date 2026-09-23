@@ -1559,7 +1559,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.slice(0, head) + '…' + s.slice(s.length - tail);
   }
   // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──
-  var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-]*\.(?:ts|tsx|js|jsx|mjs|json|md|txt|html?|css|scss|less|py|java|c|cpp|h|hpp|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验
+  var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-]*\.(?:tsx|jsx|json|mjs|ts|js|md|txt|html?|css|scss|less|py|java|cpp|hpp|c|h|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?![\w\-])(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验。
+  // 扩展名必须长项前置 + 尾边界 (?![\w\-])：短项前置又无边界时 js 吃掉 json/tsx/jsx、裸 c 吃掉
+  // create/cpp/conf——models-store.json→models-store.js、ModelRuntime.create→ModelRuntime.c 的假链
+  // 点开必「找不到文件」（2026-09-23 用户实测「这些都点不开」，口径钉在 scripts/linkify.test.mts）
   function cleanPath(p) {
     p = p.replace(/[.,;:!?)}\]⟩】»]+$/, '');
     var parts = p.split(' ');
@@ -1571,10 +1574,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!root || !linkifyEnabled) return;
     var nodes = [];
     var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    while (w.nextNode()) { var n = w.currentNode as HTMLElement; var par = n.parentNode as HTMLElement; if (par.nodeName !== 'PRE' && par.classList && !par.classList.contains('fp')) nodes.push(n); }
+    while (w.nextNode()) { var n = w.currentNode as HTMLElement; var par = n.parentNode as HTMLElement; if (par.nodeName !== 'PRE' && par.classList && !par.classList.contains('fp')) nodes.push({ n: n, code: par.nodeName === 'CODE' }); }
     for (var i = 0; i < nodes.length; i++) {
-      var n2 = nodes[i]; var txt = n2.nodeValue; if (!txt) continue;
-      FILE_RE.lastIndex = 0; if (!FILE_RE.test(txt)) continue;
+      var n2 = nodes[i].n; var txt = n2.nodeValue; if (!txt) continue;
+      FILE_RE.lastIndex = 0; if (!FILE_RE.test(txt)) { linkifySymbol(n2, txt, nodes[i].code); continue; }
       FILE_RE.lastIndex = 0;
       var frag = document.createDocumentFragment(); var last = 0, m2;
       while ((m2 = FILE_RE.exec(txt)) !== null) {
@@ -1590,6 +1593,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last)));
       n2.parentNode!.replaceChild(frag, n2);
     }
+  }
+  // ── 刀3（2026-09-23「这些都点不开」续）：行内 code 里的符号引用（ModelRuntime.create 这类
+  // 类.成员，文件正则认不出扩展名）也做成 .fp——点击由宿主 openFilePath 在 pi 包里搜源码打开。
+  // 只认「code 整段恰好是一个符号」：散文里的 Node.js/版本号不误伤。口径钉死在 scripts/linkify.test.mts
+  var SYM_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+  function linkifySymbol(n, txt, inCode) {
+    if (!inCode) return;
+    var t = String(txt).trim().replace(/[();,]+$/, '');
+    if (!SYM_RE.test(t)) return;
+    var sp = document.createElement('span'); sp.className = 'fp'; sp.textContent = t; sp.setAttribute('data-p', t);
+    (n.parentNode as HTMLElement).replaceChild(sp, n); // 整段替换：trim 掉的空白仅限 code 首尾，可忽略
   }
   // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）
   // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）；

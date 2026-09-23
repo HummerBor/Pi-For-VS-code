@@ -66,6 +66,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 | `npm run test:detail` | 跑 toolDetail 用例（scripts/toolDetail.test.mts，零依赖） |
 | `npm run test:subagent` | 跑 subagentSnapshot 快照用例（scripts/subagentSnapshot.test.mts） |
 | `npm run test:revert` | 跑 patchRevert 逆向还原用例（scripts/patchRevert.test.mts） |
+| `npm run test:linkify` | 跑 linkify 文件名/符号链接口径用例（scripts/linkify.test.mts） |
 | `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
 
 调试：F5（任务 `watch all`，tsc + vite 双 watch 并行）。
