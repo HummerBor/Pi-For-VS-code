@@ -6,7 +6,9 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { PiClient } from "./piClient";
+import { PiClient, setPiClientDebug } from "./piClient";
+// S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
+setPiClientDebug(dbgLog);
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
 import { loadPiSdk } from "./piSdk";

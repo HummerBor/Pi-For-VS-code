@@ -1,6 +1,13 @@
 import { EventEmitter } from "events";
+import * as fs from "fs";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "./protocol";
 import { loadPiSdk } from "./piSdk";
+
+/** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
+let dbg: (s: string) => void = () => {};
+export function setPiClientDebug(fn: (s: string) => void): void {
+  dbg = fn;
+}
 
 /** Q 刀（2026-09-23 services 真身实锤）：createAgentSessionServices 内部是
  *  resourceLoader.reload() 全树扫描（skills/提示模板/AGENTS/扩展 + 工作区），
@@ -13,7 +20,25 @@ const sharedServices = new Map<string, Promise<any>>();
 function getSharedServices(sdk: any, cwd: string): Promise<any> {
   const hit = sharedServices.get(cwd);
   if (hit) return hit;
-  const p: Promise<any> = sdk.createAgentSessionServices({ cwd });
+  // S 刀（2026-09-23 环境差归案）：创建前后各测一次「事件循环停顿」（setImmediate 延迟）
+  // 与小 fs 计时——若它们随 services 单跳唼到秒级 = 扩展宿主线程被卡（别的扩展/GC/IO）
+  // 实锤；若它们干净而 services 独慢 = pi 内部在等东西。两行读数定方向
+  const bench = (tag: string) => {
+    const tb = Date.now();
+    void new Promise((r) => setImmediate(r)).then(() => {
+      const tf = Date.now();
+      let st = 0;
+      try {
+        st = fs.statSync(__filename).size;
+      } catch { /* ignore */ }
+      if (st >= 0) dbg(`[boot] bench ${tag} loop=${tf - tb}ms fs=${Date.now() - tf}ms`);
+    });
+  };
+  bench("pre");
+  const p: Promise<any> = sdk.createAgentSessionServices({ cwd }).then((v: any) => {
+    bench("post");
+    return v;
+  });
   sharedServices.set(cwd, p);
   p.catch(() => {
     if (sharedServices.get(cwd) === p) sharedServices.delete(cwd);
