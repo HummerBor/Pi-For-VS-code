@@ -49,7 +49,8 @@
         </div>
         <input type="file" id="file" multiple style="display:none">
         <div id="attachbar"></div>
-        <textarea id="input" placeholder="{{t:inputPlaceholder}}"></textarea>
+        <textarea id="input" placeholder="{{t:inputPlaceholder}}" disabled></textarea>
+        <!-- disabled 至 main.js 绑定按键后启用：消灭「输入框已画、按键未绑」的死窗口（V 刀 2026-09-23） -->
         <div id="ctoolbar">
           <span id="attach" class="tb-btn" title="{{t:attachTitle}}"></span>
           <span id="codechip" style="display:none"></span>

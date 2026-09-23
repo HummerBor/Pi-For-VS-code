@@ -224,6 +224,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChipAll(); });
     input.addEventListener('input', function () { updateSuggest(); autoSize(); });
     input.addEventListener('keydown', inputKeydown);
+    input.disabled = false; // V 刀：按键已绑才放开输入框（模板里 disabled，消灭死窗口）
     input.addEventListener('paste', inputPaste);
     renderCodeChip();
   }
@@ -1303,7 +1304,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (sgOpen) {
       if (e.key === 'ArrowDown') { e.preventDefault(); nextSel(1); paintSuggest(); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); nextSel(-1); paintSuggest(); return; }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); var r0 = sgList[sgSel]; if (r0) applySuggest(r0.item); return; }
+      if (e.key === 'Tab') { e.preventDefault(); var r1 = sgList[sgSel]; if (r1) applySuggest(r1.item); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        // V 刀（2026-09-23 用户报「启动中发消息被挡」，日志零留痕=消息死在 webview 端）：
+        // 原行为：联想框开着就一律 return——空列表/未选中也吞，消息无声消失。
+        // 现行为：有选中项才应用建议；否则收起联想框、落回下方正常发送
+        var r0 = sgList[sgSel];
+        if (r0) { e.preventDefault(); applySuggest(r0.item); return; }
+        hideSuggest();
+      }
       if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
