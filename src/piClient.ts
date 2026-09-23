@@ -35,7 +35,20 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
     });
   };
   bench("pre");
-  const p: Promise<any> = sdk.createAgentSessionServices({ cwd }).then((v: any) => {
+  const p: Promise<any> = (async () => {
+    // T 刀（2026-09-23 四行归案）：工厂的 modelRuntime 可注入——把它拆出来单独掋表
+    //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
+    // 选择权在 session 上）。剩余（ctor+reload+refresh）= services 单跳减本行
+    const { join } = require("path");
+    const agentDir = sdk.getAgentDir();
+    const tm = Date.now();
+    const modelRuntime = await sdk.ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+    });
+    dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
+    return sdk.createAgentSessionServices({ cwd, modelRuntime });
+  })().then((v: any) => {
     bench("post");
     return v;
   });
