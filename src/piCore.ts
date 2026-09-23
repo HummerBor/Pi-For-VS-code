@@ -996,6 +996,10 @@ export class PiCore {
         // 工单十六：queuebar 条目「取回」→ 文本回编辑框（pi 原生 dequeue 语义的单条版）
         await this.retrieveQueued(m.qid);
         break;
+      case "probeNote":
+        // P 刀：webview 端计时探针回传（发送→画上/重绘耗时），落 debug log 供考古
+        this.dbg("webview " + m.text);
+        break;
     }
   }
 

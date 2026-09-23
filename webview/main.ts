@@ -1304,6 +1304,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     autoSize();
     pendingImages = []; pendingFiles = []; renderAttach();
     lastNotice = ''; // 新回合开始：瞬时反馈（含压缩完成）不再跨回合存活，与 pi TUI 状态行语义一致
+    lastSentAt = Date.now();
     vpost({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
   }
   // 自适应高度：随内容增长，到 220px 上限后改为内部滚动（消息区不会被挤没）
@@ -1350,6 +1351,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var renderPending: SessionMessage[] | null = null;
   var liveSyncPending: SessionMessage | null = null;
   var renderTimer: number | null = null;
+  var lastSentAt = 0; // P 刀探针基准：发送时刻（userEcho 画上时回差值）
   function scheduleRender() {
     // 三期④：换镜舞蹈退役（原「先换回发起页签再重绘」——闭包天然绑定，无需换）
     if (!renderTimer) renderTimer = setTimeout(function () {
@@ -1359,7 +1361,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function flushRender() {
     renderTimer = null;
-    if (renderPending) { var list = renderPending; renderPending = null; renderAll(list); }
+    if (renderPending) {
+      var list = renderPending; renderPending = null;
+      var tR = Date.now(); // P 刀探针：重绘实测（长会话重绘若秒级，事件分发被堵就是「2s 才展示」的元凶）
+      renderAll(list);
+      vpost({ type: 'probeNote', text: 'renderAll=' + (Date.now() - tR) + 'ms n=' + list.length });
+    }
     if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
     drainPendingStream();
   }
@@ -1389,7 +1396,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function handleMsg(m: HostToWebviewTagged) {
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
-    if (m.type === 'user') addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
+    if (m.type === 'user') {
+      addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
+      // P 刀探针（2026-09-23 用户报「发消息 2s 才展示」）：host 回显 3ms 已实锤（out user 留痕），
+      // 慢在 webview 段——发送→画上实测 + 路由去向（防串页签），一读数定罪。零 IO，仅发消息时回一条
+      if (lastSentAt) {
+        vpost({ type: 'probeNote', text: 'userEcho latency=' + (Date.now() - lastSentAt) + 'ms tab=' + String(m.tabId) + ' active=' + String(activeTabId) });
+        lastSentAt = 0;
+      }
+    }
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     // 探针实锤（probe-toolblocks.mjs）：pi 每输出一个 toolCall 就是一条独立 assistant 消息——
     // 同名合并靠 DOM 相邻判定（空壳 bubble 已移除、思考/正文 bubble 天然插队断连续），
