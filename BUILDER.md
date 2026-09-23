@@ -4,7 +4,42 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-23 N 刀：启动秒表 + boot 分段计时（用户点名，待实测读数）；M 刀 bundle 入口修复已装机
+最后更新：2026-09-23 Q/R/S/T/U 刀连环结案：启动 14s→2s（历史秒出不等 pi），剩余挂债；含 R 刀时序/文案修正
+
+# Q~U 刀：启动慢连环结案（2026-09-23，全程用户实测驱动，2s 收工）
+
+## 裁决链（每一刀都由分段计时/对照实验驱动，不是猜的）
+- **M**（前账）：loadPiSdk 换 bundle 入口（冷 15.7s→0.26s）。
+- **Q**：services 进程级按 cwd 共享（Promise 缓存，并发 boot 共享一次扫描）+ 扩展激活即
+  预热。真身实锤：createAgentSessionServices = resourceLoader.reload() 全树扫描（skills/
+  扩展/提示模板/AGENTS）。共享安全已核：模型选择在 session 上，runtime.dispose 只
+  dispose session（agent-session-runtime.js:112/302）。**O 刀（回调内 svcCache）曾被回滚**
+  （用户体感回归，实际时间相关；教训：体感回归先回滚再谈，不争）。
+- **R**（用户方案原样）：启动按需加载——①快路径历史：会话文件即记录（jsonl type:message
+  的 entry.message {role,content,timestamp} 与 session.messages 同形，探针核对），boot 先
+  读文件画历史，pi 就绪后 render 覆盖权威版；②SessionManager.open(记忆路径) 直连目标
+  会话（实测可用），砍「continueRecent 先接历史最近一条再换目标」双重附着。配套修正：
+  预热移到 postTabs 之后（快路径 render 同步发，会抢在页签前）；启动文案改自解释
+  （「pi 启动中…就绪后即可发消息」）。
+- **S/T**（环境差归案，对照实验毙五嫌）：事件洪水 87ms/async_hooks 92ms/全局包裸进程
+  81~150ms/并行 listAll 陪绑 1.2s/线程 bench（loop 4~119ms、fs 0ms）——**扩展宿主 JS 线程
+  无罪、网络无罪**。拆表定位：ModelRuntime.create 2769ms（裸 77ms）、reload+refresh 仅
+  100ms。慢如跳蚤在①③间跳（这轮①慢下轮③慢）= 两者背后共用的间歇性 IO/锁等待。
+- **U**（真凶结案）：model-runtime.js:97 `refreshOnCreate !== false` 保险丝——create 内部
+  逐 provider 可用性/鉴权构建，拉闸跳过（`refreshOnCreate:false`，官方开关非 hack），
+  可用性由后台队列 queueAvailabilityRefresh 补齐。实测 mr-create 2769→28ms。
+
+## 现状与债务
+- **启动：历史秒出（不等 pi）；「pi 启动中」秒表约 2s**（14s→6s→2s）。11ms 极值实测
+  （预热跑完再开面板时）。页签：58ms 秒开。
+- 债1（环境差跳蚤）：①③背后共用的间歇性多秒等待未归案——现藏于后台预热、共享后只付
+  一次；触发条件：秒表再现 >5s 即回挖（下钻点：SettingsManager/ModelConfig.load 的共用 IO）。
+- 债2：「启动中发消息被挡」未复测（用户报告一次；U 刀后启动仅 2s，可能已自然消失）——
+  复测再挡则归案 UI/路由守卫。
+- 债3（旧）：D 聚焦语义 lastSpoke、G 闸门（判据：gate drop types=[render] 复现）、msgBrief
+  嵌套标量、会话列表「Loading sessions」慢（目录 207MB 全量读，可做 mtime 增量缓存）。
+- 探针资产：scripts/probe-boot-timing.mjs（加载层）、probe-env-contention.mjs（环境差
+  对照）；读数判读：`[boot] bench/…`、`boot phase=`、`boot done total=`。
 
 # N 刀：启动计时器（2026-09-23，用户点名「没感觉秒开，往这里加个计时器」）
 
