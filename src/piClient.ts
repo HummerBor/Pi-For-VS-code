@@ -72,7 +72,7 @@ export class PiClient {
    *  与 webview 启动秒表互为印证——慢启动定位器 */
   onDebug: ((msg: string) => void) | null = null;
   private initPromise: Promise<void> | null = null;
-  private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string } | null = null;
+  private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string; openPath?: string } | null = null;
   /** 扩展 UI 对话框的挂起请求：id → resolver（panel respondUi 回来时配对） */
   private uiPending = new Map<string, { method: string; resolve: (v: any) => void; timer?: NodeJS.Timeout }>();
   private uiSeq = 1;
@@ -81,10 +81,10 @@ export class PiClient {
     return this.session !== null;
   }
 
-  /** 启动参数（cwd/启动模式/代理）由 panel 传入；初始化是异步的，所有方法先 await ready() */
-  start(cwd: string, extraArgs: string[] = [], proxyUrl?: string): void {
+  /** 启动参数（cwd/启动模式/代理/直连会话文件）由 panel 传入；初始化是异步的，所有方法先 await ready() */
+  start(cwd: string, extraArgs: string[] = [], proxyUrl?: string, openPath?: string): void {
     if (this.session || this.initPromise) return;
-    this.startOpts = { cwd, extraArgs, proxyUrl };
+    this.startOpts = { cwd, extraArgs, proxyUrl, openPath };
     this.initPromise = this.init();
   }
 
@@ -93,7 +93,7 @@ export class PiClient {
     try {
       const sdk = await loadPiSdk();
       this.onDebug?.("[boot] load-pkg +" + (Date.now() - t0) + "ms");
-      const { cwd, extraArgs, proxyUrl } = this.startOpts!;
+      const { cwd, extraArgs, proxyUrl, openPath } = this.startOpts!;
 
       // 代理：RPC 时代透传给子进程环境；进程内直接写当前进程环境（pi 的网络栈读环境变量）
       if (proxyUrl) {
@@ -116,9 +116,15 @@ export class PiClient {
       const dirIdx = extraArgs.indexOf("--session-dir");
       const sessionDir = dirIdx >= 0 ? extraArgs[dirIdx + 1] : undefined;
       const useContinue = extraArgs.includes("-c");
-      const sessionManager = useContinue
-        ? sdk.SessionManager.continueRecent(cwd, sessionDir)
-        : sdk.SessionManager.create(cwd, sessionDir);
+      // R 刀（2026-09-23 用户方案「按需加载」）：有记忆会话就 SessionManager.open 直挂目标
+      // 文件——砍掉「continueRecent 先接历史最近一条、boot 链再 switchSession 换目标」的
+      // 双重附着（用户原话：插件只保存页签→会话路径，启动只载默认打开的，其余按需）。
+      // 不传 openPath 的旧语义（-c/create）原样保留；open 打开真实文件，审计红线不破
+      const sessionManager = openPath
+        ? sdk.SessionManager.open(openPath, sessionDir, cwd)
+        : useContinue
+          ? sdk.SessionManager.continueRecent(cwd, sessionDir)
+          : sdk.SessionManager.create(cwd, sessionDir);
 
       // 官方 runtime 工厂姿势（sdk.md「Session Management」）：services 绑定 cwd，
       // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）。
@@ -381,8 +387,12 @@ export class PiClient {
     });
   }
 
-  /** 加载指定的历史会话文件（*.jsonl） */
+  /** 加载指定的历史会话文件（*.jsonl）；R 刀：目标已是 open 直连的同一文件时跳过
+   *  （避免无谓的会话替换重载——已挂在目标上 */
   switchSession(sessionPath: string): Promise<any> {
+    if (sessionPath === this.startOpts?.openPath) {
+      return this.ready().then(() => ({ cancelled: false }));
+    }
     return this.ready().then(async () => {
       const r = await this.runtime.switchSession(sessionPath);
       this.afterSessionSwap();

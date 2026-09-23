@@ -341,7 +341,9 @@ export class PiCore {
     // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
     // 这里把 VSCode 内置 http.proxy 设置透传给 pi（HTTP_PROXY/HTTPS_PROXY）
     const proxyUrl = this.caps.getConfig("http", "proxy", "").trim();
-    client.start(cwd, args, proxyUrl || undefined);
+    // R 刀（2026-09-23）：有记忆会话就直连其文件（open），不再「先接历史最近一条再换」
+    const openTarget = this.freshTab ? undefined : this.getSessionForWs(cwd);
+    client.start(cwd, args, proxyUrl || undefined, openTarget && fs.existsSync(openTarget) ? openTarget : undefined);
 
     // 插话送达方式（默认逐条，CC 风格：排队消息一条条处理）
     const steerMode = this.caps.getConfig("piChat", "steeringMode", "one-at-a-time");
@@ -378,6 +380,26 @@ export class PiCore {
         // 工单十五刀4：freshTab 跳过按工作区恢复——新标签的会话记忆由它自己首次会话写入，
         // 不能把别的标签存的会话文件抢过来当恢复目标（同根因：写冲突）
         const last = this.freshTab ? undefined : this.getSessionForWs(cwd);
+        // R 刀快路径（2026-09-23 用户方案）：历史渲染不等 pi——会话文件就是记录本身
+        // （jsonl 的 type:"message" entry.message {role,content,timestamp} 与
+        // session.messages 同形，探针实测核对过）。先把记忆会话的消息读出来画上，
+        // pi 就绪后由链路 render 覆盖为权威版本——services 全树扫描（6s 级）从此不挡显示
+        try {
+          if (last && fs.existsSync(last)) {
+            const msgs: any[] = [];
+            for (const ln of fs.readFileSync(last, "utf8").split("\n")) {
+              if (!ln.trim()) continue;
+              try {
+                const e = JSON.parse(ln);
+                if (e && e.type === "message" && e.message) msgs.push(e.message);
+              } catch { /* 崩溃尾部半行跳过 */ }
+            }
+            if (msgs.length) {
+              this.post({ type: "render", messages: msgs });
+              mark("fast-render");
+            }
+          }
+        } catch { /* 快路径失败不挡 boot，正常链路兜底 */ }
         if (last && fs.existsSync(last)) {
           try {
             await client.switchSession(last);
