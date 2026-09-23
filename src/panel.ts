@@ -94,11 +94,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
     // 标签栏重建必须先于一切 ensureCore/postTabs：活动标签 id 决定首个核心的 tabKey，
     // 进而决定恢复哪个标签记忆的会话（顺序错了等于白存）
-    // Z 刀：会话列表槽持久化接线（globalState 注入模块层钩子）
-    setSessionSlotPersistence(
-      () => this.globalState.get<any>("piChat.sessSlot." + this.wsKey(), null),
-      (s) => void this.globalState.update("piChat.sessSlot." + this.wsKey(), s)
-    );
     this.restoreTabBar();
     // 核心创建延迟到首次访问（ensureCore）：多标签时代每个标签各自组装，构造器不再预建单例
   }
@@ -809,7 +804,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pickerClosed = true;
     });
     const cwdFilter = scope === "all" ? undefined : wsPath;
-    if (!listAllSlot && slotLoad) listAllSlot = slotLoad(); // Z 刀：冷启动也走缓存秒开
     const cachedSlot = listAllSlot;
     if (cachedSlot) {
       picker.items = buildItems(toSessionInfos(cachedSlot.result, cwdFilter));
@@ -2152,19 +2146,6 @@ type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
 /** 展示链唯一需要的投影字段（轻量缓存用，allMessagesText 等重串不进来） */
 type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
 let listAllSlot: { fp: string; result: PiSessionProjection[] } | null = null;
-// Z 刀（2026-09-23 「Loading sessions...很久」根治）：槽持久化跨重启——冷启动首次打开
-// 选择器也命中缓存；指纹校验只走 stat/readdir（实测毫秒级），命中就不走全量文件读
-//（那条路撞文件系统等待源：读 ~/.pi 下的 json/jsonl 在扩展宿主里秒级到十秒级）。
-// globalState 由实例注入，模块层经此两钩存取
-let slotLoad: (() => { fp: string; result: PiSessionProjection[] } | null) | null = null;
-let slotSave: ((slot: { fp: string; result: PiSessionProjection[] }) => void) | null = null;
-function setSessionSlotPersistence(
-  load: () => { fp: string; result: PiSessionProjection[] } | null,
-  save: (slot: { fp: string; result: PiSessionProjection[] }) => void
-): void {
-  slotLoad = load;
-  slotSave = save;
-}
 
 /** 会话目录文件集指纹（工单十三重做后唯一幸存的轻量探测，自研扫描备胎已删）：
  *  递归收集 ~/.pi/agent/sessions 下 .jsonl 路径并 stat，路径+mtimeMs 进 FNV-1a 哈希
@@ -2207,7 +2188,6 @@ async function fingerprintSessions(): Promise<string> {
 /** listAll 指纹单槽缓存入口：指纹命中直接返回上次轻量投影结果（真毫秒级），未命中才跑
  *  pi 全量解析并投影后入槽（旧槽作废，永远只一份）。调用方无需关心缓存细节。 */
 async function listAllCached(): Promise<PiSessionProjection[]> {
-  if (!listAllSlot && slotLoad) listAllSlot = slotLoad(); // Z 刀：跨重启种子（持久槽）
   const fp = await fingerprintSessions();
   if (listAllSlot && listAllSlot.fp === fp) return listAllSlot.result;
   const sdk = await loadPiSdk();
@@ -2222,7 +2202,6 @@ async function listAllCached(): Promise<PiSessionProjection[]> {
       modified: x.modified,
     })),
   };
-  slotSave?.(listAllSlot); // Z 刀：指纹+结果落盘，跨重启秒开
   return listAllSlot.result;
 }
 
