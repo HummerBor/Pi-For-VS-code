@@ -15,6 +15,7 @@ import { findPiPackageRoot, loadPiSdk } from "./piSdk";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
 import { reverseApplyPatch } from "./patchRevert";
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "./piCore";
+import { fingerprintSessionsSync, listAllSyncFast } from "./sessionScan";
 import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
 
 /**
@@ -870,8 +871,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // 工单十九：热路径秒开。fingerprintSessions（walk 整树 + 逐文件 stat）是 pickSession
     // 唯一剩余前置开销（NTFS 几百 ms，随会话数线性涨）——有上次结果缓存槽时先用它立即
-    // 出列表（无 loading 占位），后台再跑指纹校验：命中即结束（列表已对）；未命中重算
-    // listAll 入槽后**原地更新同一个 picker 的 items**（不重弹新 QuickPick、不重置选中，
+    // 出列表（无 loading 占位），后台再跑指纹校验：命中即结束（列表已对）；未命中快扫
+    // 立即入槽原地更新（pi listAll 权威随后台补）**原地更新同一个 picker 的 items**（不重弹新 QuickPick、不重置选中，
     // activeItems 保持同 file 项——防用户在刷新完成前已选中某项被冲掉）。
     // 真首次（无槽）照旧 loading 占位→填充路径。pickerClosed 守卫：用户已关掉选择器后
     // 后台刷新不再碰 items（picker 即将 dispose，防止打在尸体上）。
@@ -886,7 +887,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       picker.show();
       dbgLog(`pickSession 缓存秒开 ${(Date.now() - t0).toFixed(0)}ms（消息到达→列表就绪）`);
       // 后台指纹校验：listAllCached 指纹命中返回同一份 result（引用相等即列表未变）；
-      // 未命中则内部已重算 listAll 并入槽，返回新引用 → 原地刷新 items
+      // 未命中则内部快扫入槽（权威后台补），返回新引用 → 原地刷新 items
       void listAllCached()
         .then((fresh) => {
           if (pickerClosed || fresh === cachedSlot.result) return; // 指纹命中/已关闭 → 列表已对
@@ -2247,62 +2248,42 @@ type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
 type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
 let listAllSlot: { fp: string; result: PiSessionProjection[] } | null = null;
 
-/** 会话目录文件集指纹（工单十三重做后唯一幸存的轻量探测，自研扫描备胎已删）：
- *  递归收集 ~/.pi/agent/sessions 下 .jsonl 路径并 stat，路径+mtimeMs 进 FNV-1a 哈希
- *  （79 文件 ≈10-30ms，比 listAll 全量解析便宜两个量级）。任何文件新增/删除/mtime 变化
- *  → 指纹变 → 重跑 listAll；未变只重扫目录，省全量解析。 */
-async function fingerprintSessions(): Promise<string> {
-  const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-  const files: string[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    let ents: fs.Dirent[];
-    try {
-      ents = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // 目录不存在/无权限 → 空指纹，安全
-    }
-    for (const ent of ents) {
-      const full = path.join(dir, ent.name);
-      if (ent.isDirectory()) await walk(full);
-      else if (ent.isFile() && ent.name.endsWith(".jsonl")) files.push(full);
-    }
-  };
-  await walk(root);
-  let h1 = 2166136261; // FNV-1a 32 位 offset basis
-  for (const file of files) {
-    let mtime = 0;
-    try {
-      mtime = (await fs.promises.stat(file)).mtimeMs;
-    } catch {
-      // stat 失败（文件刚被删/无权限）→ mtime 记 0，指纹必变 → 强制重算，安全
-    }
-    const tag = file + ":" + mtime + ";";
-    for (let i = 0; i < tag.length; i++) {
-      h1 ^= tag.charCodeAt(i);
-      h1 = (h1 * 16777619) & 0xffffffff; // FNV 素数，& 保持 32 位
-    }
-  }
-  return files.length + ":" + h1; // 文件数也进指纹，防碰撞
-}
+/** 会话目录文件集指纹：实现已迁 sessionScan.ts（fingerprintSessionsSync，R′刀改同步——
+ *  原异步 walk/stat 同样过 libuv 线程池，撞服务闸时几十个 stat 各等 2~8s，光指纹就能把
+ *  列表卡死）；哈希口径逐字符保持不变。自研扫描备胎随 R′刀回归：listAllSyncFast 同模块。 */
 
-/** listAll 指纹单槽缓存入口：指纹命中直接返回上次轻量投影结果（真毫秒级），未命中才跑
- *  pi 全量解析并投影后入槽（旧槽作废，永远只一份）。调用方无需关心缓存细节。 */
+/** listAll 指纹单槽缓存入口（R′刀重排）：指纹命中返回缓存投影（真毫秒级）；未命中先
+ *  同步快扫立回（sessionScan.listAllSyncFast，服务闸免疫，几十文件 ≈50ms），后台补 pi
+ *  全量权威解析入槽——快/慢两路共用 toSessionInfos，展示零漂移。权威解析去重并发
+ *  （撞闸时 38s 的活不许叠跑），失败静默（快照继续服务）。调用方无需关心缓存细节。 */
+let listAllRefreshInFlight = false;
 async function listAllCached(): Promise<PiSessionProjection[]> {
-  const fp = await fingerprintSessions();
+  const fp = fingerprintSessionsSync();
   if (listAllSlot && listAllSlot.fp === fp) return listAllSlot.result;
-  const sdk = await loadPiSdk();
-  const fresh = (await sdk.SessionManager.listAll()) as PiSessionEntry[];
-  listAllSlot = {
-    fp,
-    result: fresh.map((x) => ({
-      path: x.path,
-      cwd: x.cwd,
-      name: x.name,
-      firstMessage: x.firstMessage,
-      modified: x.modified,
-    })),
-  };
-  return listAllSlot.result;
+  const fast = listAllSyncFast();
+  listAllSlot = { fp, result: fast };
+  if (!listAllRefreshInFlight) {
+    listAllRefreshInFlight = true;
+    void (async () => {
+      try {
+        const sdk = await loadPiSdk();
+        const fresh = (await sdk.SessionManager.listAll()) as PiSessionEntry[];
+        // 解析期间可能又有活动 → 重取指纹与新投影配对入槽，下次打开自然校验
+        listAllSlot = {
+          fp: fingerprintSessionsSync(),
+          result: fresh.map((x) => ({
+            path: x.path,
+            cwd: x.cwd,
+            name: x.name,
+            firstMessage: x.firstMessage,
+            modified: x.modified,
+          })),
+        };
+      } catch { /* 权威刷新失败不打扰用户：快照继续服务 */ }
+      listAllRefreshInFlight = false;
+    })();
+  }
+  return fast;
 }
 
 /** 投影→展示条目变换（cwd 过滤 + mtime 缓存复用 + 按最近使用排序 + 截断）。

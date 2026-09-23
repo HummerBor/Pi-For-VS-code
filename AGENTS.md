@@ -67,6 +67,7 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 | `npm run test:subagent` | 跑 subagentSnapshot 快照用例（scripts/subagentSnapshot.test.mts） |
 | `npm run test:revert` | 跑 patchRevert 逆向还原用例（scripts/patchRevert.test.mts） |
 | `npm run test:linkify` | 跑 linkify 文件名/符号链接口径用例（scripts/linkify.test.mts） |
+| `npm run test:listfast` | 跑会话列表同步快扫 vs pi listAll 同形性对照（scripts/test-listfast.mjs） |
 | `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
 
 调试：F5（任务 `watch all`，tsc + vite 双 watch 并行）。
@@ -77,7 +78,8 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 src/            宿主侧（extension.ts 入口 / panel.ts VS Code adapter / piCore.ts 核心控制器 /
                 hostCapabilities.ts 宿主能力接口 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
                 protocol.ts 消息协议 / patchRevert.ts edit patch 逆向还原（工单七）/
-                toolDetail.ts 共享摘要 / subagentSnapshot.ts 子 agent 监控快照 / i18n.ts / webview-html.ts 装配）
+                toolDetail.ts 共享摘要 / subagentSnapshot.ts 子 agent 监控快照 /
+                sessionScan.ts 会话列表同步快扫（R′刀）/ i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）
 out/            tsc 产物（不进 git，进 vsix）
