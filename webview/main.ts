@@ -308,6 +308,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           bb.scrollIntoView({ behavior: 'smooth', block: 'center' });
           // 回流强制重启动画：连点同一条也能重新闪（排队 pill 在消息流外，无闪烁也不报错）
           bb.classList.remove('ol-jump'); void bb.offsetWidth; bb.classList.add('ol-jump');
+          // 闪完必须摘类：class 留在气泡上时，切页签的 display:none↔可见会让 olflash 从头重放
+          // （display:none 取消动画，恢复渲染时 animation 重新求值），表现为切回页签旧选中消息又闪。
+          // 不用 animationend——动画被 display:none 取消时它不触发，类就永远留着继续犯病；
+          // 定时器兜底且清旧的，防止连点时旧定时器把新一次闪烁提前摘掉。
+          var jt: any = (bb as any)._olJumpT; if (jt) clearTimeout(jt);
+          (bb as any)._olJumpT = setTimeout(function () { bb.classList.remove('ol-jump'); }, 1100);
         });
       })(b, row);
       outlineEl.appendChild(row);

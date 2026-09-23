@@ -116,6 +116,9 @@ export class PiCore {
   /** 启动恢复闸门：按项目恢复上次会话期间，webviewReady 的重绘等它完成，
    * 避免先画出 -c 恢复的会话再跳到记住的会话（「闪一下 + 标题/内容对不上」的根源） */
   private restoringSession: Promise<void> | null = null;
+  /** A 刀（2026-09-23）：快路径渲染过的消息缓存——启动期（pi init 未翻真）postUiState
+   *  用它出首帧，不再等 init；boot 链尾权威 render/postUiState 仍会覆盖为真值 */
+  private fastRenderMsgs: any[] | null = null;
   /** 压缩横幅（工单六）：单份持有、变更才下发；webview 重建后 webviewReady 握手重发 */
   private banner: BannerPayload | null = null;
   /** 阈值预警闸门：涨破阈值只提醒一次（同一会话）；占比回落（压缩后）/换会话 re-arm */
@@ -395,6 +398,7 @@ export class PiCore {
               } catch { /* 崩溃尾部半行跳过 */ }
             }
             if (msgs.length) {
+              this.fastRenderMsgs = msgs;
               this.post({ type: "render", messages: msgs });
               mark("fast-render");
             }
@@ -528,13 +532,24 @@ export class PiCore {
     this.gateOpen = true;
     const gateT0 = Date.now();
     try {
-      // 启动恢复（switchSession）还在进行时先等它，避免重绘到旧会话再跳一次
-      if (this.restoringSession) await this.restoringSession.catch(() => {});
+      // A 刀（2026-09-23 用户拍板「启动不等 pi」）：启动期（client 已建但 init 未翻真）不等
+      // restoringSession/collectState——旧闸把整条 pi init（services 全树扫描 2~7s）压在
+      // webview 首帧上，用户看到的「启动中 Ns」就是这一等。启动期用快路径缓存直接出帧，
+      // 页脚留占位（E 刀「双空=启动中」语义正好接管）；boot 链尾的 F′ 刀终值快照仍以权威
+      // 真相覆盖（占位不会钉死，「无人再刷」的老 bug 不会回归）。
+      // 细节：collectState 内部 getState 会 await init（F′ 刀注释），启动期绕开它才是真解闸。
+      // Z 刀教训记账：这刀只动时序不动语义，装机前过 scripts/smoke-boot.mjs 主链路冒烟。
+      const booting = !!this.client && !this.client.running;
+      if (!booting && this.restoringSession) await this.restoringSession.catch(() => {});
       // 页脚数据（含既有副作用：会话记账/横幅 re-arm）先拉——它有 await，快照必须在其后取
-      const foot = await this.collectState();
+      const foot = booting ? null : await this.collectState();
       // ——同步快照块（无 await，事件插不进来）：历史全量 + 在途消息深拷贝同拍取——
       // tabId 戳：webview 收到非活动页签快照直接丢弃（连切竞态：慢到的旧快照覆盖新页签内容）
-      const msgs = this.client ? this.client.messagesSync() : [];
+      const msgs = booting
+        ? (this.fastRenderMsgs ?? [])
+        : this.client
+          ? this.client.messagesSync()
+          : [];
       const live = this.busy && this.liveStreaming && this.liveMessage
         ? JSON.parse(JSON.stringify(this.liveMessage))
         : null;

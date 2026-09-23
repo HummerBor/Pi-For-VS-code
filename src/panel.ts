@@ -487,8 +487,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if ((m as { needState?: boolean }).needState) {
           const c = this.ensureCore(m.tabId);
           // F′ 刀：启动中的页签不发空快照（0.1.42 修法取回）——空快照会把「—/临时(未保存)」
-          // 占位钉死（真值之后无人再刷）。有 client 就要真值快照（postUiState 内部 getState
-          // 等 init 完成）；没 client 才是真·空页签，回原子空快照。
+          // 占位钉死（真值之后无人再刷）。有 client 就要快照（A 刀后：启动中也秒出，消息
+          // 用快路径缓存、页脚留占位，真值由 boot 链尾终值快照补齐）；没 client 才是真·空页签，回原子空快照。
           if (c.clientRef) void c.postUiState();
           else this.postEmptyUiState(m.tabId);
         }
