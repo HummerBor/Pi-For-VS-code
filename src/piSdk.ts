@@ -53,9 +53,16 @@ export function loadPiSdk(): Promise<any> {
 async function doLoad(): Promise<any> {
   const root = findPiPackageRoot();
   if (!root) throw new PiNotFoundError("PATH 上没有 pi 命令，本地 node_modules 里也没有");
-  const entry = join(root, "dist", "index.js");
+  // M 刀（2026-09-23 启动慢实锤）：优先加载单文件 bundle（dist/bundle/index.js）——
+  // 库入口 dist/index.js 是 884 个文件的模块图，冷缓存/高负载下 import 实测 2~16s
+  // （scripts/probe-boot-timing.mjs：冷 15.7s / 热 1.2s；bundle 恒 ~0.4s）。终端 pi
+  // 秒开正因它跑的就是同目录的 bundle（dist/bundle/cli.js）——一文件 vs 八百文件的
+  // 读盘/杀软扫描差，不是代码变慢（用户问「版本倒退？」答案：这跳从第一天就有）。
+  // API 面两路等价（下方 required 校验兜兼容）；旧版包无 bundle 时回退库入口，不劣于现状。
+  const bundleEntry = join(root, "dist", "bundle", "index.js");
+  const entry = existsSync(bundleEntry) ? bundleEntry : join(root, "dist", "index.js");
   if (!existsSync(entry)) {
-    throw new PiNotFoundError("包目录存在但缺少 dist/index.js: " + root);
+    throw new PiNotFoundError("包目录存在但缺少入口: " + entry);
   }
   // 【宿主指路契约】给子 agent 扩展（~/.pi/agent/extensions/subagent 的 getPiInvocation）
   // 指明子进程入口。宿主里 argv[1] 不是 pi，子任务 cwd 也未必装了 pi（换项目就死，
