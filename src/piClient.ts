@@ -63,7 +63,7 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
         }
       }
     } catch { /* 目录结构变化不影响主链 */ }
-  })();
+  })().then(() => z2Probe(sdk.getAgentDir()));
   const p: Promise<any> = (async () => {
     // T 刀（2026-09-23 四行归案）：工厂的 modelRuntime 可注入——把它拆出来单独掋表
     //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
@@ -115,6 +115,82 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
   });
   return p;
 }
+/** Z2 刀（2026-09-23 实验18 刀口，用户点头打的对照探针）：位置×读法矩阵，
+ *  归案「Code.exe 读 ~/.pi 文件内容慢」。
+ *  轴一（位置）：原位 vs %TEMP% 副本 vs D 盘副本（顺带 __filename 对照 = 方法开销基线）；
+ *  轴二（读法/相位）：statSync / promises.readFile / open+read 拆分 / readFileSync。
+ *  判读：副本快 = 路径/文件属性相关（ADS/加密位/盯目录的过滤驱动）；副本一样慢 = 进程级；
+ *  open 慢 = 打开被拦，read 慢 = 读内容被拦。
+ *  纪律：排在 Y 刀 io 块之后串行跑（两探针并发互相陪绑会污染计时）；z2Done 保证一次性；
+ *  sync 组放最后跑（若 sync 也慢会短暂冻结扩展宿主——那本身就是答案，但别冻在探针中途）。 */
+let z2Done = false;
+async function z2Probe(agentDir: string): Promise<void> {
+  if (z2Done) return;
+  z2Done = true;
+  try {
+    const os = require("os");
+    const { join: pj } = require("path");
+    const src = pj(agentDir, "auth.json");
+    const locs: Array<[string, string]> = [["self", __filename], ["orig", src]];
+    let copyT = "";
+    const tmpCopy = pj(os.tmpdir(), "pi-z2-auth-copy.json");
+    const tc = Date.now();
+    try {
+      fs.copyFileSync(src, tmpCopy);
+      locs.push(["tmp", tmpCopy]);
+      copyT += " tmp=" + (Date.now() - tc) + "ms";
+    } catch { /* 复制失败就少一个对照 */ }
+    const dCopy = "D:\\pi-z2-auth-copy.json";
+    const td = Date.now();
+    try {
+      fs.copyFileSync(src, dCopy);
+      locs.push(["droot", dCopy]);
+      copyT += " droot=" + (Date.now() - td) + "ms";
+    } catch { /* D 盘根不可写就少一个对照 */ }
+    dbg("[boot] z2 copy" + copyT);
+    for (const [tag, p] of locs) {
+      const stat: number[] = [];
+      const asyncR: number[] = [];
+      const open: number[] = [];
+      const read: number[] = [];
+      const sync: number[] = [];
+      for (let i = 0; i < 2; i++) {
+        const t = Date.now();
+        try { fs.statSync(p); } catch { /* ignore */ }
+        stat.push(Date.now() - t);
+      }
+      for (let i = 0; i < 2; i++) {
+        const t = Date.now();
+        await fs.promises.readFile(p).catch(() => {});
+        asyncR.push(Date.now() - t);
+      }
+      for (let i = 0; i < 2; i++) {
+        let fh: any = null;
+        const to = Date.now();
+        try { fh = await fs.promises.open(p, "r"); } catch { /* ignore */ }
+        open.push(Date.now() - to);
+        const tr = Date.now();
+        if (fh) await fh.readFile().catch(() => {});
+        read.push(Date.now() - tr);
+        if (fh) await fh.close().catch(() => {});
+      }
+      for (let i = 0; i < 2; i++) {
+        const t = Date.now();
+        try { fs.readFileSync(p); } catch { /* ignore */ }
+        sync.push(Date.now() - t);
+      }
+      dbg(
+        "[boot] z2 loc=" + tag +
+          " stat=" + stat.join(",") +
+          " async=" + asyncR.join(",") +
+          " open=" + open.join(",") +
+          " read=" + read.join(",") +
+          " sync=" + sync.join(",")
+      );
+    }
+  } catch { /* 探针失败不影响主链 */ }
+}
+
 /** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」；
    *  W 刀：顺带全量预载 bundle 懒加载 chunks（首次 import = 模块加载+杀软扫描，
    *  唯一未排除的冷载卡顿嫌疑；提前到激活期全付掉，不命中也无害） */
