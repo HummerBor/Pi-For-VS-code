@@ -290,9 +290,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const view = this.view;
     if (!view) return;
     if (!this.duckUri) {
-      this.duckUri =
-        "data:image/png;base64," +
-        fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
+      const srcDir = path.join(this.extensionUri.fsPath, "media", "图源");
+      try {
+        const files = fs.readdirSync(srcDir).filter(f => /\.(svg|png|jpg|jpeg|gif|webp)$/i.test(f));
+        const pick = files[Math.floor(Math.random() * files.length)] || "pi-icon-small.svg";
+        const ext = path.extname(pick).toLowerCase();
+        const mime = ext === ".svg" ? "image/svg+xml" : ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+        this.duckUri = "data:" + mime + ";base64," + fs.readFileSync(path.join(srcDir, pick)).toString("base64");
+      } catch {
+        this.duckUri = "data:image/png;base64," + fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
+      }
     }
     const kind = vscode.window.activeColorTheme.kind;
     const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
@@ -491,6 +498,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // A 刀诊断日志：out 过滤落盘（摘要化见 msgBrief）。view 不在 / postMessage 被拒时
     // 如实标 DROP/FAIL——「日志说发了其实没发」比没日志更害人（盲区事故教训）。
     // 行为零变更：no-view 原样不发，postMessage 只是多接一个拒绝留痕回调。
+    if (msg.type === "render" && Array.isArray(msg.messages) && msg.messages.length === 0) {
+      // 每次回到欢迎态（新会话/清空）重抽一张图：图源在 media/图源，随机不重复
+      this.duckUri = "";
+      this.applyHtml();
+    }
     if (!this.view) {
       dbgLog("out " + msgBrief(msg) + " [DROP no-view]");
       return;
