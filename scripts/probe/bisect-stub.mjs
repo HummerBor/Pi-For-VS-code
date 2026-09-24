@@ -20,7 +20,7 @@ const sessionPath = process.argv[2];
 if (!sessionPath) { console.error("用法：node scripts/bisect-stub.mjs <会话jsonl>"); process.exit(1); }
 
 const escJ = (s) => s.replace(/<\/script/gi, "<\\/script");
-const i18n = require2(join(root, "out", "i18n.js"));
+const i18n = require2(join(root, "out", "core", "i18n.js"));
 
 function loadAll(path) {
   const messages = [];

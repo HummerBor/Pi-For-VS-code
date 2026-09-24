@@ -8,7 +8,7 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
-const { loadPiSdk } = require("../../out/piSdk.js");
+const { loadPiSdk } = require("../../out/pi/piSdk.js");
 const sdk = await loadPiSdk();
 const cwd = "d:/work/docs/pi test/pi-vscode";
 

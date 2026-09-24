@@ -10,7 +10,7 @@
  * 新增/修改消息时三处同步：发送方、接收方、本文件。
  */
 
-import type { SubagentSnapshot } from "./subagentSnapshot";
+import type { SubagentSnapshot } from "../domain/subagentSnapshot";
 
 /* ══════════════ webview → 宿主 ══════════════ */
 

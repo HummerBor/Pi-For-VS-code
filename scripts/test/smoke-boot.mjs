@@ -15,7 +15,7 @@ import { join, dirname } from "path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(import.meta.url);
-const { PiCore } = require(join(root, "out", "piCore.js"));
+const { PiCore } = require(join(root, "out", "core", "piCore.js"));
 
 const results = [];
 const check = (name, ok, detail) => {

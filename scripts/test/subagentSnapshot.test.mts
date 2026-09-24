@@ -10,7 +10,7 @@
  * 防御口径：形状不符返回 null（旧版扩展/其他工具的 details 不许弄崩面板）。
  */
 import assert from "node:assert";
-import { setDisplayNameLookup, subagentSnapshot } from "../../src/subagentSnapshot.ts";
+import { setDisplayNameLookup, subagentSnapshot } from "../../src/domain/subagentSnapshot.ts";
 
 let passed = 0;
 function ok(name: string, cond: boolean): void {
@@ -147,7 +147,7 @@ import {
   noteDispatchNames,
   resetDisplayNames,
   rewriteSubagentInput,
-} from "../../src/subagentNames.ts";
+} from "../../src/domain/subagentNames.ts";
 resetDisplayNames();
 setDisplayNameLookup(displayNameFor);
 

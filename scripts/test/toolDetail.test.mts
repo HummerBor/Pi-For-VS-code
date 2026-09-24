@@ -5,11 +5,11 @@
  * 总监验收扣分「不可复验」——本文件即补交的可复验凭证。
  *
  * 运行：npm run test:detail（Node ≥23.6 原生跑 TS，零依赖，不进 tsc 编译门禁）
- * 口径事实来源：src/toolDetail.ts 的 DETAIL_KEYS 顺序 + || 语义 + 首字符串兜底。
+ * 口径事实来源：src/domain/toolDetail.ts 的 DETAIL_KEYS 顺序 + || 语义 + 首字符串兜底。
  * 宿主流式行与 webview 历史重绘共用同一实现，以下期望值即两端的共同口径。
  */
 import assert from "node:assert";
-import { toolDetail } from "../../src/toolDetail.ts";
+import { toolDetail } from "../../src/domain/toolDetail.ts";
 
 let passed = 0;
 function check(name: string, actual: string, expected: string): void {

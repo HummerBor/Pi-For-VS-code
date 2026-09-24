@@ -6,22 +6,22 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { PiClient, setPiClientDebug } from "./piClient";
-import { displayNameFor } from "./subagentNames";
-import { setDisplayNameLookup } from "./subagentSnapshot";
+import { PiClient, setPiClientDebug } from "../pi/piClient";
+import { displayNameFor } from "../domain/subagentNames";
+import { setDisplayNameLookup } from "../domain/subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
 setPiClientDebug(dbgLog);
 // 显示名两层分离（2026-09-24）：快照显示名查表注入（subagentNames.ts 头注释），
 // 依赖倒置接法与 setPiClientDebug 同款——subagentSnapshot 保持零 import
 setDisplayNameLookup(displayNameFor);
-import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
+import { STRINGS, NATIVE_KEYS, Lang, bb } from "../core/i18n";
 import { getHtml } from "./webview-html";
-import { findPiPackageRoot, loadPiSdk } from "./piSdk";
-import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "./protocol";
-import { reverseApplyPatch } from "./patchRevert";
-import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "./piCore";
-import { fingerprintSessionsSync, listAllSyncFast } from "./sessionScan";
-import type { HostCapabilities, HostQuickItem } from "./hostCapabilities";
+import { findPiPackageRoot, loadPiSdk } from "../pi/piSdk";
+import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "../core/protocol";
+import { reverseApplyPatch } from "../domain/patchRevert";
+import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "../core/piCore";
+import { fingerprintSessionsSync, listAllSyncFast } from "../domain/sessionScan";
+import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
 /**
  * 有界广度搜索同名文件（2026-09-23「这些都点不开」刀2）：点开聊天里的光文件名时，

@@ -8,8 +8,8 @@ import { join, dirname } from "path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(import.meta.url);
-const { listAllSyncFast } = require(join(root, "out", "sessionScan.js"));
-const { loadPiSdk } = require(join(root, "out", "piSdk.js"));
+const { listAllSyncFast } = require(join(root, "out", "domain", "sessionScan.js"));
+const { loadPiSdk } = require(join(root, "out", "pi", "piSdk.js"));
 
 const results = [];
 const check = (name, ok, detail) => {

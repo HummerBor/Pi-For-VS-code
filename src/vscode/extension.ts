@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ChatPanelProvider } from "./panel";
-import { prewarmPiServices } from "./piClient";
-import { bb, Lang } from "./i18n";
+import { prewarmPiServices } from "../pi/piClient";
+import { bb, Lang } from "../core/i18n";
 
 export function activate(ctx: vscode.ExtensionContext): void {
   // Q 刀②（2026-09-23）：激活即后台预热 services——resourceLoader 全树扫描（冷 5~10s）

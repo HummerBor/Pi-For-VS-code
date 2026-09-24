@@ -4,10 +4,10 @@
  * 历史说明：曾以字符串数组内联在 panel.ts 里，故主体保留 ES5 var 风格。
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
-import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/protocol";
-import { toolDetail } from "../src/toolDetail";
-import type { SubagentSnapshot } from "../src/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
+import { STRINGS, type Lang } from "../src/core/i18n";
+import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
+import { toolDetail } from "../src/domain/toolDetail";
+import type { SubagentSnapshot } from "../src/domain/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 

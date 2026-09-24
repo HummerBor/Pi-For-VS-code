@@ -1,9 +1,9 @@
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import { join } from "path";
-import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "./protocol";
+import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "../core/protocol";
 import { loadPiSdk } from "./piSdk";
-import { makeSubagentNameGuard } from "./subagentNameGuard";
+import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
 let dbg: (s: string) => void = () => {};

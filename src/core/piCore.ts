@@ -12,11 +12,11 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { createHash } from "crypto";
-import { PiClient } from "./piClient";
+import { PiClient } from "../pi/piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
-import { subagentSnapshot, subagentSnapshotFull } from "./subagentSnapshot";
-import { toolDetail } from "./toolDetail";
+import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
+import { toolDetail } from "../domain/toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
 /** webview 消息路由里属于「VS Code 原生 UI 流程」的分支，由 adapter 实现本接口承接 */

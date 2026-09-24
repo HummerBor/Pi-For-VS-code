@@ -1,7 +1,7 @@
 /**
  * patchRevert 用例（工单七，裁决 11③ 配套）。
  *
- * 验证 src/patchRevert.ts 的逆向还原：用 pi 同款 jsdiff（createTwoFilesPatch，LF 归一化）
+ * 验证 src/domain/patchRevert.ts 的逆向还原：用 pi 同款 jsdiff（createTwoFilesPatch，LF 归一化）
  * 生成真实 patch，对「内容 → patch」做逆向打回，断言回到原文。
  * 逆向失败必须返回 null（不得硬打），篡改内容/垃圾输入各有用例把守。
  *
@@ -10,7 +10,7 @@
  */
 import assert from "node:assert";
 import { createRequire } from "node:module";
-import { reverseApplyPatch } from "../../src/patchRevert.ts";
+import { reverseApplyPatch } from "../../src/domain/patchRevert.ts";
 
 const require = createRequire(import.meta.url);
 // pi 包树内的 jsdiff（edit-diff.js 同款），仅测试期借用，不进 vsix

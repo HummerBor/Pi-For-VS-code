@@ -91,7 +91,7 @@ export function buildPreview(sessionPath) {
   sessionPath = sessionPath || readLastSession();
   const dist = join(root, "dist", "webview");
   const template = readFileSync(join(dist, "index.html"), "utf8");
-  const i18n = require(join(root, "out", "i18n.js")); // tsc 产物（全量 compile 先行），CJS require
+  const i18n = require(join(root, "out", "core", "i18n.js")); // tsc 产物（全量 compile 先行），CJS require
   const L = i18n.STRINGS.zh;
   const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version ?? "?";
 

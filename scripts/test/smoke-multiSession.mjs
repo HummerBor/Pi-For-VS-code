@@ -11,7 +11,7 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const dynamicImport = new Function("u", "return import(u)");
 
-// 定位 pi 包（与 src/piSdk.ts 同逻辑，本地 node_modules 优先）
+// 定位 pi 包（与 src/pi/piSdk.ts 同逻辑，本地 node_modules 优先）
 let root = null;
 try {
   root = dirname(require.resolve(join("@earendil-works/pi-coding-agent", "package.json")));

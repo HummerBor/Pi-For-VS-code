@@ -7,7 +7,7 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
 const t0 = Date.now();
-const { loadPiSdk } = require("../../out/piSdk.js");
+const { loadPiSdk } = require("../../out/pi/piSdk.js");
 const t1 = Date.now();
 const sdk = await loadPiSdk();
 const t2 = Date.now();

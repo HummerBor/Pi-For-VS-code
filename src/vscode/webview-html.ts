@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import { join } from "path";
-import { STRINGS, Lang } from "./i18n";
+import { STRINGS, Lang } from "../core/i18n";
 
 /**
  * webview HTML 装配：

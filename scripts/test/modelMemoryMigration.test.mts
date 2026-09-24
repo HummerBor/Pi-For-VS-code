@@ -1,5 +1,5 @@
 // 模型/思考记忆用例（零依赖，C 刀重建——原文件随 P0 回滚删除，队列 C 行「记忆/迁移用例
-// 同步重建」落此）。PiCore 私有方法经 out/piCore.js 直测（TS private 是编译期约束，运行时
+// 同步重建」落此）。PiCore 私有方法经 out/core/piCore.js 直测（TS private 是编译期约束，运行时
 // 可访问——原迁移用例同款姿势），桩 caps（getPersist/setPersist 内存表 + getCwd）。
 // C 刀口径（2026-09-22 拍板 1）：记忆只认本页签，无记忆绝不动手——影子 "_" 是页签间
 // 串扰源（t57 选 Free Models Router 经影子污染 t55，会话自带 MiMo 被覆写、上下文被重算
@@ -9,7 +9,7 @@ import { strict as assert } from "assert";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 // @ts-ignore 编译产物
-const { PiCore } = require("../../out/piCore.js");
+const { PiCore } = require("../../out/core/piCore.js");
 
 const WS = "d:\\work\\docs\\pi test\\pi-vscode";
 const WSKEY = WS.replace(/\\+$/, "").toLowerCase();
