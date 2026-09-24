@@ -52,6 +52,12 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   版本——看到本地版本号「变小/跳号」是发布流正常现象，**不是事故、不要再排查**；施工会话只
   交代码，版本/发版归 ship 所在会话管。
 - **协议同步**：新增/修改跨边界消息时三处同步——发送方、接收方、protocol.ts。
+- **子 agent 显示名/调用分类两层分离（2026-09-24 用户拍板）**：展示层显示调用方给的名字
+  （随便取，subagentNames 台账），实际调用归 pi 注册分类（subagentNameGuard 在 tool_call
+  归位，默认 worker 优先）——否则老报 Unknown agent；pi 内容零改动。编译红线：
+  subagentSnapshot 保持零 import（webview 共享编译无 node 类型 + node 裸跑用例相对导入要
+  扩展名），显示名查表经 setDisplayNameLookup 依赖倒置注入（panel.ts，与 setPiClientDebug
+  同款）；subagentNames 是纯逻辑叶，别往里 import 东西/加 fs（宿主半边在 subagentNameGuard）。
 - **会话必须落盘（审计红线，2026-09-22 用户拍板）**：插件任何路径禁止 `--no-session`/
   ephemeral（piClient 遇之显式抛错，禁令焊死在适配器入口）——会话文件是 pi 操作的唯一
   审计痕迹，「无痕模式」删文件等破坏性操作无从追查。piChat.sessionMode 只留 continue/new，
@@ -79,6 +85,7 @@ src/            宿主侧（extension.ts 入口 / panel.ts VS Code adapter / piC
                 hostCapabilities.ts 宿主能力接口 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
                 protocol.ts 消息协议 / patchRevert.ts edit patch 逆向还原（工单七）/
                 toolDetail.ts 共享摘要 / subagentSnapshot.ts 子 agent 监控快照 /
+                subagentNames.ts 子 agent 显示名台账/归位算法 / subagentNameGuard.ts 派发分类归位钩子 /
                 sessionScan.ts 会话列表同步快扫（R′刀）/ i18n.ts / webview-html.ts 装配）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）

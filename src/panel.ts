@@ -7,8 +7,13 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "./piClient";
+import { displayNameFor } from "./subagentNames";
+import { setDisplayNameLookup } from "./subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
 setPiClientDebug(dbgLog);
+// 显示名两层分离（2026-09-24）：快照显示名查表注入（subagentNames.ts 头注释），
+// 依赖倒置接法与 setPiClientDebug 同款——subagentSnapshot 保持零 import
+setDisplayNameLookup(displayNameFor);
 import { STRINGS, NATIVE_KEYS, Lang, bb } from "./i18n";
 import { getHtml } from "./webview-html";
 import { findPiPackageRoot, loadPiSdk } from "./piSdk";

@@ -15,6 +15,7 @@
  */
 
 export interface SubagentTaskSnapshot {
+  /** 显示名：调用方给的名字优先（随便取），缺则分类名（两层分离，见 setDisplayNameLookup） */
   agent: string;
   /** 任务描述（单行截断） */
   task: string;
@@ -211,13 +212,25 @@ function finalOutput(r: Record<string, unknown>, max: number): string {
   return raw ? oneLine(raw, max) : "";
 }
 
+/**
+ * 显示名查表（两层分离，2026-09-24）：宿主激活时注入（panel.ts，与 setPiClientDebug 同款
+ * 依赖倒置）——本文件保持零 import（webview 共享编译无 node 类型、node 裸跑用例相对导入
+ * 要扩展名，两头都吃这一口）。key=完整任务文本（details.results[].task 原文），
+ * 台账在 subagentNames.ts；未注入/查不到回退分类名。
+ */
+let displayNameLookup: ((task: string) => string | undefined) | undefined;
+export function setDisplayNameLookup(fn: (task: string) => string | undefined): void {
+  displayNameLookup = fn;
+}
+
 function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean): SubagentTaskSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.agent !== "string") return null;
   const { items, total } = itemsFromMessages(r.messages, itemTail, full);
   return {
-    agent: r.agent,
+    // 显示名两层分离（2026-09-24）：调用方给的名字优先（随便取），回退分类名
+    agent: (typeof r.task === "string" && displayNameLookup ? displayNameLookup(r.task) : undefined) ?? r.agent,
     task: typeof r.task === "string" ? (full ? capText(r.task, 2000) : oneLine(r.task, TASK_MAX)) : "",
     status: taskStatus(r),
     step: typeof r.step === "number" ? r.step : undefined,

@@ -10,7 +10,7 @@
  * 防御口径：形状不符返回 null（旧版扩展/其他工具的 details 不许弄崩面板）。
  */
 import assert from "node:assert";
-import { subagentSnapshot } from "../src/subagentSnapshot.ts";
+import { setDisplayNameLookup, subagentSnapshot } from "../src/subagentSnapshot.ts";
 
 let passed = 0;
 function ok(name: string, cond: boolean): void {
@@ -138,5 +138,46 @@ const endTurn = subagentSnapshot({
 });
 ok("end 收尾识别", endTurn !== null);
 if (endTurn) eq("end → done", endTurn.tasks[0].status, "done");
+
+/* 第 8 组：两层分离（2026-09-24 拍板）——展示显示调用名（随便取），派发归 pi 分类
+   （不然老报名字错误）；台账按任务文本对号，缺则回退分类名 */
+import {
+  classifyDispatchName,
+  displayNameFor,
+  noteDispatchNames,
+  resetDisplayNames,
+  rewriteSubagentInput,
+} from "../src/subagentNames.ts";
+resetDisplayNames();
+setDisplayNameLookup(displayNameFor);
+
+ok("已注册分类原样", classifyDispatchName("scout", ["scout", "worker"], "worker") === "scout");
+ok("未注册名归默认分类", classifyDispatchName("test-agent", ["scout", "worker"], "worker") === "worker");
+ok("无默认取第一个", classifyDispatchName("test-agent", ["planner", "scout"], "planner") === "planner");
+ok("注册表为空原样（报错权留给 pi）", classifyDispatchName("test-agent", [], null) === "test-agent");
+
+const input: Record<string, unknown> = {
+  agent: "test-agent",
+  task: "T-single",
+  tasks: [{ agent: "general-purpose", task: "T-par" }],
+  chain: [{ agent: "helper", task: "T-chain" }],
+};
+// 台账记原名（必须在归位【前】记，见 subagentNames 头注释）——顺序与真实钩子一致
+noteDispatchNames(input);
+rewriteSubagentInput(input, (n) => classifyDispatchName(n, ["scout", "worker"], "worker"));
+eq("single 槽归位", input.agent, "worker");
+eq("tasks 槽归位", (input.tasks as any[])[0].agent, "worker");
+eq("chain 槽归位", (input.chain as any[])[0].agent, "worker");
+eq("task 文本不动", (input.tasks as any[])[0].task, "T-par");
+
+// 快照显示原名（台账）而非分类名（details）
+const renamed = subagentSnapshot({
+  mode: "single",
+  results: [{ agent: "worker", task: "T-single", exitCode: 0, stopReason: "end", usage: {}, messages: [] }],
+});
+ok("改名快照识别", renamed !== null);
+if (renamed) eq("显示调用名而非分类名", renamed.tasks[0].agent, "test-agent");
+if (renamed) eq("台账里是原名", displayNameFor("T-single"), "test-agent");
+eq("台账缺回退分类名", displayNameFor("没见过的任务"), undefined);
 
 console.log(`subagentSnapshot: ${passed} 项全过`);
