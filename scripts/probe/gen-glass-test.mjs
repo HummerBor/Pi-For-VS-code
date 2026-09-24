@@ -10,7 +10,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, "..");
+const root = join(here, "..", "..");
 const html = readFileSync(join(root, "dist", "webview", "preview.html"), "utf8");
 
 // lastIndexOf：payload（会话数据）里可能内嵌 </body>，必须锚最后一个

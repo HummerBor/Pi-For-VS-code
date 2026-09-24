@@ -14,7 +14,7 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, "..");
+const root = join(here, "..", "..");
 const require = createRequire(import.meta.url);
 
 /** 上次灌入的会话路径状态文件：vite closeBundle 重生成预览页时读它自动重灌，

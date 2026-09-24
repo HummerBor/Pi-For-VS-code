@@ -6,7 +6,7 @@ import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { join, dirname } from "path";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(import.meta.url);
 const { listAllSyncFast } = require(join(root, "out", "sessionScan.js"));
 const { loadPiSdk } = require(join(root, "out", "piSdk.js"));

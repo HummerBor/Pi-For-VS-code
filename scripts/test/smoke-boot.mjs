@@ -13,7 +13,7 @@ import { readdirSync, statSync, mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(import.meta.url);
 const { PiCore } = require(join(root, "out", "piCore.js"));
 

@@ -17,7 +17,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const cwd = __dirname + "/..";
+const cwd = __dirname + "/../..";
 
 // ── 输入读取：Windows 主场景用 PowerShell Read-Host ────────────
 // 选型理由：process.stdin.read(1) 紧循环阻塞事件循环 → I/O 永不处理

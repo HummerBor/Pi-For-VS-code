@@ -31,7 +31,7 @@ if (!target) {
   target = `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
 }
 
-const local = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8")).version;
+const local = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8")).version;
 if (target <= local) {
   console.warn(`[bump-market] ⚠ 目标 ${target} ≤ 本地 package.json 版本 ${local}`);
   console.warn("[bump-market]   本地测试号高于市场属正常（本地包从未发布）；但若目标 < 市场版本，publish 会被拒收");

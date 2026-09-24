@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(here, "..", "dist", "webview", "preview.html"), "utf8");
+const html = readFileSync(join(here, "..", "..", "dist", "webview", "preview.html"), "utf8");
 const marker = "window.__wvLog";
 const idx = html.indexOf(marker);
 if (idx < 0) throw new Error("stub 未找到（preview.html 里没有 " + marker + "）");

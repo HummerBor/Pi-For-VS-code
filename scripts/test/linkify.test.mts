@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 
-const root = path.dirname(path.dirname(url.fileURLToPath(import.meta.url)));
+const root = path.dirname(path.dirname(path.dirname(url.fileURLToPath(import.meta.url))));
 const src = fs.readFileSync(path.join(root, "webview", "main.ts"), "utf8");
 const lines = src.split("\n");
 

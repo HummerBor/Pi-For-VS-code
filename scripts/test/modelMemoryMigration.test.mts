@@ -9,7 +9,7 @@ import { strict as assert } from "assert";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 // @ts-ignore 编译产物
-const { PiCore } = require("../out/piCore.js");
+const { PiCore } = require("../../out/piCore.js");
 
 const WS = "d:\\work\\docs\\pi test\\pi-vscode";
 const WSKEY = WS.replace(/\\+$/, "").toLowerCase();

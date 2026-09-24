@@ -9,7 +9,7 @@
  * 宿主流式行与 webview 历史重绘共用同一实现，以下期望值即两端的共同口径。
  */
 import assert from "node:assert";
-import { toolDetail } from "../src/toolDetail.ts";
+import { toolDetail } from "../../src/toolDetail.ts";
 
 let passed = 0;
 function check(name: string, actual: string, expected: string): void {

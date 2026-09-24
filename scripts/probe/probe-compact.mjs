@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 import { existsSync } from "node:fs";
 // exports 映射封锁子路径，require.resolve 解不了——直接试两个已知安装位置
 const candidates = [
-  join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@earendil-works", "pi-coding-agent"),
+  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules", "@earendil-works", "pi-coding-agent"),
   join(process.env.APPDATA ?? "", "nvm", "v24.19.0", "node_modules", "@earendil-works", "pi-coding-agent"),
 ];
 const root = candidates.find((c) => existsSync(join(c, "dist", "index.js")));

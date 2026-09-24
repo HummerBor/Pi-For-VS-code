@@ -10,11 +10,11 @@
  */
 import assert from "node:assert";
 import { createRequire } from "node:module";
-import { reverseApplyPatch } from "../src/patchRevert.ts";
+import { reverseApplyPatch } from "../../src/patchRevert.ts";
 
 const require = createRequire(import.meta.url);
 // pi 包树内的 jsdiff（edit-diff.js 同款），仅测试期借用，不进 vsix
-const Diff = require("../node_modules/@earendil-works/pi-coding-agent/node_modules/diff/libcjs/index.js");
+const Diff = require("../../node_modules/@earendil-works/pi-coding-agent/node_modules/diff/libcjs/index.js");
 
 /** 复刻 pi edit.js 的 patch 生成：去 BOM + LF 归一化后 createTwoFilesPatch */
 function makePatch(oldText: string, newText: string): string {

@@ -10,9 +10,9 @@ import vm from "vm";
 import { createRequire } from "module";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, "..");
+const root = join(here, "..", "..");
 const require2 = createRequire(import.meta.url);
-const { buildPreview } = await import("file://" + join(root, "scripts", "preview-html.mjs").replace(/\\/g, "/"));
+const { buildPreview } = await import("file://" + join(root, "scripts", "build", "preview-html.mjs").replace(/\\/g, "/"));
 
 // 直接从 preview-html.mjs 拿内部函数不行（未导出 loadSessionFile），这里复制解析逻辑：
 // —— 若后续 preview-html.mjs 改动，需同步（调试辅助脚本，可随时删）
