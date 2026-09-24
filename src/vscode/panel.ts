@@ -290,7 +290,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const view = this.view;
     if (!view) return;
     if (!this.duckUri) {
-      const srcDir = path.join(this.extensionUri.fsPath, "media", "图源");
+      const srcDir = path.join(this.extensionUri.fsPath, "media", "source");
       try {
         const files = fs.readdirSync(srcDir).filter(f => /\.(svg|png|jpg|jpeg|gif|webp)$/i.test(f));
         const pick = files[Math.floor(Math.random() * files.length)] || "pi-icon-small.svg";
@@ -398,7 +398,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         for (const [, c] of this.cores) void c.postUiState();
         // 工单十三二刀-3：后台预热 listSessions → 填 mtime 缓存，首次点击也毫秒级出列。
         // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
-        void listSessions().catch(() => {});
+        void listSessions().catch(() => { });
       }
       // 工单十五刀2：标签栏控制消息是 panel 级（不过核心），先于核心路由拦截
       if (m.type === "tabNew") { this.handleTabNew(); return; }
@@ -829,7 +829,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             `pickSession 后台刷新就绪 ${(Date.now() - t0).toFixed(0)}ms（指纹变化→原地更新）`
           );
         })
-        .catch(() => {}); // 后台刷新失败 → 列表维持旧数据，不打扰用户
+        .catch(() => { }); // 后台刷新失败 → 列表维持旧数据，不打扰用户
     } else {
       // 工单十三二刀-2：先弹占位 busy 项，立即反馈（不等 listSessions），完成后原地填充。
       // 「点历史零反馈」的直接治理：原来 showQuickPick 等 listSessions 完才弹，等待期只看到
@@ -1000,9 +1000,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           const data = fs.readFileSync(uri.fsPath).toString("base64");
           const mime =
             ext === ".png" ? "image/png" :
-            ext === ".gif" ? "image/gif" :
-            ext === ".webp" ? "image/webp" :
-            ext === ".bmp" ? "image/bmp" : "image/jpeg";
+              ext === ".gif" ? "image/gif" :
+                ext === ".webp" ? "image/webp" :
+                  ext === ".bmp" ? "image/bmp" : "image/jpeg";
           images.push({
             data,
             mimeType: mime,
@@ -1122,14 +1122,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const pos = new vscode.Position(Math.max(0, line - 1), col ? col - 1 : 0);
         sel = new vscode.Range(pos, pos);
       }
-    // 打开在「用户正在用的那一列」：优先活动编辑器组，否则第一组——不另起新栏
-    // （不用 ViewColumn.Active：焦点在侧边栏 webview 时它有歧义，实测仍可能新分一栏）
-    const openCol = this.bestViewColumn();
-    await vscode.window.showTextDocument(doc.uri, {
-      viewColumn: openCol,
-      preview: true,
-      selection: sel,
-    });
+      // 打开在「用户正在用的那一列」：优先活动编辑器组，否则第一组——不另起新栏
+      // （不用 ViewColumn.Active：焦点在侧边栏 webview 时它有歧义，实测仍可能新分一栏）
+      const openCol = this.bestViewColumn();
+      await vscode.window.showTextDocument(doc.uri, {
+        viewColumn: openCol,
+        preview: true,
+        selection: sel,
+      });
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.openFail + (err?.message ?? err) });
     }
