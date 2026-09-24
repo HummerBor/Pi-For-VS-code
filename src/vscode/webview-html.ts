@@ -15,7 +15,9 @@ let cachedJs = "";
 let cachedCss = "";
 
 function loadAssets(): { template: string; js: string; css: string } {
-  const dir = join(__dirname, "..", "dist", "webview");
+  // 注：__dirname = out/vscode（刀 B 分层后 webview-html 下探一层），故 ../../ 到项目根；
+  // 少一个 .. 会去 out/dist/webview（ENOENT）→ applyHtml 抛 → 「还原视图时出错」
+  const dir = join(__dirname, "..", "..", "dist", "webview");
   if (!cachedTemplate) cachedTemplate = readFileSync(join(dir, "index.html"), "utf8");
   if (!cachedJs) cachedJs = readFileSync(join(dir, "main.js"), "utf8");
   if (!cachedCss) {
@@ -43,7 +45,7 @@ export function getHtml(
     nonce,
     duckUri,
     // 版本指纹（底栏 #ver 显示）：装了新包但 webview 跑旧资源时一眼可辨（浮窗位置事故）
-    version: JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")).version ?? "?",
+    version: JSON.parse(readFileSync(join(__dirname, "..", "..", "package.json"), "utf8")).version ?? "?",
     // 样式注入整体在 TS 侧拼装：模板里不放 CSS，避免编辑器把 {{css}} 占位符当真 CSS 报错
     headAssets:
       "<style>" + css + "</style>" +

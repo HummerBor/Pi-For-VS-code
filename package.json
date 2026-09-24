@@ -124,6 +124,7 @@
     "test:migration": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/modelMemoryMigration.test.mts",
     "test:linkify": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/linkify.test.mts",
     "test:listfast": "node scripts/test/listfast.test.mjs",
+    "test:html": "node scripts/test/html.test.mjs",
     "package": "node scripts/release/bump-version.mjs && npm run compile && npx @vscode/vsce package",
     "release": "npm run compile && npx @vscode/vsce package",
     "ship": "node scripts/release/bump-from-market.mjs && npm run release && node scripts/release/publish.js",
