@@ -20,6 +20,7 @@ import { findUnderDir, grepInPiPackage } from "./fileFinder";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "../core/protocol";
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "../core/piCore";
 import { ChangesController } from "./changes";
+import { PiSetup } from "./piSetup";
 import { peekListAllSlot, toSessionInfos, listSessions, listAllCached, samePath, type SessionInfo } from "./sessionCache";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
@@ -56,8 +57,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private sessionPickerShown = false;
   /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
   private piCheckDone = false;
-  /** 本窗口是否已提醒过配置凭证（避免反复打扰） */
-  private authOfferShown = false;
   private selTimer: NodeJS.Timeout | undefined;
   private editorDisposables: vscode.Disposable[] = [];
   /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换，globalState 持久化；变更须同步 core.lang */
@@ -74,6 +73,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     post: (msg, tabId) => this.post(msg, tabId),
     getL: () => this.L,
     getActiveTabId: () => this.activeTabId,
+  });
+  /** pi 环境管理（鉴权/安装，刀 C 抽到 piSetup.ts）——host 桥在此注入 */
+  private piSetup = new PiSetup({
+    post: (msg, tabId) => this.post(msg, tabId),
+    getL: () => this.L,
+    getCore: () => this.core,
   });
 
   constructor(
@@ -435,21 +440,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (!this.piCheckDone) {
         this.piCheckDone = true;
         void (async () => {
-          const v = await this.piVersion();
+          const v = await this.piSetup.piVersion();
           if (v === null) {
             const pick = await vscode.window.showErrorMessage(
               this.L.piNotDetected,
               this.L.installPiBtn,
               this.L.openNodejs
             );
-            if (pick === this.L.installPiBtn) await this.installPi();
+            if (pick === this.L.installPiBtn) await this.piSetup.installPi();
             else if (pick === this.L.openNodejs)
               void vscode.env.openExternal(vscode.Uri.parse("https://nodejs.org"));
           } else {
             const c = this.core.ensureClient();
             void c;
             // pi 已装但没配过模型凭证 → 引导配置
-            void this.maybeOfferKeyConfig(false);
+            void this.piSetup.maybeOfferKeyConfig(false);
           }
         })();
       } else if (!this.core.clientRef) {
@@ -1387,7 +1392,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     items.push({
       label: this.L.sApiKey,
       run: async () => {
-        await this.configApiKey();
+        await this.piSetup.configApiKey();
       },
     });
     items.push({
@@ -1399,13 +1404,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     items.push({
       label: this.L.sManageAuth,
       run: async () => {
-        await this.manageAuth();
+        await this.piSetup.manageAuth();
       },
     });
     items.push({
       label: this.L.sInstall,
       run: async () => {
-        await this.installPi();
+        await this.piSetup.installPi();
       },
     });
     items.push({
@@ -1524,188 +1529,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** auth.json 里是否已有凭证 */
-  private hasAuthConfig(): boolean {
-    try {
-      const data = JSON.parse(
-        fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8")
-      );
-      return Object.keys(data).length > 0;
-    } catch {
-      return false;
-    }
-  }
-
-  /** 还没有模型凭证时引导用户去配 key（force=安装完立即弹） */
-  private async maybeOfferKeyConfig(force: boolean): Promise<void> {
-    if (this.hasAuthConfig()) return;
-    if (force) {
-      const pick = await vscode.window.showInformationMessage(
-        this.L.keyReady,
-        this.L.configNow,
-        this.L.later
-      );
-      if (pick === this.L.configNow) await this.configApiKey();
-    } else if (!this.authOfferShown) {
-      this.authOfferShown = true; // 每次窗口只提醒一次，不反复打扰
-      const pick = await vscode.window.showInformationMessage(
-        this.L.noAuthDetected,
-        this.L.configKeyBtn,
-        this.L.loginBtn,
-        this.L.later
-      );
-      if (pick === this.L.configKeyBtn) await this.configApiKey();
-      else if (pick === this.L.loginBtn) {
-        const c = this.core.ensureClient();
-        this.post({ type: "user", text: "/login" });
-        await c.prompt("/login");
-      }
-    }
-  }
-
-  /** 检测 pi 是否可用，返回版本号字符串，不可用返回 null。
-   *  10s 超时杀掉子进程兑底，防 pi --version 挂起时 Promise 永不 resolve */
-  private piVersion(): Promise<string | null> {
-    return new Promise((resolve) => {
-      const p = spawn("pi", ["--version"], {
-        shell: process.platform === "win32",
-        windowsHide: true,
-      });
-      let out = "";
-      let done = false;
-      const finish = (v: string | null) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(v);
-      };
-      const timer = setTimeout(() => {
-        try {
-          p.kill();
-        } catch {
-          // ignore
-        }
-        finish(null);
-      }, 10000);
-      p.stdout?.on("data", (d: Buffer) => (out += d.toString()));
-      p.on("error", () => finish(null));
-      p.on("close", (code) => finish(code === 0 ? out.trim().split("\n")[0] || "ok" : null));
-    });
-  }
-
-  /** 一键安装/更新 pi（npm 全局装），进度与结果显示在面板 */
-  private async installPi(): Promise<void> {
-    this.post({ type: "status", text: this.L.installing });
-    this.post({ type: "notice", text: "📦 npm install -g @earendil-works/pi-coding-agent…" });
-    const proc = spawn("npm", ["install", "-g", "@earendil-works/pi-coding-agent"], {
-      shell: true,
-      windowsHide: true,
-    });
-    let tail = "";
-    const onOut = (d: Buffer) => (tail = (tail + d.toString()).slice(-300));
-    proc.stdout?.on("data", onOut);
-    proc.stderr?.on("data", onOut);
-    proc.on("error", () => {
-      this.post({ type: "status", text: "" });
-      void vscode.window.showErrorMessage(
-        this.L.npmMissing
-      );
-    });
-    proc.on("close", (code) => {
-      this.post({ type: "status", text: "" });
-      if (code === 0) {
-        this.post({ type: "notice", text: this.L.installDone });
-        // 装完后（重新）拉起客户端；还没有凭证则直接弹 key 配置
-        if (!this.core.clientRef?.running) this.core.disposeClient();
-        const c = this.core.ensureClient();
-        void c;
-        void this.maybeOfferKeyConfig(true);
-      } else {
-        void vscode.window.showErrorMessage(this.L.installFail + tail.slice(-200));
-      }
-    });
-  }
-
-  /** 配置模型 API key：写入 ~/.pi/agent/auth.json（与 pi 的 /login 存储格式一致） */
-  private async configApiKey(): Promise<void> {
-    const providers = [
-      { id: "zai", label: this.L.providerZai },
-      { id: "zai-coding-cn", label: this.L.providerZaiCn },
-      { id: "openrouter", label: "OpenRouter" },
-      { id: "anthropic", label: "Anthropic" },
-      { id: "openai", label: "OpenAI" },
-      { id: "deepseek", label: "DeepSeek" },
-      { id: "google", label: "Google Gemini" },
-      { id: "kimi-coding", label: "Kimi For Coding" },
-      { id: "qwen-token-plan-cn", label: this.L.providerQwen },
-      { id: "xiaomi", label: this.L.providerXiaomi },
-    ];
-    const pick = await vscode.window.showQuickPick(
-      providers.map((p) => ({ label: p.label, description: p.id, id: p.id })),
-      { placeHolder: this.L.pickProvider }
-    );
-    if (!pick) return;
-    const key = await vscode.window.showInputBox({
-      prompt: this.L.enterKey,
-      password: true,
-    });
-    if (!key) return;
-    const file = path.join(os.homedir(), ".pi", "agent", "auth.json");
-    let data: any = {};
-    try {
-      data = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
-      // 文件不存在/损坏 → 新建
-    }
-    data[pick.id] = { type: "api_key", key };
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: this.L.keySaved + pick.label });
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.saveFail + (err?.message ?? err) });
-    }
-  }
-
-  /** 查看/删除已保存的凭证（auth.json） */
-  private async manageAuth(): Promise<void> {
-    const file = path.join(os.homedir(), ".pi", "agent", "auth.json");
-    let data: any = {};
-    try {
-      data = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
-      this.post({ type: "notice", text: this.L.noAuth });
-      return;
-    }
-    const ids = Object.keys(data);
-    if (!ids.length) {
-      this.post({ type: "notice", text: this.L.noAuth });
-      return;
-    }
-    const pick = await vscode.window.showQuickPick(
-      ids.map((id) => ({
-        label: id,
-        description: data[id]?.type ?? "",
-        detail: this.L.authDetail,
-        id,
-      })),
-      { placeHolder: this.L.authPicker }
-    );
-    if (!pick) return;
-    const yes = await vscode.window.showWarningMessage(
-      this.L.delAuthAsk,
-      { modal: true },
-      this.L.delete
-    );
-    if (yes !== this.L.delete) return;
-    delete data[pick.id];
-    try {
-      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: this.L.deleted + pick.id });
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.delFail + (err?.message ?? err) });
-    }
-  }
 
   private async pickModel(): Promise<void> {
     const client = this.core.ensureClient();
@@ -1784,7 +1607,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void vscode.window
       .showErrorMessage(this.L.piStartFail + err.message, this.L.installPiBtn)
       .then((pick) => {
-        if (pick === this.L.installPiBtn) void this.installPi();
+        if (pick === this.L.installPiBtn) void this.piSetup.installPi();
       });
   }
 
