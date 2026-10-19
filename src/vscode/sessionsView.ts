@@ -87,8 +87,12 @@ export function registerSessionsView(ctx: vscode.ExtensionContext): SessionsTree
       void ChatPanelProvider.openOrFocusSession(file);
     }),
     // 列表删除按钮（刀5：悬停内联 + 右键菜单同命令）：守卫/确认/落盘复用 panel
-    // deleteSessionFile 单一真相；结果码 → 原生通知（双语 bb，同面板原生弹窗口径）
-    vscode.commands.registerCommand("piChat.deleteSession", async (file: string) => {
+    // deleteSessionFile 单一真相；结果码 → 原生通知（双语 bb，同面板原生弹窗口径）。
+    // 【坑】view/item/context 菜单触发时参数是树元素对象（SessionItem），不是 file 字符串
+    //（item.command.arguments 只对行点击生效）——不归一化就把对象塞进 realpathSync →
+    // 「p.replace is not a function」（2026-10-19 实测），字符串/元素双收
+    vscode.commands.registerCommand("piChat.deleteSession", async (arg: string | SessionItem) => {
+      const file = typeof arg === "string" ? arg : arg?.file;
       if (!file) return;
       const r = await ChatPanelProvider.deleteSessionFile(file);
       if (r.status === "deleted") void vscode.window.showInformationMessage(bb("delSessionDone") + r.name);

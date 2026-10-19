@@ -30,9 +30,11 @@ export interface SessionInfo {
   time: string;
 }
 
-/** 路径相等判断（忽略大小写和分隔符差异，Windows 友好） */
-export function samePath(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
+/** 路径相等判断（忽略大小写和分隔符差异，Windows 友好）。
+ *  类型守卫：菜单/命令参数可能误传对象（2026-10-19 deleteSession 传入 SessionItem →
+ *  p.replace is not a function），非字符串一律不等，不炸调用方 */
+export function samePath(a?: unknown, b?: unknown): boolean {
+  if (typeof a !== "string" || typeof b !== "string" || !a || !b) return false;
   const norm = (p: string) =>
     p.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
   return norm(a) === norm(b);

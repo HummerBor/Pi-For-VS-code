@@ -1155,6 +1155,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   static async deleteSessionFile(file: string): Promise<
     { status: "deleted"; name: string } | { status: "cancelled" | "open" | "notfound" | "outside" } | { status: "failed"; err: string }
   > {
+    // 入参硬守卫：非字符串/空串直接拒（命令参数误传对象时不许炸在 realpathSync 里）
+    if (typeof file !== "string" || !file) return { status: "notfound" };
     // 工单十五刀3：被任意标签/面板打开的会话都不可删（pi 还在追加写入）；刀3 跨实例版
     if (ChatPanelProvider.findHolder(file)) return { status: "open" };
     const root = path.join(os.homedir(), ".pi", "agent", "sessions");
