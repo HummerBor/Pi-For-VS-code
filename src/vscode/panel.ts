@@ -21,7 +21,7 @@ import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, Tool
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend } from "../core/piCore";
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
-import { listSessions, samePath, type SessionInfo } from "./sessionCache";
+import { listSessions, invalidateListMemo, samePath, type SessionInfo } from "./sessionCache";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -987,6 +987,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (yes !== this.L.delete) return;
     try {
       fs.rmSync(real, { force: true });
+      invalidateListMemo(); // 已知变更立即失效应答缓存：列表不能把删掉的会话再拖 10s 旧账
       this.post({ type: "notice", text: this.L.delSessionDone + path.basename(real) });
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.delSessionFail + (err?.message ?? err) });

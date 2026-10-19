@@ -125,13 +125,16 @@ try { msgHandler && msgHandler({ type: "wvError", kind: "error", message: "test 
 const errForwarded = posted.length - postedBeforeErr;
 
 setTimeout(async () => {
-  // 不变量⑥：会话列表并发在途合并（「点多次会话列表才有数据」事故）——同 scope 并发
-  // 共享同一 promise，4 路并发必须拿到同一份引用（引用相等 = 只调了一次 pi listAll）
+  // 不变量⑥：会话列表「在途合并 + 应答复用」（「点多次会话列表才有数据」+「每次点击都重扫」
+  //  两案）——并发共享同一 promise（引用相等 = 只调了一次 pi listAll），TTL 内再次查询
+  //  同样拿缓存引用（不重扫）
   let deduped = true;
   try {
     const sc = require("../../out/vscode/sessionCache.js");
     const four = await Promise.all([sc.listNative(), sc.listNative(), sc.listNative(), sc.listNative()]);
     deduped = four.every((r) => r === four[0]);
+    const again = await sc.listNative();
+    if (again !== four[0]) deduped = false; // TTL 内重查 = 重扫，锁挂
   } catch (e) {
     deduped = false;
   }
@@ -189,10 +192,10 @@ setTimeout(async () => {
   }
   // 不变量⑥（续）：见上方并发去重检测
   if (!deduped) {
-    console.log("❌ 会话列表并发未合并（连点 N 次 = 调 N 遍 pi listAll，列表卡十几秒）");
+    console.log("❌ 会话列表未复用/未合并（连点 = 反复重扫 pi listAll，列表卡十几秒）");
     bad++;
   } else {
-    console.log("✅ 会话列表并发在途合并（多路共享一次 pi listAll）");
+    console.log("✅ 会话列表在途合并 + TTL 复用（多路一次 pi listAll，重查不重扫）");
   }
   console.log(bad ? "❌ " + bad + " 项不过" : "✅ 全绿");
   process.exit(bad ? 1 : 0);

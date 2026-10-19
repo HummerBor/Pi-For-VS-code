@@ -14,9 +14,10 @@
  * R′刀当年「pi listAll 撞服务闸 31~38s」的前提 2026-10-19 复测不成立：
  * pi listAll 2.1s / list(cwd) 1.2s（本机实测），快扫自己冷扫反而 2.1s、拥堵下 22s。
  *
- * 保留的只有一条：**在途合并**（同 scope 并发共享同一 promise）。那不是缓存
- * （跑完不留任何状态），是并发卫生：用户连点 N 次不该起 N 个 pi listAll 各自解析
- * 几百 MB（实测把 2s 拖成 22s，见 panel-load.test 第⑥把锁）。
+ * 保留的只有两条，都不是轮子也不是记录：
+ * 1. **在途合并**（同 scope 并发共享同一 promise）——并发卫生：连点 N 次不该起 N 个
+ *    pi listAll 各自解析几百 MB（实测 2s 拖成 22s，见 panel-load.test 第⑥把锁）；
+ * 2. **应答复用**（内存 TTL 10s）——「每次点击都重扫」的直接治理，见 listNative 头注释。
  */
 import { loadPiSdk } from "../pi/piSdk";
 
@@ -42,29 +43,46 @@ type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
 /** 展示链需要的轻量字段（allMessagesText 之类重串不进展示层） */
 export type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
 
-/** pi 原生列表调用 + 在途合并。scope 两级：cwd=项目内（pi list）、不传=全量（listAll）。
- *  进度回调透传 pi 的 onProgress（loaded/total），展示层拿去做活的加载进度（pi -r 同款体验） */
+/** 查询应答复用（2026-10-19 用户「每次点击都重扫？」拍板）：同一查询在 TTL 内直接复用，
+ *  不再每次付 pi listAll 的 1~2s 全量解析。【这不是记录副本】不落盘、不留派生真相——
+ *  会话 jsonl 仍是唯一记录（审计红线），这里只是「别重复问同一个问题」的应答缓存：
+ *  TTL 一到照常问 pi，已知变更（删会话）处显式失效。早前的错误是把同类数据**落盘**
+ *  + 自研第二套扫描器，不是缓存本身 */
+const LIST_MEMO_TTL_MS = 10_000;
+const memo = new Map<string, { at: number; result: PiSessionProjection[] }>();
+/** 已知变更处立即失效（删除会话后列表不能再拖 10s 旧账） */
+export function invalidateListMemo(): void {
+  memo.clear();
+}
+
+/** pi 原生列表调用 + 在途合并 + 应答复用。scope 两级：cwd=项目内（pi list）、
+ *  不传=全量（listAll）。进度回调透传 pi 的 onProgress（loaded/total），
+ *  展示层拿去做活的加载进度（pi -r 同款体验） */
 const inFlight = new Map<string, Promise<PiSessionProjection[]>>();
 export function listNative(
   cwd?: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<PiSessionProjection[]> {
   const key = cwd ? "cwd:" + cwd : "all";
-  const hit = inFlight.get(key);
-  if (hit) return hit;
+  const hit = memo.get(key);
+  if (hit && Date.now() - hit.at < LIST_MEMO_TTL_MS) return Promise.resolve(hit.result);
+  const running = inFlight.get(key);
+  if (running) return running;
   const p = (async () => {
     try {
       const sdk = await loadPiSdk();
       const entries = (cwd
         ? await sdk.SessionManager.list(cwd, undefined, onProgress)
         : await sdk.SessionManager.listAll(onProgress)) as PiSessionEntry[];
-      return entries.map((x) => ({
+      const result: PiSessionProjection[] = entries.map((x) => ({
         path: x.path,
         cwd: x.cwd,
         name: x.name,
         firstMessage: x.firstMessage,
         modified: x.modified,
       }));
+      memo.set(key, { at: Date.now(), result });
+      return result;
     } finally {
       inFlight.delete(key);
     }
