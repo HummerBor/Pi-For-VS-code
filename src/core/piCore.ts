@@ -276,13 +276,7 @@ export class PiCore {
 
   /** 关键链路诊断日志（排查图片丢失/状态机等诡异问题用） */
   private dbg(msg: string): void {
-    try {
-      const fpath = path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
-      // 日志轮转：超过 5MB 时把旧日志改名保留一代（rename 比截断简单，不用读盘；
-      // 旧文件最多保留一代，不会无限膨胀；再超限就覆盖新文件，因为诊断日志可重放）
-      try { const s = fs.statSync(fpath); if (s.size > 5 * 1024 * 1024) { fs.renameSync(fpath, fpath + ".1"); } } catch { /* 不存在/无权限则跳过 */ }
-      fs.appendFileSync(fpath, new Date().toISOString() + " " + msg + String.fromCharCode(10));
-    } catch { /* ignore */ }
+    dbgAppend(msg);
   }
 
   /** adapter 监听编辑器选区后注入代码上下文（选区 → 选中行；无选区 → 整个文件） */
@@ -2188,6 +2182,24 @@ export function sessionMemoryFor(
   if (hit) return hit;
   const legacy = getPersist<Record<string, string>>("piChat.lastSessionByWs", {});
   return tabKey === "t1" ? legacy[wsKey] : undefined;
+}
+
+/** 诊断日志落盘（PiCore.dbg 与 panel.dbgLog 共用一份实现——同一查询双实现必漂移，
+ *  bindViewEvents 教训）。路径可被 PI_CHAT_DEBUG_LOG 覆盖：测试必须写临时目录，
+ *  不许污染用户目录（2026-10-19 用户「不脏吗」拍板）。
+ *  【容量铁律】上限 2MB 只留一代（原 5MB×2，实测 8.5MB 常驻 C 盘）；高频流式帧不落盘
+ *  （见 panel.post 的 noisy 过滤：delta/thinking/toolCallDelta 占行数 96%，全是碎片）。 */
+const DBG_LOG_PATH = process.env.PI_CHAT_DEBUG_LOG || path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
+const DBG_LOG_MAX = 2 * 1024 * 1024;
+export function dbgAppend(msg: string): void {
+  try {
+    // 轮转：超限改名保留一代（rename 比截断简单，不用读盘；再超限覆盖新文件，诊断日志可重放）
+    try {
+      const s = fs.statSync(DBG_LOG_PATH);
+      if (s.size > DBG_LOG_MAX) fs.renameSync(DBG_LOG_PATH, DBG_LOG_PATH + ".1");
+    } catch { /* 不存在/无权限则跳过 */ }
+    fs.appendFileSync(DBG_LOG_PATH, new Date().toISOString() + " " + msg + String.fromCharCode(10));
+  } catch { /* ignore */ }
 }
 
 export function msgBrief(m: unknown): string {

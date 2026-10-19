@@ -18,7 +18,7 @@ import { STRINGS, NATIVE_KEYS, Lang, bb } from "../core/i18n";
 import { getHtml } from "./webview-html";
 import { findUnderDir, grepInPiPackage } from "./fileFinder";
 import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, ToolChangedFile, WebviewToHostTagged } from "../core/protocol";
-import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions } from "../core/piCore";
+import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend } from "../core/piCore";
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
 import { peekListAllSlot, toSessionInfos, listSessions, listAllCached, samePath, type SessionInfo } from "./sessionCache";
@@ -530,7 +530,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       dbgLog("out " + msgBrief(msg) + " [DROP no-view]");
       return;
     }
-    dbgLog("out " + msgBrief(msg));
+    // 高频流式帧不落盘（2026-10-19 用户「不脏吗」拍板）：delta/thinking/toolCallDelta 逐
+    // chunk 一条，实测占日志行数 96%（近 2 万行里 1.93 万），全是流式文本碎片、诊断价值低，
+    // 还每条一次同步写盘。事件级帧（uiState/render/state/工具起止/boot/DROP/FAIL/in）照旧——
+    // 状态栏 bug 就是靠事件级帧破的案，这条命脉不动
+    const noisy = msg.type === "delta" || msg.type === "thinking" || msg.type === "toolCallDelta";
+    if (!noisy) dbgLog("out " + msgBrief(msg));
     // postMessage 的 thenable 除了 reject 还有 resolve(false)=「没送达」（webview 不在/重建中），
     // 只接 reject 会把「日志说发了其实没发」漏成盲区（本案教训：2026-10-19 查状态栏 bug 时
     // 发现 5 条 Canceled 丢帧只有一半留痕）。如实记账 DROP，排查时与 [DROP no-view] 同款读
@@ -1679,10 +1684,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 /** panel 侧关键链路诊断日志（工单十三二刀-1）：与 piCore.dbg 共用
  *  ~/.pi/agent/pi-chat-debug.log，不新开文件；只追加不改既有日志行。 */
 function dbgLog(msg: string): void {
-  try {
-    const fpath = path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
-    // 日志轮转：超过 5MB 时改名保留一代（与 piCore.dbg 同策略，rename 比截断简单）
-    try { const s = fs.statSync(fpath); if (s.size > 5 * 1024 * 1024) { fs.renameSync(fpath, fpath + ".1"); } } catch { /* 不存在/无权限则跳过 */ }
-    fs.appendFileSync(fpath, new Date().toISOString() + " " + msg + String.fromCharCode(10));
-  } catch { /* ignore */ }
+  // 实现已合一到 core 的 dbgAppend（双实现必漂移）；容量铁律/测试隔离见彼处注释
+  dbgAppend(msg);
 }

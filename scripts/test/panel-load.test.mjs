@@ -5,6 +5,14 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const Module = require("module");
+const os = require("os");
+const path = require("path");
+// 测试不碰用户目录（2026-10-19 用户「不脏吗」拍板）：诊断日志与 pi 会话一律进 %TEMP%，
+// 不往 ~/.pi/agent 写任何东西。必须在 require panel.js **之前**设——DBG_LOG_PATH 模块加载时定格
+const TEST_TMP = path.join(os.tmpdir(), "pi-panel-load-test");
+const TEST_SESSION_DIR = path.join(TEST_TMP, "sessions");
+require("fs").mkdirSync(TEST_SESSION_DIR, { recursive: true });
+process.env.PI_CHAT_DEBUG_LOG = path.join(TEST_TMP, "debug.log");
 
 const posted = [];
 const t0 = Date.now();
@@ -27,7 +35,7 @@ const vscode = {
   workspace: {
     registerTextDocumentContentProvider: () => dispo,
     onDidChangeConfiguration: () => dispo,
-    getConfiguration: () => ({ get: (_k, d) => d }),
+    getConfiguration: (section) => ({ get: (k, d) => (section === "piChat" && k === "sessionDir" ? TEST_SESSION_DIR : d) }),
     workspaceFolders: [],
     getWorkspaceFolder: () => undefined,
   },
