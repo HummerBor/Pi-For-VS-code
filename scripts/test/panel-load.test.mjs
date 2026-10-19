@@ -125,12 +125,12 @@ try { msgHandler && msgHandler({ type: "wvError", kind: "error", message: "test 
 const errForwarded = posted.length - postedBeforeErr;
 
 setTimeout(async () => {
-  // 不变量⑥：会话列表快扫并发去重（「点多次会话列表才有数据」事故）——在途扫描共享同一
-  // promise，4 路并发必须拿到同一份 result 引用（引用相等 = 只扫了一遍，不是 4 遍）
+  // 不变量⑥：会话列表并发在途合并（「点多次会话列表才有数据」事故）——同 scope 并发
+  // 共享同一 promise，4 路并发必须拿到同一份引用（引用相等 = 只调了一次 pi listAll）
   let deduped = true;
   try {
     const sc = require("../../out/vscode/sessionCache.js");
-    const four = await Promise.all([sc.listAllCached(), sc.listAllCached(), sc.listAllCached(), sc.listAllCached()]);
+    const four = await Promise.all([sc.listNative(), sc.listNative(), sc.listNative(), sc.listNative()]);
     deduped = four.every((r) => r === four[0]);
   } catch (e) {
     deduped = false;
@@ -189,10 +189,10 @@ setTimeout(async () => {
   }
   // 不变量⑥（续）：见上方并发去重检测
   if (!deduped) {
-    console.log("❌ 会话列表快扫并发未去重（连点 N 次 = 扫 N 遍，列表卡十几秒）");
+    console.log("❌ 会话列表并发未合并（连点 N 次 = 调 N 遍 pi listAll，列表卡十几秒）");
     bad++;
   } else {
-    console.log("✅ 会话列表快扫并发去重（多路共享一次扫描）");
+    console.log("✅ 会话列表并发在途合并（多路共享一次 pi listAll）");
   }
   console.log(bad ? "❌ " + bad + " 项不过" : "✅ 全绿");
   process.exit(bad ? 1 : 0);

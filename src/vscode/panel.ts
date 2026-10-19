@@ -21,7 +21,7 @@ import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, Tool
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend } from "../core/piCore";
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
-import { peekListAllSlot, toSessionInfos, listSessions, listAllCached, samePath, type SessionInfo } from "./sessionCache";
+import { listSessions, samePath, type SessionInfo } from "./sessionCache";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -828,57 +828,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return items;
     };
 
-    // 工单十九：热路径秒开。fingerprintSessions（walk 整树 + 逐文件 stat）是 pickSession
-    // 唯一剩余前置开销（NTFS 几百 ms，随会话数线性涨）——有上次结果缓存槽时先用它立即
-    // 出列表（无 loading 占位），后台再跑指纹校验：命中即结束（列表已对）；未命中快扫
-    // 立即入槽原地更新（pi listAll 权威随后台补）**原地更新同一个 picker 的 items**（不重弹新 QuickPick、不重置选中，
-    // activeItems 保持同 file 项——防用户在刷新完成前已选中某项被冲掉）。
-    // 真首次（无槽）照旧 loading 占位→填充路径。pickerClosed 守卫：用户已关掉选择器后
-    // 后台刷新不再碰 items（picker 即将 dispose，防止打在尸体上）。
+    // 壳口径（2026-10-19 用户拍板「要的是壳，复用不是再造轮子」）：列表数据源 = pi 原生
+    // SessionManager.list/listAll，加载进度也是 pi 的 onProgress（pi -r 同款体验：占位行
+    // 实时走 loaded/total，不死等）。原「热路径秒开」（peekListAllSlot 快照槽）随自研快扫
+    // sessionScan 一并清点回收——会话 jsonl 本身就是唯一记录，不再存派生副本（用户点名）。
+    // 回收前留影：快照槽曾让二开瞬时，代价是双份真相 + 双份维护；pi 慢就慢，用户明示
+    // 「不需要比 pi -r 快」
     let pickerClosed = false;
     const keepAlive = picker.onDidHide(() => {
       pickerClosed = true;
     });
     const cwdFilter = scope === "all" ? undefined : wsPath;
-    const cachedResult = peekListAllSlot();
-    if (cachedResult) {
-      picker.items = buildItems(toSessionInfos(cachedResult, cwdFilter));
-      picker.show();
-      dbgLog(`pickSession 缓存秒开 ${(Date.now() - t0).toFixed(0)}ms（消息到达→列表就绪）`);
-      // 后台指纹校验：listAllCached 指纹命中返回同一份 result（引用相等即列表未变）；
-      // 未命中则内部快扫入槽（权威后台补），返回新引用 → 原地刷新 items
-      void listAllCached()
-        .then((fresh) => {
-          if (pickerClosed || fresh === cachedResult) return; // 指纹命中/已关闭 → 列表已对（同一 result 引用=未变）
-          const prev = picker.selectedItems[0];
-          picker.items = buildItems(toSessionInfos(fresh, cwdFilter));
-          // 防选中丢失：原选中是会话条目 → 同 file 项保持 active（非会话入口项无需保）
-          if (prev?.file) {
-            const again = picker.items.find(
-              (it) => it.action === "file" && it.file === prev.file
-            );
-            if (again) picker.activeItems = [again];
-          }
-          dbgLog(
-            `pickSession 后台刷新就绪 ${(Date.now() - t0).toFixed(0)}ms（指纹变化→原地更新）`
-          );
-        })
-        .catch(() => { }); // 后台刷新失败 → 列表维持旧数据，不打扰用户
-    } else {
-      // 工单十三二刀-2：先弹占位 busy 项，立即反馈（不等 listSessions），完成后原地填充。
-      // 「点历史零反馈」的直接治理：原来 showQuickPick 等 listSessions 完才弹，等待期只看到
-      // 命令触发、无任何 UI 反应。占位 busy:true 在 VS Code 17+ 显示加载动画。
-      picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
-      picker.show();
-      dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
-
-      const sessions = await listSessions(cwdFilter).catch(() => []);
-      dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
-
-      // 占位 busy 项已被完整 items 替换；无会话时仍留有操作入口（开始新会话/删除），不走 notice
-      picker.items = buildItems(sessions);
-      dbgLog(`pickSession 内容就绪 ${picker.items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
-    }
+    picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
+    picker.show();
+    dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
+    // 进度节流 ~300ms：pi 每条会话回调一次（实测 191 次），逐次重绘 items 是浪费
+    let lastProgressAt = 0;
+    const sessions = await listSessions(cwdFilter, 50, (loaded, total) => {
+      const now = Date.now();
+      if (pickerClosed || now - lastProgressAt < 300) return;
+      lastProgressAt = now;
+      picker.items = [{ label: `${this.L.loadingSessions} ${loaded}/${total}`, action: "file", busy: true }];
+    }).catch(() => []);
+    dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
+    // 占位项被完整 items 替换；无会话时仍有操作入口（新建标签/删除），不走 notice。
+    // 用户已关掉选择器就不再碰 items（picker 即将 dispose，防打在尸体上）
+    if (!pickerClosed) picker.items = buildItems(sessions);
+    dbgLog(`pickSession 内容就绪 ${picker.items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
 
     // —— showQuickPick 语义平移为 createQuickPick：选中/取消等价，渲染链（switch/
     //    getMessages/refreshState）照旧，不许借本单顺手改 ——
