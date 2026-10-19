@@ -124,7 +124,17 @@ const postedBeforeErr = posted.length;
 try { msgHandler && msgHandler({ type: "wvError", kind: "error", message: "test boom", file: "x.js", line: 1 }); } catch (e) { console.log("wvError 处理抛:", e.message); }
 const errForwarded = posted.length - postedBeforeErr;
 
-setTimeout(() => {
+setTimeout(async () => {
+  // 不变量⑥：会话列表快扫并发去重（「点多次会话列表才有数据」事故）——在途扫描共享同一
+  // promise，4 路并发必须拿到同一份 result 引用（引用相等 = 只扫了一遍，不是 4 遍）
+  let deduped = true;
+  try {
+    const sc = require("../../out/vscode/sessionCache.js");
+    const four = await Promise.all([sc.listAllCached(), sc.listAllCached(), sc.listAllCached(), sc.listAllCached()]);
+    deduped = four.every((r) => r === four[0]);
+  } catch (e) {
+    deduped = false;
+  }
   // DIAG=1：消息全时序 dump（定位「谁把状态栏刷空/帧序错乱」这类问题的探针）
   if (process.env.DIAG) {
     for (const [t, m] of posted) {
@@ -176,6 +186,13 @@ setTimeout(() => {
     bad++;
   } else {
     console.log("✅ wvError 红字桥被截获（只落盘不回投）");
+  }
+  // 不变量⑥（续）：见上方并发去重检测
+  if (!deduped) {
+    console.log("❌ 会话列表快扫并发未去重（连点 N 次 = 扫 N 遍，列表卡十几秒）");
+    bad++;
+  } else {
+    console.log("✅ 会话列表快扫并发去重（多路共享一次扫描）");
   }
   console.log(bad ? "❌ " + bad + " 项不过" : "✅ 全绿");
   process.exit(bad ? 1 : 0);

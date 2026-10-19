@@ -211,19 +211,25 @@ export function listSessionFilesSync(): string[] {
   return out;
 }
 
-/** 让出一拍（宏任务）：同步 I/O 不变（服务闸免疫是 R′刀的前提，别改成 async fs），
- *  但每个文件扫完都还一次事件循环——用户会话库大时（实测几百个文件、单文件含图 MB 级）
- *  一口气同步扫完会把 webviewReady 消息处理连坐堵 1.5s（2026-10-19 实测），
- *  流式事件/握手全排在后面。逐文件让出后单次阻塞 ≈ 单文件读扫代价 */
+/** 让出一拍（宏任务）：阻塞有界 + 往返少。【2026-10-19 事故教训，别退回去】首版是
+ *  「逐文件让出」（332 文件 = 332 次 setImmediate）——实测在事件循环拥堵时（面板正在
+ *  流式）比 1.8s 同步块还慇10 倍：13~29s（用户「点多次会话列表才有数据」）。同步 I/O
+ *  本身不慢（冷 1.8s / 热 19ms 实测），慢的是让出后排队。改成时间片：每跑满 ~15ms
+ *  才还一次事件循环——阻塞依旧有界，往返次数从 332 降到个位数 */
 const yieldTick = (): Promise<void> => new Promise((r) => setImmediate(r));
+const SLICE_MS = 15;
 
-/** listAllSyncFast 的逐文件让出版：语义逐项同构（枚举/过滤/投影同一实现） */
+/** listAllSyncFast 的时间片让出版：语义逐项同构（枚举/过滤/投影同一实现） */
 export async function listAllFastYielded(): Promise<SessionProjection[]> {
   const out: SessionProjection[] = [];
+  let sliceStart = Date.now();
   for (const file of listSessionFilesSync()) {
     const info = scanOneSessionSync(file);
     if (info) out.push(info);
-    await yieldTick();
+    if (Date.now() - sliceStart >= SLICE_MS) {
+      await yieldTick();
+      sliceStart = Date.now();
+    }
   }
   return out;
 }

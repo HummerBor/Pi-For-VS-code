@@ -52,14 +52,25 @@ let listAllSlot: { fp: string; result: PiSessionProjection[] } | null = null;
  *  全量权威解析入槽——快/慢两路共用 toSessionInfos，展示零漂移。权威解析去重并发
  *  （撞闸时 38s 的活不许叠跑），失败静默（快照继续服务）。调用方无需关心缓存细节。 */
 let listAllRefreshInFlight = false;
+/** 快扫在途去重（2026-10-19「点多次会话列表才有数据」事故）：连点 N 次 = N 路快扫并发
+ *  互相排队（实测 4 路把 13s 拖成 29s，用户以为「要多点几次才出数据」）。在途快扫共享
+ *  同一 promise：N 次点击只扫一遍，后到的立即挂同一结果 */
+let fastScanInFlight: Promise<PiSessionProjection[]> | null = null;
 export async function listAllCached(): Promise<PiSessionProjection[]> {
   const fp = fingerprintSessionsSync();
   if (listAllSlot && listAllSlot.fp === fp) return listAllSlot.result;
-  // 逐文件让出版（2026-10-19）：同步 I/O 保留（服务闸免疫），但一口气扫完会把调用方
-  // （webviewReady 握手/pickList）连坐堵 1.5s——实测大库几百文件、单文件含图 MB 级。
-  // 快扫语义与 listAllSyncFast 同构（同枚举同投影），只多还事件循环
-  const fast = await listAllFastYielded();
-  listAllSlot = { fp, result: fast };
+  if (!fastScanInFlight) {
+    fastScanInFlight = (async () => {
+      try {
+        const fast = await listAllFastYielded();
+        listAllSlot = { fp, result: fast };
+        return fast;
+      } finally {
+        fastScanInFlight = null;
+      }
+    })();
+  }
+  const fast = await fastScanInFlight;
   if (!listAllRefreshInFlight) {
     listAllRefreshInFlight = true;
     void (async () => {
