@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -67,7 +67,7 @@
         {
           "type": "tree",
           "id": "piChat.sessions",
-          "name": "会话"
+          "name": ""
         }
       ],
       "piChatSecondary": [
@@ -100,9 +100,32 @@
         "command": "piChat.refreshSessions",
         "title": "刷新会话列表",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "piChat.deleteSession",
+        "title": "删除会话",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "piChat.deleteSession",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "piChat.deleteSession",
+          "when": "view == piChat.sessions && viewItem == piSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "piChat.deleteSession",
+          "when": "view == piChat.sessions && viewItem == piSession",
+          "group": "1_destructive"
+        }
+      ],
       "view/title": [
         {
           "command": "piChat.newSession",

@@ -118,6 +118,17 @@ export function listNative(
   return p;
 }
 
+/** 列表时间的统一显示口径（样式集中：面板 ⏱ picker / 删除 picker / 左侧列表三处同源）：
+ *  当年 `MM-DD HH:mm`、跨年 `YYYY-MM-DD HH:mm`——原来 toLocaleString()（2026/10/19
+ *  19:39:07）在窄侧边栏里占宽且与面板页签标题（MM-DD HH:mm）两个口径。
+ *  要改时间样式只改这里（将来适配主题/换格式也只动这一处） */
+export function fmtListTime(mtime: number): string {
+  const d = new Date(mtime);
+  const p = (n: number) => (n < 10 ? "0" + n : String(n));
+  const ymd = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.getFullYear() === new Date().getFullYear() ? ymd : `${d.getFullYear()}-${ymd}`;
+}
+
 /** 投影→展示条目（cwd 过滤 + 按最近使用排序 + 截断）。纯变换，不持状态 */
 export function toSessionInfos(
   entries: PiSessionProjection[],
@@ -131,7 +142,7 @@ export function toSessionInfos(
     result.push({
       file: e.path,
       mtime,
-      time: new Date(mtime).toLocaleString(),
+      time: fmtListTime(mtime),
       cwd: e.cwd ?? "",
       preview: (e.firstMessage || "").slice(0, 60),
       name: e.name,

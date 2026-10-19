@@ -4,7 +4,36 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-09-23 Q/R/S/T/U 刀连环结案：启动 14s→2s（历史秒出不等 pi），剩余挂债；含 R 刀时序/文案修正
+最后更新：2026-10-19 CC 布局改造四刀 + 样式 token 化 + 列表删除（用户直令，两轮均 compile 绿/六用例全绿，待实测）
+
+# CC 布局改造（2026-10-19 用户直令：「完全改成 cc 插件这种模型」+「样式统一/列表删除」）
+
+## 已交付（分四刀 + 后续两刀，每刀 compile 验证，本地 commit 20bb47f 及后续）
+- **刀1 HostView 抽象**：WebviewView/WebviewPanel 同构面（webview/onDidDispose/
+  onDidChangeVisibility），attachView 共用装配，行为零变更。
+- **刀2 右侧副栏**：manifest `viewsContainers.secondarySidebar` + 同 provider 双 viewId
+  注册；CC 同款版本门槛（<1.106 靠 piChat.doesNotSupportSecondarySidebar 回退 activitybar）。
+- **刀3 编辑器标签开新会话**：每标签独立 ChatPanelProvider 实例（p{n} 独立记忆命名空间，
+  序号存 globalState 防复用）；pi-head scheme 单点注册 + tryHeadContent 分发；跨实例
+  会话双开/删除守卫（findHolder）；serializer + webview state（panelInfo 消息）重启按
+  tabKey 恢复原会话。
+- **刀4 左侧会话列表**：原生 TreeView（sessionsView.ts，与 ⏱ 同源 pi jsonl），点击=打开/
+  聚焦；切会话/删会话后 notifySessionsChanged 跟随刷新。
+- **样式统一（主题留路）**：style.css 硬编码色抽成语义 token `--pi-*`：`:root` = auto
+  基线（跟 VS Code 变量），midnight/cc-dark 主题块只赋 token 不再逐选择器覆盖；
+  以后加主题 = 尾部加一个变量块。行为零变更（自查撤掉一处夹带的 midnight header 边框改动）。
+- **列表删除按钮**：panel.deleteSessionFile 单一真相（守卫/边界/确认/落盘），面板删除
+  选择器与列表内联按钮 + 右键菜单共用；命令 piChat.deleteSession 藏 commandPalette。
+- **时间口径**：sessionCache.fmtListTime 中心化（当年 MM-DD HH:mm，跨年带年），列表/
+  两处 picker 三处同源。
+
+## 待实测（用户侧）
+1. 副栏聊天原链路不回归；2. 编辑器标签开新会话/双 busy 不串；3. 列表点击聚焦 vs 打开；
+4. 重启恢复原会话；5. 列表删除（内联 + 右键）；6. 三主题（auto/midnight/cc-dark）视觉
+   与改造前一致（token 化是等价重写）；7. 老版本回退（有 <1.106 机器才测）。
+
+## 未动（有意留待确认）
+- 副栏 webview 内部页签栏：与编辑器标签是两套并行入口，是否退役待用户实测后立单。
 
 # Q~U 刀：启动慢连环结案（2026-09-23，全程用户实测驱动，2s 收工）
 

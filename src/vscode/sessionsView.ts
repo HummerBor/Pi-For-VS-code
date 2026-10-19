@@ -56,10 +56,13 @@ class SessionItem extends vscode.TreeItem {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.id = file; // 稳定 id：VS Code 按 id 保展开/选中态，路径天然唯一
     this.description = detail;
+    // 图标只用 ThemeIcon（零硬编码颜色）：浅/深/高对比主题随 VS Code 自动适配，
+    // 将来适配新主题列表侧零成本——需要彩色信号时用 ThemeColor（如 charts.green）而非 hex
     this.iconPath = new vscode.ThemeIcon("history");
-    this.tooltip = `${label}\n${file}`;
+    this.tooltip = `${label}\n${detail}\n${file}`;
     // 点击 = 打开/聚焦（命令带 file 参数，宿主路由见 panel.openOrFocusSession）
     this.command = { command: "piChat.openSession", title: label, arguments: [file] };
+    this.contextValue = "piSession"; // 删除按钮菜单的 when 锚点（view/item/context）
   }
 }
 
@@ -82,6 +85,18 @@ export function registerSessionsView(ctx: vscode.ExtensionContext): SessionsTree
     // 列表点击：已打开的会话聚焦持有者（面板 reveal/侧边栏 focus），未打开开编辑器标签
     vscode.commands.registerCommand("piChat.openSession", (file: string) => {
       void ChatPanelProvider.openOrFocusSession(file);
+    }),
+    // 列表删除按钮（刀5：悬停内联 + 右键菜单同命令）：守卫/确认/落盘复用 panel
+    // deleteSessionFile 单一真相；结果码 → 原生通知（双语 bb，同面板原生弹窗口径）
+    vscode.commands.registerCommand("piChat.deleteSession", async (file: string) => {
+      if (!file) return;
+      const r = await ChatPanelProvider.deleteSessionFile(file);
+      if (r.status === "deleted") void vscode.window.showInformationMessage(bb("delSessionDone") + r.name);
+      else if (r.status === "open") void vscode.window.showWarningMessage(bb("delSessionCur"));
+      else if (r.status === "failed") void vscode.window.showErrorMessage(bb("delSessionFail") + r.err);
+      else if (r.status === "notfound") void vscode.window.showErrorMessage(bb("delSessionFail") + "file not found");
+      else if (r.status === "outside") void vscode.window.showErrorMessage(bb("delSessionFail") + "outside sessions dir");
+      // cancelled：用户主动取消，静默
     })
   );
   return provider;

@@ -1148,10 +1148,46 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** 刀5：删除会话单一真相（面板删除选择器与左侧列表删除按钮共用）——守卫（跨实例
+   *  双开保护）→ 边界校验（sessions 目录内）→ 模态确认 → 落盘删除 → 失效列表缓存。
+   *  返回结果码而非发消息：面板走 webview notice，列表走原生通知，文案各归各的展示通道
+   *  （确认框是原生弹窗 → 双语 bb，与面板原同口径——delSessionAsk 本就在 NATIVE_KEYS） */
+  static async deleteSessionFile(file: string): Promise<
+    { status: "deleted"; name: string } | { status: "cancelled" | "open" | "notfound" | "outside" } | { status: "failed"; err: string }
+  > {
+    // 工单十五刀3：被任意标签/面板打开的会话都不可删（pi 还在追加写入）；刀3 跨实例版
+    if (ChatPanelProvider.findHolder(file)) return { status: "open" };
+    const root = path.join(os.homedir(), ".pi", "agent", "sessions");
+    let real: string;
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      return { status: "notfound" };
+    }
+    if (!real.startsWith(fs.realpathSync(root) + path.sep)) {
+      return { status: "outside" };
+    }
+    const yes = await vscode.window.showWarningMessage(
+      bb("delSessionAsk"),
+      { modal: true, detail: path.basename(file) },
+      bb("delete")
+    );
+    if (yes !== bb("delete")) return { status: "cancelled" };
+    try {
+      fs.rmSync(real, { force: true });
+      invalidateListMemo(); // 已知变更立即失效应答缓存：列表不能把删掉的会话再拖 10s 旧账
+      notifySessionsChanged(); // 刀4：左侧会话列表立即跟随删除
+      return { status: "deleted", name: path.basename(real) };
+    } catch (err: any) {
+      return { status: "failed", err: err?.message ?? String(err) };
+    }
+  }
+
   /** 删除历史会话：二级选择 + 确认弹窗（破坏性不可逆）。
    *  守卫：① 当前打开的会话不删（pi 还在追加写入，删了数据丢失且进程行为未定义）；
    *  ② 路径必须位于 sessions 目录内（listSessions 虽然只从这里收，但 webview 直删
-   *  死链曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上） */
+   *  死链曾有过裸 rmSync，这里把校验补在唯一用户可达的删除路径上）——本体已抽
+   *  deleteSessionFile（刀5），此处只留选择器 + 按结果码发面板 notice */
   private async deleteSessionPick(scope: "project" | "all" | "auto"): Promise<void> {
     const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const sessions = scope === "all" ? await listSessions() : await listSessions(wsPath);
@@ -1169,39 +1205,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       { placeHolder: this.L.delSessionEntry }
     );
     if (!pick) return;
-    // 工单十五刀3：被任意标签打开的会话都不可删（原守卫只看活动标签；多标签后任何
-    // 持有该文件的 pi 会话都在追加写入，删了数据丢失）；刀3 升级跨实例（编辑器面板）
-    const holder = ChatPanelProvider.findHolder(pick.file);
-    if (holder) {
-      this.post({ type: "notice", text: this.L.delSessionCur });
-      return;
-    }
-    const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-    let real: string;
-    try {
-      real = fs.realpathSync(pick.file);
-    } catch {
-      this.post({ type: "notice", text: this.L.delSessionFail + "file not found" });
-      return;
-    }
-    if (!real.startsWith(fs.realpathSync(root) + path.sep)) {
-      this.post({ type: "notice", text: this.L.delSessionFail + "outside sessions dir" });
-      return;
-    }
-    const yes = await vscode.window.showWarningMessage(
-      this.L.delSessionAsk,
-      { modal: true, detail: path.basename(pick.file) },
-      this.L.delete
-    );
-    if (yes !== this.L.delete) return;
-    try {
-      fs.rmSync(real, { force: true });
-      invalidateListMemo(); // 已知变更立即失效应答缓存：列表不能把删掉的会话再拖 10s 旧账
-      notifySessionsChanged(); // 刀4：左侧会话列表立即跟随删除
-      this.post({ type: "notice", text: this.L.delSessionDone + path.basename(real) });
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.delSessionFail + (err?.message ?? err) });
-    }
+    const r = await ChatPanelProvider.deleteSessionFile(pick.file);
+    if (r.status === "deleted") this.post({ type: "notice", text: this.L.delSessionDone + r.name });
+    else if (r.status === "open") this.post({ type: "notice", text: this.L.delSessionCur });
+    else if (r.status === "notfound") this.post({ type: "notice", text: this.L.delSessionFail + "file not found" });
+    else if (r.status === "outside") this.post({ type: "notice", text: this.L.delSessionFail + "outside sessions dir" });
+    else if (r.status === "failed") this.post({ type: "notice", text: this.L.delSessionFail + r.err });
+    // cancelled：静默返回现状
   }
 
   /** 从电脑选择图片/文件 → 图片转 base64 塞进附件栏，其他文件读成文本注入上下文（/ 菜单「上传文件」用） */
