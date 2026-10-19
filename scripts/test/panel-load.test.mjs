@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const Module = require("module");
 
 const posted = [];
+const t0 = Date.now();
 const store = {};
 const dispo = { dispose() {} };
 let msgHandler = null;
@@ -47,7 +48,31 @@ Module._load = function (request, ...rest) {
 };
 
 const { ChatPanelProvider } = require("../../out/vscode/panel.js");
+// DIAG=1：postUiState 调用点桩——「空帧是谁发的」必须看调用栈才能定位（帧内容不含来源）
+if (process.env.DIAG) {
+  const { PiCore } = require("../../out/core/piCore.js");
+  const orig = PiCore.prototype.postUiState;
+  // 谁把消息处理卡了 N 秒：同步段耗时要单独看（async 函数同步前缀跑在调用者线程上）
+  const sc = require("../../out/vscode/sessionCache.js");
+  const ols = sc.listSessions;
+  sc.listSessions = function () {
+    const t = Date.now();
+    const p = ols.apply(this, arguments);
+    console.log("  [sync] listSessions 同步段 " + (Date.now() - t) + "ms");
+    return p;
+  };
+  PiCore.prototype.postUiState = function () {
+    console.log("  [call @" + (Date.now() - t0) + "ms] postUiState <- " + String(new Error().stack).split("\n").slice(2, 5).join(" | ").trim());
+    return orig.apply(this, arguments);
+  };
+}
 const globalState = { get: (k, d) => (k in store ? store[k] : d), update: (k, v) => void (store[k] = v) };
+// 种模型/思考记忆（用户真实形态：恢复页签都带记忆）：boot 窗口（services 扫描 2~29s）内
+// 页脚必须也显示模型/思考，不许钉「—」（状态栏 bug 的用户实测形态）。
+// 记忆模型用 pi 当前默认同款（openrouter/free），applyModelMemory 补回等价无副作用
+const wsKey = process.cwd().replace(/\\+$/, "").toLowerCase();
+store["piChat.lastModelByWs2"] = { [wsKey]: { t1: { provider: "openrouter", id: "openrouter/free" } } };
+store["piChat.lastThinkingByWs2"] = { [wsKey]: { t1: "medium" } };
 
 let provider;
 try {
@@ -61,8 +86,11 @@ try {
 const view = {
   webview: {
     options: {},
-    html: "",
-    postMessage: (m) => (posted.push(m), Promise.resolve(true)),
+    _html: "",
+    _htmlSets: 0,
+    get html() { return this._html; },
+    set html(v) { this._html = v; this._htmlSets++; },
+    postMessage: (m) => (posted.push([Date.now() - t0, m]), Promise.resolve(true)),
     onDidReceiveMessage: (h) => ((msgHandler = h), dispo),
   },
   visible: true,
@@ -78,19 +106,58 @@ try {
   process.exit(1);
 }
 
-// 触发 webviewReady 握手 → host 推 uiState
+// 触发 webviewReady 握手 → host 推 uiState。同步耗时必须短：webviewReady 处理里卡 1s+ =
+// 握手/后续消息连坐阻塞（会话列表同步快扫詹1.5s 事故，2026-10-19）
+const tReady = Date.now();
 try { msgHandler && msgHandler({ type: "webviewReady" }); } catch (e) { console.log("webviewReady 处理抛:", e.message); }
+const readyMs = Date.now() - tReady;
 
 setTimeout(() => {
-  const frames = posted.filter((m) => m.type === "uiState");
+  // DIAG=1：消息全时序 dump（定位「谁把状态栏刷空/帧序错乱」这类问题的探针）
+  if (process.env.DIAG) {
+    for (const [t, m] of posted) {
+      const brief = JSON.stringify(m, (k, v) =>
+        k === "messages" || k === "live" || k === "queued" || k === "stats" || k === "tabs"
+          ? (Array.isArray(v) ? "[" + v.length + "]" : v) : v).slice(0, 240);
+      console.log(t + "ms " + brief);
+    }
+  }
+  const frames = posted.map((p) => p[1]).filter((m) => m.type === "uiState");
   console.log("uiState 帧数:", frames.length);
   let bad = 0;
+  let sawTruth = false;
   for (const f of frames) {
     const okModel = f.model != null;
     const okThink = f.thinkingLevel != null;
     console.log("  model=" + JSON.stringify(f.model) + " thinkingLevel=" + f.thinkingLevel + (okModel && okThink ? " ✅" : " ❌ 空"));
-    if (!okModel || !okThink) bad++;
+    if (okModel && okThink) sawTruth = true;
+    // 不变量②：任何帧都不许空——真值/记忆都到位后空帧回刷会把页脚冲成「—」（状态栏 bug）。
+    // 带记忆的启动占位（footFromMemory）就是为这把锁存在的
+    else { console.log("  ❌ 空 foot 帧（有记忆时启动占位也该带值）"); bad++; }
   }
-  console.log(bad ? "❌ " + bad + " 帧模型/思考为空（状态栏显示 —）" : "✅ 状态栏 model/thinking 均非空");
+  // 不变量①：静止态（末帧）页脚必须是真值，状态栏才能不显示「—」
+  const last = frames[frames.length - 1];
+  if (!last || last.model == null || last.thinkingLevel == null) {
+    console.log("❌ 末帧 model/thinking 为空（静止态状态栏显示 —）");
+    bad++;
+  } else {
+    console.log("✅ 末帧页脚真值（静止态状态栏有值）");
+  }
+  // 不变量③：webview 不得被整页重载——html 只在 resolveWebviewView 设一次；
+  // 空 render 换鸭子图曾 applyHtml 重载整个 webview（丢流式/丢焦/消息 Canceled）
+  if (view.webview._htmlSets !== 1) {
+    console.log("❌ webview.html 被重设 " + view.webview._htmlSets + " 次（整页重载事故）");
+    bad++;
+  } else {
+    console.log("✅ webview.html 只设 1 次（无意外整页重载）");
+  }
+  // 不变量④：webviewReady 同步处理必须快——卡 1s+ 即握手/消息连坐阻塞
+  if (readyMs > 400) {
+    console.log("❌ webviewReady 同步处理耗时 " + readyMs + "ms（>400ms，消息处理被阻塞）");
+    bad++;
+  } else {
+    console.log("✅ webviewReady 同步处理 " + readyMs + "ms（无阻塞）");
+  }
+  console.log(bad ? "❌ " + bad + " 项不过" : "✅ 全绿");
   process.exit(bad ? 1 : 0);
-}, 800);
+}, Number(process.env.WAIT || (process.env.DIAG ? 3500 : 800)));

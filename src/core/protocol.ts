@@ -409,6 +409,13 @@ export interface ThemeMsg {
   type: "theme";
   name: string;
 }
+/** 欢迎页/头部鸭子换图（2026-10-19）：原实现「空 render → applyHtml 整页重载」只为换张图，
+ *  把整个 webview 炸掉重建（丢滚动/流式/焦点，在途消息 Canceled），是「一堆问题」的主根因。
+ *  改为轻量消息就地换 src。【协议同步】发送方 panel.post、接收方 webview main.ts handleMsg */
+export interface DuckMsg {
+  type: "duck";
+  uri: string;
+}
 /** 工单十五刀2：标签栏全量状态（宿主是唯一事实源，webview 只渲染；标题/busy 由宿主从
  *  各核心的 state/busy 消息记账）。webview 本地另叠 dirty 未读点（后台标签完成亮提示） */
 export interface TabInfo {
@@ -538,6 +545,7 @@ export type HostToWebview =
   | FileListMsg
   | StateMsg
   | ThemeMsg
+  | DuckMsg
   | BannerMsg
   | ChangesListMsg
   | TabsMsg

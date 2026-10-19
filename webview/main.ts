@@ -940,7 +940,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     toolEls = {};
     lastToolGroup = null; // 重绘后 DOM 全换，旧引用作废（相邻判定本身也兕底，这里显式清）
     if (!list || !list.length) {
-      if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); }
+      if (welcomeHTML) { root.innerHTML = welcomeHTML; duckInto(root); pickTip(root.querySelector('#welcome')); }
       olSuspend = false;
       outlineRebuild(); // 空会话无锚点，轨道自动隐藏
       return;
@@ -1704,6 +1704,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // ── 欢迎页：从原型取快照 + 随机小贴士（新建会话时重新出现，每次换一条）──
   var welcomeEl = protoView.querySelector('#welcome');
   var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';
+  // 欢迎页/头部鸭子图（DuckMsg）：宿主换图不再整页重载（事故注释见 protocol.ts DuckMsg）。
+  // welcomeHTML 是启动时的快照、img src 已烧死在里头，注入后必须用当前图覆盖一次
+  var duckUriNow = '';
+  function applyDuck(uri: string) {
+    if (!uri) return;
+    duckUriNow = uri;
+    var lg = document.getElementById('logo') as HTMLImageElement | null;
+    if (lg) lg.src = uri;
+    var ws = document.querySelectorAll('.w-duck');
+    for (var i = 0; i < ws.length; i++) (ws[i] as HTMLImageElement).src = uri;
+  }
+  function duckInto(root: HTMLElement) {
+    if (!duckUriNow) return;
+    var w = root.querySelector('.w-duck') as HTMLImageElement | null;
+    if (w) w.src = duckUriNow;
+  }
   var TIPS = L.tips;
   function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }
   pickTip(welcomeEl);
@@ -2106,6 +2122,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (subDetailView && subDetailView.split(':')[0] === m.id) renderSubDock();
       return;
     }
+    // 鸭子换图是页面级（图源与页签无关），不过路由
+    if (m.type === 'duck') { applyDuck(m.uri); return; }
     // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
     // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
     routeMsg(m);

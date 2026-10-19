@@ -289,18 +289,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private applyHtml(): void {
     const view = this.view;
     if (!view) return;
-    if (!this.duckUri) {
-      const srcDir = path.join(this.extensionUri.fsPath, "media", "source");
-      try {
-        const files = fs.readdirSync(srcDir).filter(f => /\.(svg|png|jpg|jpeg|gif|webp)$/i.test(f));
-        const pick = files[Math.floor(Math.random() * files.length)] || "pi-icon-small.svg";
-        const ext = path.extname(pick).toLowerCase();
-        const mime = ext === ".svg" ? "image/svg+xml" : ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
-        this.duckUri = "data:" + mime + ";base64," + fs.readFileSync(path.join(srcDir, pick)).toString("base64");
-      } catch {
-        this.duckUri = "data:image/png;base64," + fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
-      }
-    }
+    this.rollDuck();
+
     const kind = vscode.window.activeColorTheme.kind;
     const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
     const floorColor =
@@ -347,6 +337,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "%27");
     view.webview.html = getHtml(theme, this.duckUri, floorColor, sanitized, op, this.lang);
+  }
+
+  /** 随机鸭子图（图源在 media/图源，随机不重复）：幂等——已有图不重抽；要换下一张先置
+   *  duckUri="" 再调（空 render 换图路径就是这么用）。从 applyHtml 抽出：换图不再需要
+   *  整页重载（见 DuckMsg 注释） */
+  private rollDuck(): void {
+    if (this.duckUri) return;
+    const srcDir = path.join(this.extensionUri.fsPath, "media", "source");
+    try {
+      const files = fs.readdirSync(srcDir).filter(f => /\.(svg|png|jpg|jpeg|gif|webp)$/i.test(f));
+      const pick = files[Math.floor(Math.random() * files.length)] || "pi-icon-small.svg";
+      const ext = path.extname(pick).toLowerCase();
+      const mime = ext === ".svg" ? "image/svg+xml" : ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+      this.duckUri = "data:" + mime + ";base64," + fs.readFileSync(path.join(srcDir, pick)).toString("base64");
+    } catch {
+      this.duckUri = "data:image/png;base64," + fs.readFileSync(path.join(this.extensionUri.fsPath, "media", "pi-icon.png")).toString("base64");
+    }
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -499,17 +506,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 如实标 DROP/FAIL——「日志说发了其实没发」比没日志更害人（盲区事故教训）。
     // 行为零变更：no-view 原样不发，postMessage 只是多接一个拒绝留痕回调。
     if (msg.type === "render" && Array.isArray(msg.messages) && msg.messages.length === 0) {
-      // 每次回到欢迎态（新会话/清空）重抽一张图：图源在 media/图源，随机不重复
+      // 每次回到欢迎态（新会话/清空）重抽一张鸭子图。【2026-10-19 事故教训】原实现这里
+      // 直接 applyHtml() 整页重载只为换张图——每次「＋新建标签」的空 render 都把整个
+      // webview 炸掉重建：丢滚动/丢流式/丢焦点，在途消息 postMessage 被 Canceled，
+      // 重建期 uiState 空帧把页脚钉成「—」（状态栏 bug 的放大器）。换图走 DuckMsg 就地更新。
       this.duckUri = "";
-      this.applyHtml();
+      this.rollDuck();
+      this.post({ type: "duck", uri: this.duckUri });
     }
     if (!this.view) {
       dbgLog("out " + msgBrief(msg) + " [DROP no-view]");
       return;
     }
     dbgLog("out " + msgBrief(msg));
-    void this.view.webview.postMessage(msg).then(undefined, (e) =>
-      dbgLog("out FAIL " + msgBrief(msg) + ": " + String(e))
+    // postMessage 的 thenable 除了 reject 还有 resolve(false)=「没送达」（webview 不在/重建中），
+    // 只接 reject 会把「日志说发了其实没发」漏成盲区（本案教训：2026-10-19 查状态栏 bug 时
+    // 发现 5 条 Canceled 丢帧只有一半留痕）。如实记账 DROP，排查时与 [DROP no-view] 同款读
+    void this.view.webview.postMessage(msg).then(
+      (ok) => {
+        if (ok === false) dbgLog("out DROP " + msgBrief(msg) + " [postMessage=false]");
+      },
+      (e) => dbgLog("out FAIL " + msgBrief(msg) + ": " + String(e))
     );
   }
 

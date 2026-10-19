@@ -177,8 +177,18 @@ function scanOneUncached(file: string, st: fs.Stats): SessionProjection | null {
 
 /** 全量快扫：目录枚举镜像 pi listAll（sessions/项目别名/xxx.jsonl 两层，.jsonl 全收） */
 export function listAllSyncFast(): SessionProjection[] {
-  const root = path.join(os.homedir(), ".pi", "agent", "sessions");
   const out: SessionProjection[] = [];
+  for (const file of listSessionFilesSync()) {
+    const info = scanOneSessionSync(file);
+    if (info) out.push(info);
+  }
+  return out;
+}
+
+/** 会话文件枚举（listAllSyncFast / listAllFastYielded 共用，双实现必漂移——bindViewEvents 教训） */
+export function listSessionFilesSync(): string[] {
+  const root = path.join(os.homedir(), ".pi", "agent", "sessions");
+  const out: string[] = [];
   let dirs: fs.Dirent[];
   try {
     dirs = fs.readdirSync(root, { withFileTypes: true });
@@ -195,9 +205,25 @@ export function listAllSyncFast(): SessionProjection[] {
     }
     for (const f of files) {
       if (!f.endsWith(".jsonl")) continue;
-      const info = scanOneSessionSync(path.join(root, d.name, f));
-      if (info) out.push(info);
+      out.push(path.join(root, d.name, f));
     }
+  }
+  return out;
+}
+
+/** 让出一拍（宏任务）：同步 I/O 不变（服务闸免疫是 R′刀的前提，别改成 async fs），
+ *  但每个文件扫完都还一次事件循环——用户会话库大时（实测几百个文件、单文件含图 MB 级）
+ *  一口气同步扫完会把 webviewReady 消息处理连坐堵 1.5s（2026-10-19 实测），
+ *  流式事件/握手全排在后面。逐文件让出后单次阻塞 ≈ 单文件读扫代价 */
+const yieldTick = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+/** listAllSyncFast 的逐文件让出版：语义逐项同构（枚举/过滤/投影同一实现） */
+export async function listAllFastYielded(): Promise<SessionProjection[]> {
+  const out: SessionProjection[] = [];
+  for (const file of listSessionFilesSync()) {
+    const info = scanOneSessionSync(file);
+    if (info) out.push(info);
+    await yieldTick();
   }
   return out;
 }

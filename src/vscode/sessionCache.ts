@@ -6,7 +6,7 @@
  * pickSession 秒开快路径与后台权威刷新共用**同一 result 引用**判断列表是否变（见
  * peekListAllSlot 头注释），这是本簇的核心语义，拆分时必须保持引用相等不变。
  */
-import { fingerprintSessionsSync, listAllSyncFast } from "../domain/sessionScan";
+import { fingerprintSessionsSync, listAllFastYielded } from "../domain/sessionScan";
 import { loadPiSdk } from "../pi/piSdk";
 
 export interface SessionInfo {
@@ -55,7 +55,10 @@ let listAllRefreshInFlight = false;
 export async function listAllCached(): Promise<PiSessionProjection[]> {
   const fp = fingerprintSessionsSync();
   if (listAllSlot && listAllSlot.fp === fp) return listAllSlot.result;
-  const fast = listAllSyncFast();
+  // 逐文件让出版（2026-10-19）：同步 I/O 保留（服务闸免疫），但一口气扫完会把调用方
+  // （webviewReady 握手/pickList）连坐堵 1.5s——实测大库几百文件、单文件含图 MB 级。
+  // 快扫语义与 listAllSyncFast 同构（同枚举同投影），只多还事件循环
+  const fast = await listAllFastYielded();
   listAllSlot = { fp, result: fast };
   if (!listAllRefreshInFlight) {
     listAllRefreshInFlight = true;

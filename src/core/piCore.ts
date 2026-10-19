@@ -52,6 +52,17 @@ export interface UiActions {
   dismissChanges(): Promise<void>;
 }
 
+/** 页脚真相（模型/思考/会话/用量）单一形状：collectState 产出、uiState/state 共用、
+ *  启动占位 footFromMemory 同构合成（拆开写两份形状必漂移） */
+export interface FootData {
+  ver: string;
+  model: { name?: string; provider?: string; id: string } | null;
+  thinkingLevel: number | null;
+  sessionName: string | null;
+  sessionFile: string | null;
+  stats: { contextPercent: number | null; cost: number } | null;
+}
+
 export class PiCore {
   static readonly viewId = "piChat.view"; // 保持与原 panel.ts 相同的视图 id 常量位
 
@@ -119,6 +130,9 @@ export class PiCore {
   /** A 刀（2026-09-23）：快路径渲染过的消息缓存——启动期（pi init 未翻真）postUiState
    *  用它出首帧，不再等 init；boot 链尾权威 render/postUiState 仍会覆盖为真值 */
   private fastRenderMsgs: any[] | null = null;
+  /** 页脚真值缓存（2026-10-19 状态栏 bug）：collectState 成功即更新；启动期（booting）的
+   *  uiState 占位帧用它出页脚，不发空 foot 把「— 思考 —」钉在状态栏上（实测 boot 窗口 2~29s） */
+  private lastFoot: FootData | null = null;
   /** 压缩横幅（工单六）：单份持有、变更才下发；webview 重建后 webviewReady 握手重发 */
   private banner: BannerPayload | null = null;
   /** 阈值预警闸门：涨破阈值只提醒一次（同一会话）；占比回落（压缩后）/换会话 re-arm */
@@ -541,8 +555,10 @@ export class PiCore {
       // Z 刀教训记账：这刀只动时序不动语义，装机前过 scripts/smoke-boot.mjs 主链路冒烟。
       const booting = !!this.client && !this.client.running;
       if (!booting && this.restoringSession) await this.restoringSession.catch(() => {});
-      // 页脚数据（含既有副作用：会话记账/横幅 re-arm）先拉——它有 await，快照必须在其后取
-      const foot = booting ? null : await this.collectState();
+      // 页脚数据（含既有副作用：会话记账/横幅 re-arm）先拉——它有 await，快照必须在其后取。
+      // 启动期占位不再留空（2026-10-19 状态栏 bug 修复）：优先上次真值，再退模型/思考记忆——
+      // 记忆正是 applyModelMemory 随后要恢复的值，提前显示它才是真话；都没有才 null（—）
+      const foot = booting ? (this.lastFoot ?? this.footFromMemory()) : await this.collectState();
       // ——同步快照块（无 await，事件插不进来）：历史全量 + 在途消息深拷贝同拍取——
       // tabId 戳：webview 收到非活动页签快照直接丢弃（连切竞态：慢到的旧快照覆盖新页签内容）
       const msgs = booting
@@ -1313,6 +1329,23 @@ export class PiCore {
     const tabMap = this.caps.getPersist<Record<string, Record<string, string | undefined>>>("piChat.lastThinkingByWs2", {});
     return tabMap[this.wsKey()]?.[this.tabKey];
   }
+  /** 启动占位页脚（无 lastFoot 时）：用本标签的模型/思考记忆合成——记忆正是 applyModelMemory
+   *  随后要恢复的值，boot 期先显示它才是真话；boot 完成后真值（含友好名）覆盖。
+   *  记忆不存显示名，model.name 给 id（webview 端 name||id 自然回退，终值会换成真名） */
+  private footFromMemory(): FootData | null {
+    const mem = this.lastModelFor();
+    const think = this.lastThinkingFor();
+    if (!mem && !think) return null;
+    return {
+      ver: this.version,
+      model: mem ? { name: mem.id, provider: mem.provider, id: mem.id } : null,
+      // 思考档位记忆是字符串（pi get_state 同口径；协议字段历史上写作 number，不动它）
+      thinkingLevel: (think as unknown as number) ?? null,
+      sessionName: null,
+      sessionFile: null,
+      stats: null,
+    };
+  }
   /** panel 切历史会话后的补回入口（含页脚同步） */
   async reapplyModelMemory(): Promise<void> {
     await this.applyModelMemory();
@@ -1616,14 +1649,7 @@ export class PiCore {
 
   /** 工单十八：拉取页脚数据 + 既有副作用（会话记账/横幅 re-arm）。从 refreshState 抽出——
    *  postUiState 原子化后 uiState 需同源页脚数据，不再靠单独 state 消息拼 */
-  private async collectState(): Promise<{
-    ver: string;
-    model: { name?: string; provider?: string; id: string } | null;
-    thinkingLevel: number | null;
-    sessionName: string | null;
-    sessionFile: string | null;
-    stats: { contextPercent: number | null; cost: number } | null;
-  } | null> {
+  private async collectState(): Promise<FootData | null> {
     const client = this.client;
     // F′ 刀（2026-09-22 启动态收口·根因）：只判「client 在不在」，不判 running——running 是
     // init 翻真标志，旧守卫「不等就回 null」让 boot 链 refreshState 撞上 init 未完成时静默
@@ -1674,7 +1700,7 @@ export class PiCore {
           if (this.banner?.kind === "contextWarning") this.setBanner(null);
         }
       }
-      return {
+      const foot: FootData = {
         ver: this.version,
         model: st?.model
           ? { name: st.model.name, provider: st.model.provider, id: st.model.id }
@@ -1689,6 +1715,11 @@ export class PiCore {
             }
           : null,
       };
+      // 真值缓存（2026-10-19 状态栏 bug）：启动期（running 未翻真）postUiState 发的空 foot 帧
+      // 会把页脚钉成「— 思考 —」，而 services 全树扫描实测 2~29s，用户截图实锤「装好了还一直空」。
+      // 缓存后启动占位带已知真值，不再靠 boot 链尾一次性补齐（丢了就永久空的老路）
+      this.lastFoot = foot;
+      return foot;
     } catch {
       // ignore
       return null;
