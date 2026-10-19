@@ -912,10 +912,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 中/EN 语言切换：持久化后重生成 HTML（webviewReady 握手会自动重绘历史） */
   private async toggleLang(): Promise<void> {
-    this.lang = this.lang === "zh" ? "en" : "zh";
-    this.core.lang = this.lang; // 核心的通知/状态文案跟随
-    await this.globalState.update("piChat.lang", this.lang);
-    this.applyHtml();
+    const next: Lang = this.lang === "zh" ? "en" : "zh";
+    // 刀3 多实例广播（2026-10-19 用户实测「三块样式不一样」归因其一）：语言是共享
+    // globalState，但各实例的 this.lang / core.lang / webview HTML 是各自的——
+    // 只刷自己 = 其他面板/副栏停在旧语言（2026-10-19 归因其二）
+    await this.globalState.update("piChat.lang", next);
+    for (const p of ChatPanelProvider.allProviders) {
+      p.lang = next;
+      p.core.lang = next; // 核心的通知/状态文案跟随
+      p.applyHtml(); // 重生成该实例的 webview HTML（webviewReady 握手重绘历史）
+    }
   }
 
   /** 🎨 主题/背景选择，持久化 globalState，重载后自动应用 */
@@ -936,7 +942,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     );
     if (!pick) return;
     await this.globalState.update("piChat.theme", pick.id);
-    this.post({ type: "theme", name: pick.id });
+    // 刀3 多实例广播（同 toggleLang）：主题是全局态，data-theme 各 webview 自己的
+    // body 上——只发自己 = 其他面板/副栏停旧主题（2026-10-19 用户实测截图实锤）
+    for (const p of ChatPanelProvider.allProviders) {
+      p.post({ type: "theme", name: pick.id });
+    }
     this.post({ type: "notice", text: this.L.themeSet + pick.label });
   }
 
