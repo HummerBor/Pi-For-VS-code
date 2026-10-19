@@ -407,6 +407,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
         void listSessions().catch(() => { });
       }
+      // webview 红字落盘（2026-10-19）：页面级错误不过核心路由，直接进 debug log——
+      // 排查者自己看（webview 控制台要 Developer: Open Webview Developer Tools，不是 F12，
+      // 不能让用户开调试器当报错通道）
+      if (m.type === "wvError") {
+        const st = m.stack ? String(m.stack).split("\n").slice(0, 6).join("\n  ") : "";
+        dbgLog(
+          `webview ERROR [${m.kind}] ${m.message}` +
+            (m.file ? ` @${m.file}:${m.line ?? 0}` : "") +
+            (st ? "\n  " + st : "")
+        );
+        return;
+      }
       // 工单十五刀2：标签栏控制消息是 panel 级（不过核心），先于核心路由拦截
       if (m.type === "tabNew") { this.handleTabNew(); return; }
       if (m.type === "tabSwitch") {

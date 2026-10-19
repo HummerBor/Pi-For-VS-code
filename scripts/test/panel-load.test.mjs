@@ -111,6 +111,10 @@ try {
 const tReady = Date.now();
 try { msgHandler && msgHandler({ type: "webviewReady" }); } catch (e) { console.log("webviewReady 处理抛:", e.message); }
 const readyMs = Date.now() - tReady;
+// webview 红字落盘桥：错误消息必须被 panel 级截获（不进核心、不回投 webview）
+const postedBeforeErr = posted.length;
+try { msgHandler && msgHandler({ type: "wvError", kind: "error", message: "test boom", file: "x.js", line: 1 }); } catch (e) { console.log("wvError 处理抛:", e.message); }
+const errForwarded = posted.length - postedBeforeErr;
 
 setTimeout(() => {
   // DIAG=1：消息全时序 dump（定位「谁把状态栏刷空/帧序错乱」这类问题的探针）
@@ -157,6 +161,13 @@ setTimeout(() => {
     bad++;
   } else {
     console.log("✅ webviewReady 同步处理 " + readyMs + "ms（无阻塞）");
+  }
+  // 不变量⑤：webview 红字桥被 panel 级截获（不回投 webview、不进核心链路）
+  if (errForwarded !== 0) {
+    console.log("❌ wvError 被回投 " + errForwarded + " 条（应只落盘）");
+    bad++;
+  } else {
+    console.log("✅ wvError 红字桥被截获（只落盘不回投）");
   }
   console.log(bad ? "❌ " + bad + " 项不过" : "✅ 全绿");
   process.exit(bad ? 1 : 0);

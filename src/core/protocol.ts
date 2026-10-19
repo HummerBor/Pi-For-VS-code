@@ -130,6 +130,17 @@ export interface WvQueuedRetrieveMsg {
   type: "queuedRetrieve";
   qid: string;
 }
+/** webview 未捕获异常/未处理 rejection 上报（2026-10-19）：VS Code 的 webview 控制台要走
+ *  命令面板 Developer: Open Webview Developer Tools（不是 F12），不能让用户为查 bug 开调试器。
+ *  红字直接回传宿主落 pi-chat-debug.log，排查者自己看（诊断文化：A 刀同款「看得见」） */
+export interface WvErrorMsg {
+  type: "wvError";
+  kind: string;
+  message: string;
+  file?: string;
+  line?: number;
+  stack?: string;
+}
 export type WebviewToHost =
   | WvReadyMsg
   | WvPromptMsg
@@ -162,6 +173,7 @@ export type WebviewToHost =
   | WvShowChangesMsg
   | WvChangesDismissMsg
   | WvQueuedRetrieveMsg
+  | WvErrorMsg
   | WvTabSwitchMsg
   | WvTabNewMsg
   | WvTabCloseMsg;

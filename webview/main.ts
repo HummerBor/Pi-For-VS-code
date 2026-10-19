@@ -24,6 +24,29 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     getState: function () { return vscodeApi.getState(); },
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
+  // ── webview 红字自动落盘（2026-10-19）：VS Code 的 webview 控制台要走命令面板
+  // 「Developer: Open Webview Developer Tools」，不是 F12——用户不该为查 bug 开调试器。
+  // 未捕获异常/未处理 rejection 直接回传宿主 → pi-chat-debug.log，排查者自己看。
+  // 本监听自身必须零抛错（抛了会递归进 error 监听）：try 包死 + 同类去重（循环里炸会刷屏）
+  var wvErrSeen: Record<string, boolean> = {};
+  function reportWvError(kind: string, message: string, file?: string, line?: number, stack?: string) {
+    try {
+      var key = kind + '|' + String(message || '');
+      if (wvErrSeen[key]) return; // 同类只报首条
+      wvErrSeen[key] = true;
+      vscodeApi.postMessage({
+        type: 'wvError', kind: kind, message: String(message || '').slice(0, 500),
+        file: String(file || ''), line: line || 0, stack: String(stack || '').slice(0, 2000)
+      });
+    } catch (e) { /* 链路坏了就没办法，绝不抛 */ }
+  }
+  window.addEventListener('error', function (e: ErrorEvent) {
+    reportWvError('error', e.message, e.filename, e.lineno, e.error && (e.error as any).stack);
+  });
+  window.addEventListener('unhandledrejection', function (e: PromiseRejectionEvent) {
+    var r: any = e.reason;
+    reportWvError('unhandledrejection', r && r.message ? r.message : String(r), '', 0, r && r.stack);
+  });
   // ── 输入历史（↑↓ 回溯）：输入框自身功能，刻意不挂 pi 链路。模块级一份 = 所有会话/页签
   // 通用；内存态不落盘，webview 重建即失（用户口径：本次 VSC 启动期间生效）。发送即入账
   //（含排队插话——插队走同一个 send()）；只记文字，附件/图片/代码上下文不随行复现 ──
