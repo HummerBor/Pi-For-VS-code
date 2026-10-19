@@ -56,8 +56,48 @@ const RE_MSG_LINE = /^\s*\{\s*"type"\s*:\s*"message"/;
 const RE_INFO_LINE = /^\s*\{\s*"type"\s*:\s*"session_info"/;
 const RE_ROLE_USER = /"role"\s*:\s*"user"/;
 
-/** 扫描结果缓存：path+size+mtimeMs 命中即回（会话文件不常变，重复打开零成本） */
+/** 扫描结果缓存：path+size+mtimeMs 命中即回（会话文件不常变，重复打开零成本）。
+ *  【2026-10-19 落盘】扩展宿主重启后内存缓存清零 → 冷扫 305MB 实测 22s（用户「快一分钟
+ *  了还是加载中」）。扫描结果是纯函数产物（文件内容不变则结果不变），落盘复用完全安全：
+ *  命中判定仍是 size+mtimeMs（文件一变自然失配重扫），存 TEMP 不脏用户目录 */
 const scanCache = new Map<string, { size: number; mtimeMs: number; proj: SessionProjection | null }>();
+const SCAN_CACHE_FILE = path.join(os.tmpdir(), "pi-vscode-session-scan-cache.json");
+let scanCacheDirty = false;
+let scanCacheTimer: NodeJS.Timeout | null = null;
+let scanCacheExitHooked = false;
+function loadScanCache(): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SCAN_CACHE_FILE, "utf8")) as [string, { size: number; mtimeMs: number; proj: SessionProjection | null }][];
+    for (const [k, v] of raw) {
+      // Date 过 JSON 变 ISO 字符串：不复活则下游 modified.getTime() 炸（类型说 Date、实参字符串）
+      if (v.proj && typeof (v.proj.modified as unknown) === "string") {
+        v.proj.modified = new Date(v.proj.modified as unknown as string);
+      }
+      scanCache.set(k, v);
+    }
+  } catch { /* 首次/损坏/被清：当冷缓存走，无害 */ }
+}
+function scheduleScanCacheSave(): void {
+  scanCacheDirty = true;
+  if (scanCacheTimer) return; // 防抖：连续扫几百文件只写一次盘
+  scanCacheTimer = setTimeout(() => {
+    scanCacheTimer = null;
+    if (!scanCacheDirty) return;
+    scanCacheDirty = false;
+    try {
+      fs.writeFileSync(SCAN_CACHE_FILE, JSON.stringify([...scanCache.entries()]));
+    } catch { /* 写失败不影响功能：下次重扫 */ }
+  }, 2000);
+  // 宿主随时可能被用户重载，防抖定时器等不到：进程退出前再抢写一次
+  if (!scanCacheExitHooked) {
+    scanCacheExitHooked = true;
+    process.once("exit", () => {
+      if (!scanCacheDirty) return;
+      try { fs.writeFileSync(SCAN_CACHE_FILE, JSON.stringify([...scanCache.entries()])); } catch { /* ignore */ }
+    });
+  }
+}
+loadScanCache();
 
 /** 镜像 pi 的 getMessageActivityTime（session-manager.js:479） */
 function activityTimeFast(entry: any): number | undefined {
@@ -80,6 +120,7 @@ export function scanOneSessionSync(file: string): SessionProjection | null {
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.proj;
   const proj = scanOneUncached(file, st);
   scanCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, proj });
+  scheduleScanCacheSave();
   return proj;
 }
 
