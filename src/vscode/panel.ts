@@ -852,24 +852,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       picker.show();
       dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
     }
-    // 进度条只在首扫（无缓存）时上屏；有缓存时用户已经看着列表，不再插加载动画
+    // 进度/列表上屏共用：原地替换 + 保选中（防用户已选中的某项被刷掉）
+    const applyItems = (items: Item[]) => {
+      const prev = picker.selectedItems[0];
+      picker.items = items;
+      if (prev?.file) {
+        const again = items.find((it) => it.action === "file" && it.file === prev.file);
+        if (again) picker.activeItems = [again];
+      }
+    };
+
+    // pi -r 同款渐进消费（2026-10-19 22s 定案修法）：pi 的 onProgress 第三参
+    // partialSessions 一到就上屏，不再死等全量完成。实测 pi 1.3.0 首批 ~19ms 到达
+    // （scripts/probe-list-timing.mjs），全量 1.2~2s、宿主拥堵下 22~30s（debug.log
+    // 08:56 实锤 30152ms）——用户感知的是首屏时刻，不是全量时刻。
+    // 首批立即画（整个修法的意义所在），后续批次限流 200ms：拥堵时重绘也抢事件循环。
     let lastProgressAt = 0;
-    const sessions = await listSessions(cwdFilter, 50, (loaded, total) => {
+    let paintedPartial = false;
+    const sessions = await listSessions(cwdFilter, 50, (loaded, total, partial) => {
       if (cached || pickerClosed) return;
       const now = Date.now();
+      if (partial?.length) {
+        if (paintedPartial && now - lastProgressAt < 200) return;
+        paintedPartial = true;
+        lastProgressAt = now;
+        applyItems(buildItems(partial));
+        dbgLog(`pickSession partial 上屏 ${partial.length} 条 @ ${(now - t0).toFixed(0)}ms（loaded=${loaded}/${total}）`);
+        return;
+      }
+      if (paintedPartial) return; // 已有真条目在看，不再插加载动画
       if (now - lastProgressAt < 300) return; // pi 每条会话回调一次，逐次重绘是浪费
       lastProgressAt = now;
       picker.items = [{ label: `${this.L.loadingSessions} ${loaded}/${total}`, action: "file", busy: true }];
     }).catch(() => []);
     dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（→pi 真值就绪）`);
-    // 原地替换（不重弹、不重置选中——防用户已选中的某项被刷掉）；已关掉就别碰尸体
+    // 最终全量替换（partial 是子集，全量到达后定格）；已关掉就别碰尸体
     if (!pickerClosed) {
-      const prev = picker.selectedItems[0];
-      picker.items = buildItems(sessions);
-      if (prev?.file) {
-        const again = picker.items.find((it) => it.action === "file" && it.file === prev.file);
-        if (again) picker.activeItems = [again];
-      }
+      applyItems(buildItems(sessions));
     }
     dbgLog(`pickSession 内容就绪 ${picker.items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
 

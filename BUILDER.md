@@ -1401,3 +1401,45 @@ steer 命令接受。坑：rpc 子进程任务跑完不退出，完成信号必�
 - **直令**：用户令「他说的这些点能改就改了」，点交接 §八.1 粘性回显刀（刀口已备未出）。
 - **改动面**：webview/main.ts——①`'user'` 移出 deferDuringRender 延后名单（重绘窗口期回显立即画上，addUser 追加 bubble 与 liveReset 互不触碰、无序可破，权威 render 覆盖属设计）；②P 刀探针回收（定罪已完成，账目交接 §八）：lastSentAt/userEcho/renderAll 计时、probeNote 回传链（webview→protocol WvProbeNoteMsg→piCore case）全拆，grep 零残留。
 - **验证**：compile 绿 + tsc 双零报错 + smoke-boot 5 判据 PASS + test:listfast PASS + subagent 34 项全过；出包 0.1.63。实测项：启动渲染窗口期发消息气泡应立即上屏（不再等重绘落地）。
+
+## 施工回报（2026-10-19 晚，交接 2 接手第一刀：会话列表 22~30s 定案 + 套 pi -r 渐进消费）
+
+### pi -r 为什么快（交接必答题：读 pi 1.3.0 bundle 列表实现 + 实测，scripts/probe-list-timing.mjs）
+1. **它不是「读标题」**：buildSessionInfo 对每个 jsonl **全文逐行解析**（消息条数/首条
+   消息/搜索串 allMessagesText），305MB/336 个文件、**每次全量重扫零缓存**——用户观察
+   「pi -r 每次都重新定位一遍」属实，快的原因不在缓存。
+2. **快在消费方式**：onProgress(loaded, total, partialSessions) 在第一个文件解析完就吐
+   首批（**实测 ~19ms**），之后每 10 条（listAll 每 100 条）一批，且**最新文件先解析**
+   （mtime 倒序）——TUI 拿首批就画屏、边解析边补。用户感知的「快」= 首批到达，不是
+   全量完成。全量本身 1.2~2s（纯 node 实测，用户口径「2s 不慢」）。
+
+### 插件 22~30s 的真面目（pi-chat-debug.log 08:56 验尸）
+- `pickSession listSessions 30152ms`（第二次点击挂同一在途 promise 又等 10115ms）：
+  冷扫撞上 tab 启动（services 单跳 4.8s）+ webview 流量，事件循环/磁盘被抢，
+  2s 的活拖成 30s。
+- **根因**：壳的 onProgress 签名 `(loaded, total) => void` 把第三参 partialSessions
+  丢了，UI 死等全量完成才上屏，用户全程只看「正在加载会话… 17/193」计数器。
+- **交接「pi 实测 0 次 partialSessions」是误判**：那是拿 devDep 旧版 pi **0.85.1**
+  量的（该版无 partial 发布）；运行时 PATH 上的 pi **1.3.0** 有（首批 19ms 实测）。
+  版本错位是误判温床，教训：量 pi 行为必须拿运行时那个版本量。
+
+### 改动（直接套 pi 原生消费方式，零自研）
+- `src/vscode/sessionCache.ts`：listNative/listSessions 的 onProgress 加第三参
+  （pi partialSessions 投影成展示条目即投即用）；在途合并改**多订阅者广播**——
+  预热扫描还在跑时打开的 picker 也收得到进度（否则又退回死等全量）。
+- `src/vscode/panel.ts` pickSession：partial 一到就 applyItems 原地上屏（**首批立即画**，
+  后续批次限流 200ms——拥堵时重绘也抢事件循环），全量到达定格替换，全程保选中。
+- 新探针 `scripts/probe-list-timing.mjs`（分段计时：sdkImport/首批/全量，PI_ROOT 可切包）；
+  新用例 `scripts/test/session-partial.test.mjs`（partial 透传/在途广播/TTL 复用三把锁）。
+
+### 验证
+compile 绿；panel-load 6 锁、smoke-boot、session-partial、html/detail/subagent/revert/
+linkify 全绿。**未出包、未合 main**（等用户实测：点历史列表应 ~20ms 级出真条目，
+不再看计数器干等）。
+
+### 挂账
+1. devDep pi 0.85.1 vs 运行时 1.3.0 **版本错位**（类型参考面落后两个大版本）——建议
+   升 devDep，本次未动避免顺手扩散。
+2. 全量 1.2~2s 是 pi 原生成本（305MB 全文解析、零缓存、每次重扫），pi 原生没有更浅的
+   读法（buildSessionInfo 就是全读）；用户口径「不需要比 pi -r 快」，**别再自研浅读**。
+3. memo 命中时同步应答无 partial（列表已秒出，无需）。

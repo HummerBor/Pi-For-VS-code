@@ -56,38 +56,65 @@ export function invalidateListMemo(): void {
 }
 
 /** pi 原生列表调用 + 在途合并 + 应答复用。scope 两级：cwd=项目内（pi list）、
- *  不传=全量（listAll）。进度回调透传 pi 的 onProgress（loaded/total），
- *  展示层拿去做活的加载进度（pi -r 同款体验） */
-const inFlight = new Map<string, Promise<PiSessionProjection[]>>();
+ *  不传=全量（listAll）。进度回调透传 pi 的 onProgress，**第三参 partialSessions 必须
+ *  接住**（2026-10-19 22s 定案）：pi 1.3.0 起 onProgress(loaded, total, partial) 在第一个
+ *  文件解析完就吐第一批（实测 ~19ms，scripts/probe-list-timing.mjs），之后每 10 条一批，
+ *  且最新文件先解析——pi -r 的「快」全靠拿到首批就画屏。壳这边丢掉第三参 = 死等全量
+ *  （全量 1.2~2s，扩展宿主拥堵下实测 22~30s，pi-chat-debug.log 08:56 事故），用户看到的
+ *  就是「正在加载会话… 17/193」干等。
+ *  【注意】交接里「pi 实测 0 次 partialSessions」是拿 devDep 旧版 pi 0.85.1 量的误判
+ *  （该版无 partial 发布）；运行时 PATH 上的 pi 1.3.0 有。版本错位见 BUILDER.md 挂账。 */
+const project = (x: PiSessionEntry): PiSessionProjection => ({
+  path: x.path,
+  cwd: x.cwd,
+  name: x.name,
+  firstMessage: x.firstMessage,
+  modified: x.modified,
+});
+export type NativeProgress = (
+  loaded: number,
+  total: number,
+  partial?: PiSessionProjection[]
+) => void;
+const inFlight = new Map<
+  string,
+  { p: Promise<PiSessionProjection[]>; subs: Set<NativeProgress> }
+>();
 export function listNative(
   cwd?: string,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: NativeProgress
 ): Promise<PiSessionProjection[]> {
   const key = cwd ? "cwd:" + cwd : "all";
   const hit = memo.get(key);
   if (hit && Date.now() - hit.at < LIST_MEMO_TTL_MS) return Promise.resolve(hit.result);
   const running = inFlight.get(key);
-  if (running) return running;
+  if (running) {
+    // 在途合并共享 promise，但**进度回调不能丢**：后到的调用（典型：预热扫描还在跑时
+    // 用户点开 picker）必须订阅同一波进度，否则它拿不到 partial，又退回死等全量的老路
+    if (onProgress) running.subs.add(onProgress);
+    return running.p;
+  }
+  const subs = new Set<NativeProgress>();
+  if (onProgress) subs.add(onProgress);
   const p = (async () => {
     try {
       const sdk = await loadPiSdk();
+      // pi 原始条目进、投影出——两个方向的回调类型不能混（混了就是 TS2345）
+      const progress = (loaded: number, total: number, partial?: PiSessionEntry[]) => {
+        const proj = partial ? partial.map(project) : undefined;
+        for (const fn of subs) fn(loaded, total, proj);
+      };
       const entries = (cwd
-        ? await sdk.SessionManager.list(cwd, undefined, onProgress)
-        : await sdk.SessionManager.listAll(onProgress)) as PiSessionEntry[];
-      const result: PiSessionProjection[] = entries.map((x) => ({
-        path: x.path,
-        cwd: x.cwd,
-        name: x.name,
-        firstMessage: x.firstMessage,
-        modified: x.modified,
-      }));
+        ? await sdk.SessionManager.list(cwd, undefined, progress)
+        : await sdk.SessionManager.listAll(progress)) as PiSessionEntry[];
+      const result: PiSessionProjection[] = entries.map(project);
       memo.set(key, { at: Date.now(), result });
       return result;
     } finally {
       inFlight.delete(key);
     }
   })();
-  inFlight.set(key, p);
+  inFlight.set(key, { p, subs });
   return p;
 }
 
@@ -121,11 +148,22 @@ export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null
   return toSessionInfos(hit.result, cwd, limit);
 }
 
-/** 列出历史会话，按最近使用排序；传 cwd 只列该项目的会话。数据源 = pi 原生（见头注释） */
+/** 列出历史会话，按最近使用排序；传 cwd 只列该项目的会话。数据源 = pi 原生（见头注释）。
+ *  onProgress 第三参 = 已就绪的展示条目（pi partialSessions 投影而来），到达即可上屏 */
 export async function listSessions(
   cwd?: string,
   limit = 50,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: (loaded: number, total: number, partial?: SessionInfo[]) => void
 ): Promise<SessionInfo[]> {
-  return toSessionInfos(await listNative(cwd, onProgress), cwd, limit);
+  return toSessionInfos(
+    await listNative(
+      cwd,
+      onProgress
+        ? (loaded, total, partial) =>
+            onProgress(loaded, total, partial ? toSessionInfos(partial, cwd, limit) : undefined)
+        : undefined
+    ),
+    cwd,
+    limit
+  );
 }
