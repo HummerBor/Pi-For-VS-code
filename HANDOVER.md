@@ -113,7 +113,8 @@ src/panel.ts 底部  - getHtml()/css()/webviewJs()：webview UI（webviewJs 是�
 
 - **最终选型**：`media/pi-logo.svg` = pi coding agent 官方 logo（用户拍板），像素几何「π」标记，实心粗壮、缩放免疫
 - **放弃方向（全部试过并翻车）**：像素鸭侧身实心（认不出鸭）/ 1px 描边（1.5x 缩放必糊）/ Copilot 风格实心脸（认不出鸭）/ 平滑线稿（用户否）
-- 彩鸭元素保留在：面板头部 18px logo + 空状态欢迎页 96px（均为 base64 内嵌 pi-icon.png，v0.0.47+）+ Marketplace 商店图（media/pi-icon.png 即彩鸭）；历史图标稿已在 v0.0.57 清理，git 历史可考
+- 彩鸭元素保留在：面板头部 18px logo + 空状态欢迎页 96px（均为 base64 内嵌 pi-icon.png，v0.0.47+）+ Marketplace 商店图（media/pi-icon.png 即彩鸭）；历史图标稿已在 v0.0.57 清理；2026-09-24 考证：duck.svg 等**从未进过 git**（全历史/悬空对象/旧 vsix 皆无），
+  「git 历史可考」是误载勿再翻找；矢量稿已由 GPT 重绘找回为 `media/duck.svg`（禁删，见 AGENTS.md）
 - 备选文件保留：`icon-bubble.svg` / `icon-pi.svg` / `duck-activity.svg`（0.0.39 实心鸭）
 - **铁律**：活动栏 16 格图标被 1.5× 非整数缩放，1px 线必糊；实心大块或官方矢量 logo 才稳
 

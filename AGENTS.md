@@ -29,8 +29,13 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   hostCapabilities.ts 接口注入）+ panel.ts（VS Code adapter：实现 HostCapabilities/UiActions，组装 PiCore）。
   改核心逻辑（状态机/prompt 组装/事件路由）去 piCore.ts，VS Code UI 流程留 panel.ts；
   webview 消息路由入口是 core.onWebviewMessage。对账基线与漂移清单见 归档.md 工单四
-- **vsix 瘦身**：media 只带 `pi-icon.png`/`pi-logo.svg`；README 截图引用 `raw.githubusercontent.com`
-  仓库 URL——改截图必须 push 后才在市场生效。
+- **vsix 瘦身**：vsix 包内 media 只带 `pi-icon.png`/`pi-logo.svg`（.vscodeignore 白名单）；
+  README 截图引用 `raw.githubusercontent.com` 仓库 URL——改截图必须 push 后才在市场生效。
+- **`media/duck.svg` 禁删（2026-09-24 用户拍板）**：欢迎页鸭子的矢量源稿（GPT 从 pi-icon.png
+  逐像素重绘找回）。初代 duck.svg（16×16 crispEdges）从未进过 git，v0.0.57「media 清理」时连
+  工作区一起清掉、无从追查——任何 media 清理/瘦身一律不许碰它，它不进 vsix（白名单不含它）
+  不等于可以从仓库删。已知债务：逐像素 rect 描摹导致 3.4MB，如需瘦身可按 16×16 网格重绘
+  （pi-icon.png 网格中心即纯色原像素），但文件本身永远保留。
 - **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（无 @ts-nocheck）。改它保持 ES5 var
   风格，别引入 let/const 大重写；真类型问题用最小断言解决。
 - **模板纪律**：index.html 只放结构 + 占位符（`{{key}}` 运行时变量 / `{{t:key}}` i18n）。CSS/JS 主体
@@ -73,7 +78,6 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 | `npm run test:subagent` | 跑 subagentSnapshot 快照用例（scripts/subagentSnapshot.test.mts） |
 | `npm run test:revert` | 跑 patchRevert 逆向还原用例（scripts/patchRevert.test.mts） |
 | `npm run test:linkify` | 跑 linkify 文件名/符号链接口径用例（scripts/linkify.test.mts） |
-| `npm run test:listfast` | 跑会话列表同步快扫 vs pi listAll 同形性对照（scripts/test-listfast.mjs） |
 | `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
 
 调试：F5（任务 `watch all`，tsc + vite 双 watch 并行）。

@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.38",
+  "version": "0.1.55",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -25,14 +25,32 @@
     "Chat",
     "Other"
   ],
-  "main": "./out/extension.js",
+  "main": "./out/vscode/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:piChat.editorPanel"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
           "id": "piChat",
           "title": "Pi For VSC",
+          "icon": "media/pi-logo.svg",
+          "when": "piChat.doesNotSupportSecondarySidebar"
+        },
+        {
+          "id": "piChatSessions",
+          "title": "pi 会话",
           "icon": "media/pi-logo.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "piChatSecondary",
+          "title": "Pi For VSC",
+          "icon": "media/pi-logo.svg",
+          "when": "!piChat.doesNotSupportSecondarySidebar"
         }
       ]
     },
@@ -41,7 +59,23 @@
         {
           "type": "webview",
           "id": "piChat.view",
-          "name": "Pi For VSC"
+          "name": "Pi For VSC",
+          "when": "piChat.doesNotSupportSecondarySidebar"
+        }
+      ],
+      "piChatSessions": [
+        {
+          "type": "tree",
+          "id": "piChat.sessions",
+          "name": ""
+        }
+      ],
+      "piChatSecondary": [
+        {
+          "type": "webview",
+          "id": "piChat.viewSecondary",
+          "name": "Pi For VSC",
+          "when": "!piChat.doesNotSupportSecondarySidebar"
         }
       ]
     },
@@ -50,8 +84,67 @@
         "command": "piChat.view.focus",
         "title": "pi: 打开聊天面板",
         "category": "pi"
+      },
+      {
+        "command": "piChat.openInEditor",
+        "title": "pi: 新建会话（编辑器标签）",
+        "category": "pi",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "piChat.newSession",
+        "title": "新会话",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piChat.refreshSessions",
+        "title": "刷新会话列表",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "piChat.deleteSession",
+        "title": "删除会话",
+        "icon": "$(trash)"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "piChat.deleteSession",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "piChat.deleteSession",
+          "when": "view == piChat.sessions && viewItem == piSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "piChat.deleteSession",
+          "when": "view == piChat.sessions && viewItem == piSession",
+          "group": "1_destructive"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "piChat.newSession",
+          "when": "view == piChat.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "piChat.refreshSessions",
+          "when": "view == piChat.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "piChat.openInEditor",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "pi Chat",
       "properties": {
@@ -118,15 +211,15 @@
     "build:webview": "vite build",
     "watch:webview": "vite build --watch",
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
-    "test:detail": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/toolDetail.test.mts",
-    "test:subagent": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/subagentSnapshot.test.mts",
-    "test:revert": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/patchRevert.test.mts",
-    "test:migration": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/modelMemoryMigration.test.mts",
-    "test:linkify": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/linkify.test.mts",
-    "test:listfast": "node scripts/test-listfast.mjs",
-    "package": "node scripts/bump-version.mjs && npm run compile && npx @vscode/vsce package",
+    "test:detail": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/toolDetail.test.mts",
+    "test:subagent": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/subagentSnapshot.test.mts",
+    "test:revert": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/patchRevert.test.mts",
+    "test:migration": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/modelMemoryMigration.test.mts",
+    "test:linkify": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/linkify.test.mts",
+    "test:html": "node scripts/test/html.test.mjs",
+    "package": "node scripts/release/bump-version.mjs && npm run compile && npx @vscode/vsce package",
     "release": "npm run compile && npx @vscode/vsce package",
-    "ship": "node scripts/bump-from-market.mjs && npm run release && node scripts/publish.js",
+    "ship": "node scripts/release/bump-from-market.mjs && npm run release && node scripts/release/publish.js",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {

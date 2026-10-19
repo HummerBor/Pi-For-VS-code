@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from "vite";
 import { copyFileSync } from "fs";
-import { buildPreview } from "./scripts/preview-html.mjs";
+import { buildPreview } from "./scripts/build/preview-html.mjs";
 
 /** 把 HTML 模板拷进产物目录（webview/ 源码不随 vsix 分发），并重新生成浏览器调试预览页
  *  （emptyOutDir 会把 dist 整目录清空——preview.html 不在 watch 产物里，必须每次重建，

@@ -4,10 +4,10 @@
  * 历史说明：曾以字符串数组内联在 panel.ts 里，故主体保留 ES5 var 风格。
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
-import { STRINGS, type Lang } from "../src/i18n";
-import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/protocol";
-import { toolDetail } from "../src/toolDetail";
-import type { SubagentSnapshot } from "../src/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
+import { STRINGS, type Lang } from "../src/core/i18n";
+import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
+import { toolDetail } from "../src/domain/toolDetail";
+import type { SubagentSnapshot } from "../src/domain/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -24,6 +24,29 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     getState: function () { return vscodeApi.getState(); },
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
+  // ── webview 红字自动落盘（2026-10-19）：VS Code 的 webview 控制台要走命令面板
+  // 「Developer: Open Webview Developer Tools」，不是 F12——用户不该为查 bug 开调试器。
+  // 未捕获异常/未处理 rejection 直接回传宿主 → pi-chat-debug.log，排查者自己看。
+  // 本监听自身必须零抛错（抛了会递归进 error 监听）：try 包死 + 同类去重（循环里炸会刷屏）
+  var wvErrSeen: Record<string, boolean> = {};
+  function reportWvError(kind: string, message: string, file?: string, line?: number, stack?: string) {
+    try {
+      var key = kind + '|' + String(message || '');
+      if (wvErrSeen[key]) return; // 同类只报首条
+      wvErrSeen[key] = true;
+      vscodeApi.postMessage({
+        type: 'wvError', kind: kind, message: String(message || '').slice(0, 500),
+        file: String(file || ''), line: line || 0, stack: String(stack || '').slice(0, 2000)
+      });
+    } catch (e) { /* 链路坏了就没办法，绝不抛 */ }
+  }
+  window.addEventListener('error', function (e: ErrorEvent) {
+    reportWvError('error', e.message, e.filename, e.lineno, e.error && (e.error as any).stack);
+  });
+  window.addEventListener('unhandledrejection', function (e: PromiseRejectionEvent) {
+    var r: any = e.reason;
+    reportWvError('unhandledrejection', r && r.message ? r.message : String(r), '', 0, r && r.stack);
+  });
   // ── 输入历史（↑↓ 回溯）：输入框自身功能，刻意不挂 pi 链路。模块级一份 = 所有会话/页签
   // 通用；内存态不落盘，webview 重建即失（用户口径：本次 VSC 启动期间生效）。发送即入账
   //（含排队插话——插队走同一个 send()）；只记文字，附件/图片/代码上下文不随行复现 ──
@@ -940,7 +963,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     toolEls = {};
     lastToolGroup = null; // 重绘后 DOM 全换，旧引用作废（相邻判定本身也兕底，这里显式清）
     if (!list || !list.length) {
-      if (welcomeHTML) { root.innerHTML = welcomeHTML; pickTip(root.querySelector('#welcome')); }
+      if (welcomeHTML) { root.innerHTML = welcomeHTML; duckInto(root); pickTip(root.querySelector('#welcome')); }
       olSuspend = false;
       outlineRebuild(); // 空会话无锚点，轨道自动隐藏
       return;
@@ -1704,6 +1727,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // ── 欢迎页：从原型取快照 + 随机小贴士（新建会话时重新出现，每次换一条）──
   var welcomeEl = protoView.querySelector('#welcome');
   var welcomeHTML = welcomeEl ? welcomeEl.outerHTML : '';
+  // 欢迎页/头部鸭子图（DuckMsg）：宿主换图不再整页重载（事故注释见 protocol.ts DuckMsg）。
+  // welcomeHTML 是启动时的快照、img src 已烧死在里头，注入后必须用当前图覆盖一次
+  var duckUriNow = '';
+  function applyDuck(uri: string) {
+    if (!uri) return;
+    duckUriNow = uri;
+    var lg = document.getElementById('logo') as HTMLImageElement | null;
+    if (lg) lg.src = uri;
+    var ws = document.querySelectorAll('.w-duck');
+    for (var i = 0; i < ws.length; i++) (ws[i] as HTMLImageElement).src = uri;
+  }
+  function duckInto(root: HTMLElement) {
+    if (!duckUriNow) return;
+    var w = root.querySelector('.w-duck') as HTMLImageElement | null;
+    if (w) w.src = duckUriNow;
+  }
   var TIPS = L.tips;
   function pickTip(el) { if (el) { var t = el.querySelector('.w-tip'); if (t) t.textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)]; } }
   pickTip(welcomeEl);
@@ -2106,6 +2145,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (subDetailView && subDetailView.split(':')[0] === m.id) renderSubDock();
       return;
     }
+    // 鸭子换图是页面级（图源与页签无关），不过路由
+    if (m.type === 'duck') { applyDuck(m.uri); return; }
+    // 刀3 编辑器面板：tabKey 存进 webview state 快照（VS Code 序列化面板时捕获，
+    // 重启后 serializer 传回宿主 → 面板按原 tabKey 恢复原会话）。纯存储不渲染
+    if (m.type === 'panelInfo') { vscodeApi.setState({ tabKey: (m as any).tabKey }); return; }
     // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
     // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
     routeMsg(m);
