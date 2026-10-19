@@ -21,7 +21,7 @@ import type { ChangesFileInfo, HostToWebview, HostToWebviewTagged, TabInfo, Tool
 import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend } from "../core/piCore";
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
-import { listSessions, invalidateListMemo, samePath, type SessionInfo } from "./sessionCache";
+import { listSessions, peekListSessions, invalidateListMemo, samePath, type SessionInfo } from "./sessionCache";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
@@ -839,21 +839,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pickerClosed = true;
     });
     const cwdFilter = scope === "all" ? undefined : wsPath;
-    picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
-    picker.show();
-    dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
-    // 进度节流 ~300ms：pi 每条会话回调一次（实测 191 次），逐次重绘 items 是浪费
+    // 秒出 + 后台静默刷新（2026-10-19 用户「点一次重扫一次」定案修法）：先用上一次结果
+    // 立刻画列表（哪怕略旧），pi 真值到达后原地替换（保选中）——**点击永不等扫描**。
+    // 真值仍每次向 pi 要（壳口径：会话 jsonl 是唯一记录），秒出的只是查询应答（见 sessionCache）
+    const cached = peekListSessions(cwdFilter);
+    if (cached) {
+      picker.items = buildItems(cached);
+      picker.show();
+      dbgLog(`pickSession 秒出 ${(Date.now() - t0).toFixed(0)}ms（${cached.length} 项，后台刷新）`);
+    } else {
+      picker.items = [{ label: this.L.loadingSessions, action: "file", busy: true }];
+      picker.show();
+      dbgLog(`pickSession 占位弹出 ${(Date.now() - t0).toFixed(0)}ms（消息到达→占位，立即响应）`);
+    }
+    // 进度条只在首扫（无缓存）时上屏；有缓存时用户已经看着列表，不再插加载动画
     let lastProgressAt = 0;
     const sessions = await listSessions(cwdFilter, 50, (loaded, total) => {
+      if (cached || pickerClosed) return;
       const now = Date.now();
-      if (pickerClosed || now - lastProgressAt < 300) return;
+      if (now - lastProgressAt < 300) return; // pi 每条会话回调一次，逐次重绘是浪费
       lastProgressAt = now;
       picker.items = [{ label: `${this.L.loadingSessions} ${loaded}/${total}`, action: "file", busy: true }];
     }).catch(() => []);
-    dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（占位→列表就绪）`);
-    // 占位项被完整 items 替换；无会话时仍有操作入口（新建标签/删除），不走 notice。
-    // 用户已关掉选择器就不再碰 items（picker 即将 dispose，防打在尸体上）
-    if (!pickerClosed) picker.items = buildItems(sessions);
+    dbgLog(`pickSession listSessions ${(Date.now() - t0).toFixed(0)}ms（→pi 真值就绪）`);
+    // 原地替换（不重弹、不重置选中——防用户已选中的某项被刷掉）；已关掉就别碰尸体
+    if (!pickerClosed) {
+      const prev = picker.selectedItems[0];
+      picker.items = buildItems(sessions);
+      if (prev?.file) {
+        const again = picker.items.find((it) => it.action === "file" && it.file === prev.file);
+        if (again) picker.activeItems = [again];
+      }
+    }
     dbgLog(`pickSession 内容就绪 ${picker.items.length} 项 @ ${(Date.now() - t0).toFixed(0)}ms`);
 
     // —— showQuickPick 语义平移为 createQuickPick：选中/取消等价，渲染链（switch/

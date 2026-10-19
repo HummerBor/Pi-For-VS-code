@@ -43,12 +43,12 @@ type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
 /** 展示链需要的轻量字段（allMessagesText 之类重串不进展示层） */
 export type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" | "firstMessage" | "modified">;
 
-/** 查询应答复用（2026-10-19 用户「每次点击都重扫？」拍板）：同一查询在 TTL 内直接复用，
- *  不再每次付 pi listAll 的 1~2s 全量解析。【这不是记录副本】不落盘、不留派生真相——
- *  会话 jsonl 仍是唯一记录（审计红线），这里只是「别重复问同一个问题」的应答缓存：
- *  TTL 一到照常问 pi，已知变更（删会话）处显式失效。早前的错误是把同类数据**落盘**
- *  + 自研第二套扫描器，不是缓存本身 */
-const LIST_MEMO_TTL_MS = 10_000;
+/** 查询应答复用（2026-10-19 用户「每次点击都重扫」拍板）：**展示层秒出 + 后台静默刷新**。
+ *  peekListSessions 立即回上一次结果（哪怕略旧，先把列表画出来，点击永不等扫描），
+ *  listSessions 真值仍每次向 pi 要（壳口径：会话 jsonl 是唯一记录），到达后展示层原地替换。
+ *  【这不是记录副本】不落盘、不留派生真相——只是查询应答；TTL 窗口内不重复问 pi，
+ *  已知变更（删会话）显式失效。早前的错误是把派生数据落盘 + 自研第二套扫描器 */
+const LIST_MEMO_TTL_MS = 3000;
 const memo = new Map<string, { at: number; result: PiSessionProjection[] }>();
 /** 已知变更处立即失效（删除会话后列表不能再拖 10s 旧账） */
 export function invalidateListMemo(): void {
@@ -112,6 +112,13 @@ export function toSessionInfos(
   }
   result.sort((a, b) => b.mtime - a.mtime);
   return result.slice(0, limit);
+}
+
+/** 立即回上一次查询结果（不等 pi）：展示层秒出用。没有就是没有，调用方自己出占位 */
+export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null {
+  const hit = memo.get(cwd ? "cwd:" + cwd : "all");
+  if (!hit) return null;
+  return toSessionInfos(hit.result, cwd, limit);
 }
 
 /** 列出历史会话，按最近使用排序；传 cwd 只列该项目的会话。数据源 = pi 原生（见头注释） */
