@@ -336,6 +336,8 @@ export class PiClient {
     steer = false,
     images?: { data: string; mimeType: string }[]
   ): Promise<any> {
+    // 诊断锚点（2026-10-19）：见 steer() 处注释——凡经这里发送必留痕
+    this.onDebug?.("[send] prompt" + (steer ? " (steer)" : "") + " len=" + String(text).length);
     return this.ready().then(
       () =>
         new Promise<any>((resolve, reject) => {
@@ -508,6 +510,10 @@ export class PiClient {
    *  （agent.steer = steeringQueue.enqueue，下一轮 run 消费），不会开出第二个 run；
    *  busy 时即插队，送达时序由 pi 队列结构保证（steering 先于 followUp，各队列内部保序） */
   steer(text: string): Promise<any> {
+    // 诊断锚点（2026-10-19）：send 侧留痕——会话文件里出现过「插件日志零痕迹」的 user 条目
+    //（07:58:32 那条挂错分支的重发），事后分不清是不是从 piClient 这层进的。以后凡经
+    // prompt/steer 发送必留一行，哪条路进的 pi 自己招供
+    this.onDebug?.("[send] steer len=" + String(text).length);
     return this.ready().then(() => this.session.steer(text)).then(() => ({}));
   }
 

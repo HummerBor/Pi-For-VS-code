@@ -2,8 +2,13 @@ import * as vscode from "vscode";
 import { ChatPanelProvider } from "./panel";
 import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang } from "../core/i18n";
+import { dbgAppend } from "../core/piCore";
 
 export function activate(ctx: vscode.ExtensionContext): void {
+  // 诊断锚点（2026-10-19）：扩展宿主重启 = webview 重建的头号嫌疑，但此前日志里
+  // 没有它的名字（只看到 webviewReady/boot 重跑）——「面板莫名重建」无从判因。
+  // activate/deactivate 各留一行，重启在日志里一眼可辨
+  dbgAppend("=== extension activate v" + String(ctx.extension.packageJSON.version));
   // Q 刀②（2026-09-23）：激活即后台预热 services——resourceLoader 全树扫描（冷 5~10s）
   // 藏进「开面板之前」的空窗；失败静默（boot 时还会再试）
   const ws0 = vscode.workspace.workspaceFolders?.[0];
@@ -33,4 +38,5 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   // 由 subscriptions 的 dispose 处理
+  dbgAppend("=== extension deactivate"); // 与 activate 配对：日志里一眼看出宿主重启边界
 }
