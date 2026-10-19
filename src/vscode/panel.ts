@@ -22,12 +22,54 @@ import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend }
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
 import { listSessions, peekListSessions, invalidateListMemo, samePath, type SessionInfo } from "./sessionCache";
+import { notifySessionsChanged } from "./sessionsView";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
+
+/** 宿主容器抽象（刀1 CC 布局改造）：WebviewView（侧边栏视图）与 WebviewPanel（编辑器标签）
+ *  的共同面——两者同构：都暴露 webview/onDidDispose，可见性事件 WebviewView 叫
+ *  onDidChangeVisibility、WebviewPanel 叫 onDidChangeViewState（后者在刀3 包一层适配）。
+ *  装配/消息/HTML 全部只依赖本接口，容器差异不许渗进 panel 主体 */
+interface HostView {
+  readonly webview: vscode.Webview;
+  readonly visible: boolean;
+  readonly onDidDispose: vscode.Event<void>;
+  readonly onDidChangeVisibility: vscode.Event<void>;
+}
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "piChat.view";
+  /** 副栏视图 id（刀2 CC 布局）：manifest piChatSecondary 容器下的视图，与 viewId 同
+   *  provider；when 互斥（版本门槛）保证至多一个实例化，见 extension.ts 注册处 */
+  public static readonly secondaryViewId = "piChat.viewSecondary";
 
-  private view?: vscode.WebviewView;
+  /** 全部存活实例（刀3 CC 布局）：侧边栏一个 + 每编辑器标签各一——跨实例会话双开
+   *  守卫/删除保护、head 内容分发都扫这里（同实例多页签的旧守卫不够用了） */
+  private static readonly allProviders = new Set<ChatPanelProvider>();
+  /** pi-head scheme 全局只注册一次（刀3：多实例共享同一个 TextDocumentContentProvider，
+   *  prerun 内容按 uri 分发到持有 detail 状态的那个实例——HEAD 分支是纯工作区函数谁算都行） */
+  private static headRegistration: vscode.Disposable | undefined;
+  /** 编辑器面板实例的页签 id 序号：p{n} 独立命名空间——与侧边栏 t{n} 的会话/模型
+   *  记忆键（globalState 按 tabKey 分键）绝不撞车。序号持久化在 globalState（
+   *  不用 static 自增）：重启后继续增长不复用——复用 = 重启前已关面板的会话记忆
+   *  被重启后新面板继承（同 H 刀 id 复用事故家族） */
+  private static readonly PANEL_SEQ_KEY = "piChat.editorPanelSeq";
+  private static takePanelSeq(globalState: vscode.Memento): number {
+    const n = (globalState.get<number>(ChatPanelProvider.PANEL_SEQ_KEY) ?? 0) + 1;
+    void globalState.update(ChatPanelProvider.PANEL_SEQ_KEY, n);
+    return n;
+  }
+  /** pi 未安装弹窗每窗口只弹一次（多实例共用；原实例字段会一面板一弹） */
+  private static piCheckDone = false;
+  /** 跨实例工厂（extension.ts 注入）：面板实例的「＋新会话」开新编辑器标签用——
+   *  panel.ts 不 import 工厂实现，依赖倒置同 setPiClientDebug 接法 */
+  private static readonly factories = {
+    openEditorTab: undefined as ((sessionFile?: string) => void) | undefined,
+  };
+  static setFactories(f: { openEditorTab?: (sessionFile?: string) => void }): void {
+    ChatPanelProvider.factories.openEditorTab = f.openEditorTab;
+  }
+
+  private view?: HostView;
   /** 工单十五刀1：核心多实例——每个标签一个 PiCore（独立 PiClient/AgentSession，可同时各自 busy）。
    *  panel 持 Map<tabId, PiCore>；活动标签 id 见 activeTabId。刀2 落标签栏 UI，
    *  刀3 落会话语义（lastSessionByWs 按标签、模型/思考记忆按标签等）；本刀只铺路由，UI 仍单标签。 */
@@ -55,19 +97,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  （普通「没启动过的标签」切到只清空显示不起进程——那是新建/关剩补位的语义，见 handleTabSwitch） */
   private readonly restoredTabs = new Set<string>();
   private sessionPickerShown = false;
-  /** 启动时是否已检测过 pi 安装（避免重复弹窗） */
-  private piCheckDone = false;
+  /** 启动时是否已检测过 pi 安装（已升级为 static：多面板实例共享，避免一面板一弹） */
   private selTimer: NodeJS.Timeout | undefined;
   private editorDisposables: vscode.Disposable[] = [];
+  /** 刀3 编辑器面板实例：非空 = 本实例宿主是编辑器 WebviewPanel（不是侧边栏视图）。
+   *  面板模式差异：①不走标签栏持久化（TAB_BAR 键是侧边栏的，面板实例写它会互相覆盖）；
+   *  ②「＋新会话」= 新开编辑器标签（CC 语义），不是本面板内多页签；③标题跟随会话名 */
+  private readonly editorPanel?: vscode.WebviewPanel;
   /** 面板语言（zh 默认 / en），头部 中/EN 按钮切换，globalState 持久化；变更须同步 core.lang */
   private lang: Lang = "zh";
   /** 鸭子 logo 的 data URI（重生成 HTML 时复用，不必每次读盘） */
   private duckUri = "";
 
-  /** HEAD 版本内容只读文档提供器（vscode.diff 左侧用，懒注册一次） */
-  private headProvider = vscode.workspace.registerTextDocumentContentProvider("pi-head", {
-    provideTextDocumentContent: (uri) => this.changes.headContent(uri),
-  });
+  /** HEAD 版本内容只读文档提供器（vscode.diff 左侧用）——刀3 起改为静态单点注册（
+   *  多面板实例共享），注册体在构造器；此处仅留字段位兼容，不再持有 Disposable */
   /** 工单七「本次改动」状态机（刀 C 第一簇抽到 changes.ts）——host 桥在此注入 */
   private changes = new ChangesController({
     post: (msg, tabId) => this.post(msg, tabId),
@@ -84,9 +127,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly globalState: vscode.Memento,
-    private readonly version: string
+    private readonly version: string,
+    editorPanel?: vscode.WebviewPanel,
+    /** 刀3 重启恢复：serializer 从 webview state 传回的原 tabKey——用它重建（不取新号、
+     *  不置 freshTab）→ 按 tabKey 记忆恢复原会话；缺省 = 新面板（取号 + 新会话语义） */
+    restoredTabKey?: string
   ) {
+    this.editorPanel = editorPanel;
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
+    ChatPanelProvider.allProviders.add(this);
+    // pi-head 全局一次：多实例共享，prerun 内容分发到持有 detail 的实例（刀3）；
+    // 原每实例注册会被后建面板顶掉侧边栏的 provider → 侧边栏 diff 左侧白屏
+    if (!ChatPanelProvider.headRegistration) {
+      ChatPanelProvider.headRegistration = vscode.workspace.registerTextDocumentContentProvider("pi-head", {
+        provideTextDocumentContent: async (uri) => {
+          for (const p of ChatPanelProvider.allProviders) {
+            const s = await p.changes.tryHeadContent(uri);
+            if (s !== null) return s;
+          }
+          return "";
+        },
+      });
+    }
+    if (editorPanel) {
+      // 编辑器面板实例：独立页签命名空间 p{n}，不碰侧边栏标签栏持久化；
+      // 恢复路径用原 tabKey（会话记忆同键 → 恢复原会话），新面板取新号 + 新会话语义
+      if (restoredTabKey && /^p\d+$/.test(restoredTabKey)) {
+        this.activeTabId = restoredTabKey;
+      } else {
+        this.activeTabId = "p" + ChatPanelProvider.takePanelSeq(globalState);
+        this.freshTabs.add(this.activeTabId);
+      }
+      this.tabMeta.set(this.activeTabId, { title: this.L.tabUntitled, busy: false });
+      return;
+    }
     // 标签栏重建必须先于一切 ensureCore/postTabs：活动标签 id 决定首个核心的 tabKey，
     // 进而决定恢复哪个标签记忆的会话（顺序错了等于白存）
     this.restoreTabBar();
@@ -146,6 +220,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 标签栏落盘（id/顺序/标题/活动标签）——按工作区分桶（globalState 跨项目共享，
    *  不分桶会把 A 项目的标签长进 B 项目，2026-09-20 串项目事故） */
   private saveTabBar(): void {
+    // 刀3：编辑器面板实例不碰侧边栏的标签栏持久化（同一 TAB_BAR 键，面板实例写会互相覆盖）
+    if (this.editorPanel) return;
     // H 刀（2026-09-22 用户拍板「没有内容的新会话不应该在重启时展示或记录」）：空页签
     // 不入库——pi 同口径：没内容的会话没有文件（pi -r 不列），记忆文件不在⇔ 没内容。
     // 空页签被重启拉出来只会被 -c 强加「最近一条会话」（污染源 + 双写冲突）。seq 必须
@@ -200,6 +276,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     return core;
   }
+
+  /** 刀4 会话列表点击入口（sessionsView 命令路由）：已打开 → 聚焦持有者；
+   *  未打开 → 开编辑器标签并首开该会话 */
+  static async openOrFocusSession(file: string): Promise<void> {
+    const holder = ChatPanelProvider.findHolder(file);
+    if (holder) {
+      holder.p.focusSelf();
+      return;
+    }
+    ChatPanelProvider.factories.openEditorTab?.(file);
+  }
+
+  /** 跨实例查找持有某会话文件的核心（刀3 双开守卫）：返回所属实例与标签 id——
+   *  同实例多页签的旧循环不够用了，编辑器面板是独立实例 */
+  private static findHolder(file: string): { p: ChatPanelProvider; tabId: string } | undefined {
+    for (const p of ChatPanelProvider.allProviders) {
+      for (const [tid, c] of p.cores) {
+        if (c.currentSessionFile && samePath(file, c.currentSessionFile)) return { p, tabId: tid };
+      }
+    }
+    return undefined;
+  }
+
+  /** 聚焦到本实例视图：面板实例 reveal 编辑器标签；侧边栏实例 focus 视图（刀3 守卫跳转用） */
+  private focusSelf(): void {
+    if (this.editorPanel) this.editorPanel.reveal(vscode.ViewColumn.Active);
+    else void vscode.commands.executeCommand(ChatPanelProvider.viewId + ".focus");
+  }
+
+  /** 刀3：构造时指定首开会话（openEditorTab(sessionFile) 工厂入参）——webviewReady
+   *  握手后自动切到该会话（原 pickSession 主路径渲染链搬用）；平时为 null */
+  private pendingSessionFile: string | null = null;
 
   /** 活动标签的核心。历史 QuickPick/⚡菜单/设置等宿主 UI 流程一律作用于活动标签
    *  （工单十五刀3 口径预埋）；单标签时代与原 this.core 字段行为等价 */
@@ -357,6 +465,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.attachView(view);
+  }
+
+  /** 刀3：把编辑器 WebviewPanel 装配成本实例的宿主视图（extension.ts 的 openEditorTab
+   *  工厂调用）。WebviewPanel 与 WebviewView 差异只在可见性事件名（onDidChangeViewState
+   *  vs onDidChangeVisibility）——包一层适配后 attachView 原样复用。
+   *  注意：关闭面板即 dispose（无拦截点，VS Code 关标签不可 veto）——pi 会话文件已
+   *  落盘不丢数据，busy 中关面板 = 中断该会话任务（与关窗口同语义，不弹确认） */
+  attachEditorPanel(sessionFile?: string): void {
+    const panel = this.editorPanel;
+    if (!panel) return;
+    if (sessionFile) this.pendingSessionFile = sessionFile;
+    const hv: HostView = {
+      webview: panel.webview,
+      get visible() { return panel.visible; },
+      onDidDispose: panel.onDidDispose,
+      // 适配：面板的可见性变化藏在 onDidChangeViewState 里（含激活态变化，多触发无害——
+      // attachView 里的预热有 sessionPickerShown/piCheckDone 一次性门）
+      onDidChangeVisibility: (listener) => panel.onDidChangeViewState(() => listener()),
+    };
+    this.attachView(hv);
+    panel.onDidDispose(() => this.dispose());
+  }
+
+  /** 视图装配（刀1 抽出）：resolveWebviewView（侧边栏）与刀3 的编辑器 WebviewPanel 共用——
+   *  HTML/消息路由/编辑器选区监听/预热全在这里接一次，容器只是外壳 */
+  private attachView(view: HostView): void {
     this.view = view;
     // retainContextWhenHidden：切到其他侧边栏时保活 webview，回来不重建、不丢会话
     view.webview.options = { enableScripts: true };
@@ -397,9 +532,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.changes.resendLists();
         // 工单十五刀2：标签清单随握手下发（webview 启动即渲染标签条）
         this.postTabs();
+        // 刀3：编辑器面板把 tabKey 存进 webview state（VS Code 序列化面板时捕获，
+        // 重启后 serializer 传回 → 恢复原会话而不是开新会话）
+        if (this.editorPanel) this.post({ type: "panelInfo", tabKey: this.activeTabId });
         // R 刀时序修正（2026-09-23）：pi 预热必须在 postTabs **之后**——快路径 render 同步发，
         // 早跑会抢在标签条前面（用户报「会话信息比页签先出」）。ensureClient 幂等（有 client 即返）
         this.core.ensureClient();
+        // 刀3：openEditorTab(sessionFile) 首开会话——握手后切到目标文件并渲染（原
+        // pickSession 主路径渲染链）；null = 普通新会话，不走此分支
+        if (this.pendingSessionFile) {
+          const f = this.pendingSessionFile;
+          this.pendingSessionFile = null;
+          void (async () => {
+            try {
+              const r = await this.core.ensureClient().switchSession(f);
+              if (r?.cancelled) return;
+              const d = await this.core.clientRef?.getMessages();
+              this.post({ type: "render", messages: d?.messages ?? [] });
+              await this.core.reapplyModelMemory();
+            } catch (err) {
+              dbgLog("openEditorTab switch FAIL: " + String(err));
+            }
+          })();
+        }
         // 工单24 架构归位：webview 重载后每页签的树都空了，给所有已建核心各发一次快照——
         // 后台页签的流式事件要写进它们自己的隐藏树，没有历史底子就会从半截开始累积
         for (const [, c] of this.cores) void c.postUiState();
@@ -463,8 +618,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 面板第一次展示时，预热 pi 进程（不弹任何选择框；恢复历史走 ⏱ / 「会话」按钮）
     const prewarm = () => {
       // 首次可见：检测 pi 是否安装；没装则提供一键安装
-      if (!this.piCheckDone) {
-        this.piCheckDone = true;
+      if (!ChatPanelProvider.piCheckDone) {
+        ChatPanelProvider.piCheckDone = true;
         void (async () => {
           const v = await this.piSetup.piVersion();
           if (v === null) {
@@ -501,6 +656,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    ChatPanelProvider.allProviders.delete(this);
     // 工单十五：全部标签的核心一起回收（dispose 链各核心互不共享 PiClient）
     for (const core of this.cores.values()) core.dispose();
     this.cores.clear();
@@ -593,6 +749,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (t && meta.title !== t) { meta.title = t; changed = true; titleDirty = true; }
     }
     if (changed) this.postTabs();
+    // 刀3：编辑器面板的标签题即面板标题（编辑器标签栏显示的字）——只刷自己实例的活动标签
+    if (titleDirty && this.editorPanel && tabId === this.activeTabId) {
+      this.editorPanel.title = meta.title;
+    }
     // 标题变了才落盘：busy/unread 高频变化不碰 globalState
     if (titleDirty) this.saveTabBar();
   }
@@ -601,6 +761,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 新标签 = 新空会话：只登记元数据，PiCore 懒创建（首条消息/切历史时 ensureCore 才建） */
   private handleTabNew(): void {
+    // 刀3 CC 语义：编辑器面板里的「＋新会话」= 再开一个编辑器标签（独立面板实例），
+    // 不是本面板内多页签——由 extension.ts 注入的工厂执行
+    if (this.editorPanel) { ChatPanelProvider.factories.openEditorTab?.(); return; }
     const id = "t" + (++this.tabSeq);
     this.tabMeta.set(id, { title: this.L.tabUntitled, busy: false });
     this.freshTabs.add(id); // 刀4：新标签=新持久会话（ensureCore 时置 core.freshTab）
@@ -922,28 +1085,37 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return;
       } else if (pick.file) {
         // 工单十五刀3/4：同一会话文件禁止被两个标签同时打开（双窗口写冲突等价）。
-        // 已被别的标签持有 → 直接跳过去看（比报错更符合「随时查看历史」意图）
-        for (const [tid, c] of this.cores) {
-          if (c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
-            if (tid !== this.activeTabId) {
-              this.handleTabSwitch(tid);
-              this.post({ type: "notice", text: this.L.sessionOpenInTab });
-              return;
-            }
-            // 双写者事故（2026-09-20 用户实测「我切了会话，另外的会话也变成了你好」）：
-            // 活动标签自己持有且 busy 时，原 code 破守卫落到下方 busy 分支 handleTabNew——
-            // 同一个 jsonl 开进第二棵页签，两个页签同名同内容双写（pi 双进程同文件追加）。
-            // 占用守卫必须盖住 busy 分支：会话已在本页签，提示即收，绝不开第二棵
-            if (this.core.isBusy) {
-              this.post({ type: "notice", text: this.L.sessionOpenHere });
-              return;
-            }
-            break; // 活动标签自己持有且空闲：幂等重开无害，走正常切换
+        // 刀3 升级为跨实例守卫：编辑器面板是独立 provider 实例，持有者在别实例 → 聚焦过去
+        const holder = ChatPanelProvider.findHolder(pick.file);
+        if (holder) {
+          if (holder.p !== this) {
+            holder.p.focusSelf();
+            this.post({ type: "notice", text: this.L.sessionOpenInTab });
+            return;
           }
+          if (holder.tabId !== this.activeTabId) {
+            this.handleTabSwitch(holder.tabId);
+            this.post({ type: "notice", text: this.L.sessionOpenInTab });
+            return;
+          }
+          // 双写者事故（2026-09-20 用户实测「我切了会话，另外的会话也变成了你好」）：
+          // 活动标签自己持有且 busy 时，原 code 破守卫落到下方 busy 分支 handleTabNew——
+          // 同一个 jsonl 开进第二棵页签，两个页签同名同内容双写（pi 双进程同文件追加）。
+          // 占用守卫必须盖住 busy 分支：会话已在本页签，提示即收，绝不开第二棵
+          if (this.core.isBusy) {
+            this.post({ type: "notice", text: this.L.sessionOpenHere });
+            return;
+          }
+          // 活动标签自己持有且空闲：幂等重开无害，走正常切换（不 break，直接下到主路径）
         }
         if (this.core.isBusy) {
           // busy 中选历史：开进新并行标签，不中断当前任务（用户直令 2026-09-14）。
           // 新标签 freshTab=true → SessionManager.create 后立刻 switch 到目标文件
+          // 刀3：面板实例的新并行标签 = 新编辑器标签（带首开会话），本面板不内生页签
+          if (this.editorPanel) {
+            ChatPanelProvider.factories.openEditorTab?.(pick.file);
+            return;
+          }
           this.handleTabNew();
           const nc = this.ensureCore(this.activeTabId);
           const r2 = await nc.ensureClient().switchSession(pick.file);
@@ -954,6 +1126,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "notice", text: this.L.sessionRestored + name2 });
           // 切完补回每标签模型/思考记忆并同步页脚（刀3 语义补全，同下方主路径口径）
           await nc.reapplyModelMemory();
+          notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
           return;
         }
         const r = await client.switchSession(pick.file);
@@ -969,6 +1142,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 工单15刀3 记忆语义补全：switchSession 会把模型重置为会话文件里存的值，
       // 页签上自选的模型/思考等级要在切完后补回（用户报「一切会话模型就变了」）
       await this.core.reapplyModelMemory();
+      notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
@@ -996,12 +1170,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     );
     if (!pick) return;
     // 工单十五刀3：被任意标签打开的会话都不可删（原守卫只看活动标签；多标签后任何
-    // 持有该文件的 pi 会话都在追加写入，删了数据丢失）
-    for (const c of this.cores.values()) {
-      if (c.currentSessionFile && samePath(pick.file, c.currentSessionFile)) {
-        this.post({ type: "notice", text: this.L.delSessionCur });
-        return;
-      }
+    // 持有该文件的 pi 会话都在追加写入，删了数据丢失）；刀3 升级跨实例（编辑器面板）
+    const holder = ChatPanelProvider.findHolder(pick.file);
+    if (holder) {
+      this.post({ type: "notice", text: this.L.delSessionCur });
+      return;
     }
     const root = path.join(os.homedir(), ".pi", "agent", "sessions");
     let real: string;
@@ -1024,6 +1197,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     try {
       fs.rmSync(real, { force: true });
       invalidateListMemo(); // 已知变更立即失效应答缓存：列表不能把删掉的会话再拖 10s 旧账
+      notifySessionsChanged(); // 刀4：左侧会话列表立即跟随删除
       this.post({ type: "notice", text: this.L.delSessionDone + path.basename(real) });
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.delSessionFail + (err?.message ?? err) });

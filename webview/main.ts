@@ -2147,6 +2147,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     // 鸭子换图是页面级（图源与页签无关），不过路由
     if (m.type === 'duck') { applyDuck(m.uri); return; }
+    // 刀3 编辑器面板：tabKey 存进 webview state 快照（VS Code 序列化面板时捕获，
+    // 重启后 serializer 传回宿主 → 面板按原 tabKey 恢复原会话）。纯存储不渲染
+    if (m.type === 'panelInfo') { vscodeApi.setState({ tabKey: (m as any).tabKey }); return; }
     // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
     // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
     routeMsg(m);

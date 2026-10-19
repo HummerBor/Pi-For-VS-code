@@ -275,6 +275,13 @@ export class ChangesController {
 
   /** vscode.diff 左侧：HEAD 版本只读内容（TextDocumentContentProvider 回调） */
   async headContent(uri: vscode.Uri): Promise<string> {
+    return (await this.tryHeadContent(uri)) ?? this.L.chgHeadFail;
+  }
+
+  /** headContent 可分发版（刀3 多实例）：返回 null = 本控制器不持有该 uri 的状态
+   *  （prerun 分支缺 detail/patch）——多实例单 scheme 注册时调用方继续问下一个；
+   *  HEAD 分支是纯工作区函数无状态，任一控制器可算 */
+  async tryHeadContent(uri: vscode.Uri): Promise<string | null> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     // 未跟踪文件的对比侧：query 带 prerun: 前缀 → 返回本轮改动前内容（patch 链逆向，
     // 任一步不符返回失败占位——与 revertFile 同源校验，不硬猜）
@@ -288,7 +295,7 @@ export class ChangesController {
     if (q.startsWith("prerun:")) {
       const abs = q.slice("prerun:".length);
       const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(abs));
-      if (!d || !d.patches.length) return "";
+      if (!d || !d.patches.length) return null; // 不持有（多实例分发：问下一家）
       try {
         let content = fs.readFileSync(abs, "utf8");
         for (let i = d.patches.length - 1; i >= 0; i--) {

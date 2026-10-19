@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.47",
+  "version": "0.1.51",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -26,13 +26,31 @@
     "Other"
   ],
   "main": "./out/vscode/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:piChat.editorPanel"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
           "id": "piChat",
           "title": "Pi For VSC",
+          "icon": "media/pi-logo.svg",
+          "when": "piChat.doesNotSupportSecondarySidebar"
+        },
+        {
+          "id": "piChatSessions",
+          "title": "pi 会话",
           "icon": "media/pi-logo.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "piChatSecondary",
+          "title": "Pi For VSC",
+          "icon": "media/pi-logo.svg",
+          "when": "!piChat.doesNotSupportSecondarySidebar"
         }
       ]
     },
@@ -41,7 +59,23 @@
         {
           "type": "webview",
           "id": "piChat.view",
-          "name": "Pi For VSC"
+          "name": "Pi For VSC",
+          "when": "piChat.doesNotSupportSecondarySidebar"
+        }
+      ],
+      "piChatSessions": [
+        {
+          "type": "tree",
+          "id": "piChat.sessions",
+          "name": "会话"
+        }
+      ],
+      "piChatSecondary": [
+        {
+          "type": "webview",
+          "id": "piChat.viewSecondary",
+          "name": "Pi For VSC",
+          "when": "!piChat.doesNotSupportSecondarySidebar"
         }
       ]
     },
@@ -50,8 +84,44 @@
         "command": "piChat.view.focus",
         "title": "pi: 打开聊天面板",
         "category": "pi"
+      },
+      {
+        "command": "piChat.openInEditor",
+        "title": "pi: 新建会话（编辑器标签）",
+        "category": "pi",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "piChat.newSession",
+        "title": "新会话",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piChat.refreshSessions",
+        "title": "刷新会话列表",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "piChat.newSession",
+          "when": "view == piChat.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "piChat.refreshSessions",
+          "when": "view == piChat.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "piChat.openInEditor",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "pi Chat",
       "properties": {

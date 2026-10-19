@@ -428,6 +428,15 @@ export interface DuckMsg {
   type: "duck";
   uri: string;
 }
+/** 刀3 编辑器面板：宿主把面板 tabKey 交给 webview 存进 getState/setState 快照——
+ *  VS Code 序列化面板时捕获，重启后 serializer 传回 resolveWebviewPanel 的 state，
+ *  面板实例按原 tabKey 恢复原会话（新面板 = 开新会话）。
+ *  【协议同步】发送方 panel.attachEditorPanel 面板分支、接收方 webview main.ts（
+ *  仅 setState 不渲染） */
+export interface PanelInfoMsg {
+  type: "panelInfo";
+  tabKey: string;
+}
 /** 工单十五刀2：标签栏全量状态（宿主是唯一事实源，webview 只渲染；标题/busy 由宿主从
  *  各核心的 state/busy 消息记账）。webview 本地另叠 dirty 未读点（后台标签完成亮提示） */
 export interface TabInfo {
@@ -558,6 +567,7 @@ export type HostToWebview =
   | StateMsg
   | ThemeMsg
   | DuckMsg
+  | PanelInfoMsg
   | BannerMsg
   | ChangesListMsg
   | TabsMsg
