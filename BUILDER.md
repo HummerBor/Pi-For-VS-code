@@ -4,7 +4,35 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-10-19 CC 布局改造四刀 + 样式 token 化 + 列表删除（用户直令，两轮均 compile 绿/六用例全绿，待实测）
+最后更新：2026-10-22 会话双开守卫收口（同一会话在副栏+编辑器标签各开一份，用户实测）
+
+# 会话双开守卫收口（2026-10-22，用户报「能打开同一个会话，点击会话列表打开前是不是该验证一下」）
+
+## 定性（先盘点再动刀）
+点击路径早有跨实例守卫（findHolder，刀3），但守卫有三条漏路，只在点击处加验证治不了：
+1. **boot 链无守卫**：ensureClient 直接 `client.start(openTarget=记忆会话)`，副栏 t1 与编辑器标签
+   p{n} 各自记忆可能指向同一文件，重启后各自恢复 = 双开双写（jsonl 各追各的，内容分叉）；
+2. **findHolder 失明窗口**：守卫读 currentSessionFile，真值要等 refreshState 回填——boot 期长达
+   数秒为 null，这几秒内点击列表 → 守卫说没人用 → 又开一份；
+3. **点击→握手空窗**：编辑器标签已建、webview 未握手，pendingSessionFile 不被 findHolder 认作持有。
+
+## 修法：验证+认领收口到「认领点」（不是在点击处再加判断）
+- **piCore**：新增 claimedFile 提前认领（文件被选中的那一刻同步写下，真值非空即交棒，失败/取消
+  调用方回滚 releaseSessionClaim）；currentSessionFile = claimed ?? 真值；boot 卡口 restoreBlocked
+  （记忆会话被占 → 视同无记忆新建，不 -c、不 openTarget，中英 notice sessionOpenElsewhere）。
+- **hostCapabilities**：可选 `isSessionHeld(file, selfTabKey)`（同 provider 同页签自己问不算占用）；
+- **panel**：caps 实现闸；findHolder 把 pendingSessionFile 也算持有；握手/pickSession 主路径/
+  busy 新开页签三处接 claimSession（被占→聚焦持有者+提示，握手竞态被占则关掉刚开的空壳标签）；
+- 清理点：collectState 真值非空交棒、boot switch 失败/boot FAIL 回滚、各取消/失败分支回滚。
+
+## 验证
+- compile 绿；test:detail 27/27、test:subagent 46、test:revert 12、test:linkify 22、smoke-boot PASS；
+  panel-load.test.mjs 为存量失败（桩缺 vscode.TreeItem，stash 前后同报错，与本次无关）。
+- **待用户实测**：① 副栏开着会话 A，点列表 A → 聚焦不重开；② 副栏 boot 中（几秒空窗）点列表 A →
+  同样聚焦；③ 重启窗口且副栏/编辑器标签记忆同为 A → 先到者持有，后到者新建 + 提示；④ 连点两下
+  同一会话只开一份；⑤ 正常切换/取消切换不锁会话（取消后别处仍可打开 A）。
+- 债务：认领/闸逻辑无零依赖用例覆盖（宿主胶水需 vscode，panel-load 桩又缺 TreeItem）；若再出
+  双开事故，先补桩再上用例。
 
 # CC 布局改造（2026-10-19 用户直令：「完全改成 cc 插件这种模型」+「样式统一/列表删除」）
 

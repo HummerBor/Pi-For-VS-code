@@ -103,6 +103,15 @@ export class PiCore {
   /** 本轮 agent 运行起点（agent_start 时记录，settled 时算实测耗时）；0=无运行 */
   private runStartTs = 0;
   private lastSessionFile: string | null = null;
+  /** 提前认领的会话文件（跨实例双开守卫的「提前量」，2026-10-22 用户实测同一会话
+   *  开两份）：真值 lastSessionFile 要等 refreshState 回填才有值，boot 链上这段空窗
+   *  长达数秒（services 扫描）——期间 findHolder 失明，别的实例点同一会话就开出第二份
+   *  （两个 pi 实例追写同一个 jsonl，内容分叉、谁都不是全量真相）。认领在「文件被选中」
+   *  的那一刻同步写下（ensureClient/claimSession），真值到达即交棒，失败/取消由调用方回滚 */
+  private claimedFile: string | null = null;
+  /** boot 卡口：记忆会话被别的实例持有时置真——本次启动不恢复会话（视同无记忆，
+   *  H 刀口径新建），ensureClient 与 boot 链两处共用这一次裁决 */
+  private restoreBlocked = false;
   /** 已自动命名过的会话文件（避免重复 RPC） */
   private autoTitledFor: string | null = null;
   /** pi 侧 queue_update 报告的排队总数（steering+followUp），用于检测“队列变短=插话已被取走” */
@@ -321,8 +330,20 @@ export class PiCore {
     // pi-chat-debug.log t56 时间线）：无会话记忆或记忆文件不在的页签**同样禁 -c**。pi 同
     // 口径：没内容的会话没有文件（pi -r 不列）——文件在⇔ 有内容可恢复。-c（continueRecent）
     // 只会把「最近一条会话」强加给空页签（还会和原页签双写同一文件）；无记忆一律 [] 新建。
-    const mem = this.freshTab ? undefined : this.getSessionForWs(cwd);
+    this.restoreBlocked = false;
+    let mem = this.freshTab ? undefined : this.getSessionForWs(cwd);
+    if (mem && fs.existsSync(mem) && this.caps.isSessionHeld?.(mem, this.tabKey)) {
+      // 双开守卫上闸（2026-10-22）：boot 此前压根不问 findHolder——重启后副栏 t1 与
+      // 编辑器标签 p{n} 各自的记忆可能指向同一文件，各自恢复 = 双开双写。被占即视同
+      // 无记忆（H 刀口径）：不 -c、不 openTarget，新建会话——绝不让两个 pi 实例追写
+      // 同一个 jsonl。认领同步写下：另一实例还在 boot 链上时，它的闸也看得见这里
+      this.restoreBlocked = true;
+      this.dbg("restore blocked: " + mem + " held by another instance");
+      this.post({ type: "notice", text: this.L.sessionOpenElsewhere });
+      mem = undefined;
+    }
     const memOk = !!mem && fs.existsSync(mem);
+    if (memOk && mem) this.claimedFile = mem;
     // 🚫 永不传 --no-session（审计红线，判死见上）；只在 continue 且记忆有效时传 -c
     const args = memOk && mode === "continue" ? ["-c"] : [];
     const sessionDir = this.caps.getConfig("piChat", "sessionDir", "");
@@ -353,7 +374,7 @@ export class PiCore {
     // 这里把 VSCode 内置 http.proxy 设置透传给 pi（HTTP_PROXY/HTTPS_PROXY）
     const proxyUrl = this.caps.getConfig("http", "proxy", "").trim();
     // R 刀（2026-09-23）：有记忆会话就直连其文件（open），不再「先接历史最近一条再换」
-    const openTarget = this.freshTab ? undefined : this.getSessionForWs(cwd);
+    const openTarget = mem; // 单一决策点：mem 已含 freshTab/存在性/被占三重裁决，不再重算记忆
     client.start(cwd, args, proxyUrl || undefined, openTarget && fs.existsSync(openTarget) ? openTarget : undefined);
 
     // 插话送达方式（默认逐条，CC 风格：排队消息一条条处理）
@@ -390,7 +411,7 @@ export class PiCore {
       try {
         // 工单十五刀4：freshTab 跳过按工作区恢复——新标签的会话记忆由它自己首次会话写入，
         // 不能把别的标签存的会话文件抢过来当恢复目标（同根因：写冲突）
-        const last = this.freshTab ? undefined : this.getSessionForWs(cwd);
+        const last = this.freshTab || this.restoreBlocked ? undefined : this.getSessionForWs(cwd);
         // R 刀快路径（2026-09-23 用户方案）：历史渲染不等 pi——会话文件就是记录本身
         // （jsonl 的 type:"message" entry.message {role,content,timestamp} 与
         // session.messages 同形，探针实测核对过）。先把记忆会话的消息读出来画上，
@@ -417,7 +438,8 @@ export class PiCore {
             await client.switchSession(last);
             mark("switch");
           } catch {
-            // 文件失效则退回 -c 恢复的最近会话
+            // 文件失效则退回 -c 恢复的最近会话；认领回滚（文件已不可用，别处也打不开）
+            this.releaseSessionClaim();
           }
         }
         mark("ready");
@@ -438,6 +460,8 @@ export class PiCore {
       } catch (err: any) {
         // 吞掉语义保留（不重抛，async 链无人接 reject）；但失败必弹错（F′，拍板 4）——
         // 静默整链死是 P0 的隐身衣：留痕（A 刀）+ 用户可见 notice 双保险
+        // boot 失败连带回滚认领：进程没起来 = 实际没持有该文件，不许把会话锁死在这里
+        this.releaseSessionClaim();
         this.dbg("boot FAIL tab=" + this.tabKey + ": " + ((err && err.message) || String(err)));
         this.post({ type: "notice", text: this.L.opFail + ((err && err.message) || String(err)) });
       } finally {
@@ -487,9 +511,22 @@ export class PiCore {
     this.lastModeText = text;
   }
 
-  /** adapter 的 deleteSessionPick 守卫读取：当前打开的会话不删 */
+  /** adapter 的 deleteSessionPick 守卫 / 跨实例 findHolder 读取：认领优先，真值兜底 */
   get currentSessionFile(): string | null {
-    return this.lastSessionFile;
+    return this.claimedFile ?? this.lastSessionFile;
+  }
+
+  /** 打开会话文件前的统一过闸（宿主闸 + 提前认领）：被别的实例/页签持有 → false，
+   *  调用方放弃并聚焦持有者；通过 → 认领立刻对 findHolder 可见（不等真值回填），返回 true */
+  claimSession(file: string): boolean {
+    if (this.caps.isSessionHeld?.(file, this.tabKey)) return false;
+    this.claimedFile = file;
+    return true;
+  }
+
+  /** 回滚认领（切换失败/取消时调用，否则会话被永久锁在本页签、别处打不开） */
+  releaseSessionClaim(): void {
+    this.claimedFile = null;
   }
 
   /** adapter 的 pushCodeContext 判断「无编辑器且无上下文」时是否需要发清理消息 */
@@ -1529,14 +1566,19 @@ export class PiCore {
   private async openSessionFile(file: string): Promise<void> {
     try {
       const client = this.ensureClient();
+      if (!this.claimSession(file)) {
+        this.post({ type: "notice", text: this.L.sessionOpenElsewhere });
+        return;
+      }
       const r = await client.switchSession(file);
-      if (r?.cancelled) return;
+      if (r?.cancelled) { this.releaseSessionClaim(); return; }
       const d = await client.getMessages();
       this.post({ type: "render", messages: d?.messages ?? [] });
       this.replaySubagentRuns(d?.messages ?? []);
       this.post({ type: "notice", text: this.L.sessionRestored });
       await this.refreshState();
     } catch (err: any) {
+      this.releaseSessionClaim();
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
   }
@@ -1674,6 +1716,9 @@ export class PiCore {
       }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
+      // 真值非空即交棒认领（claim 只活在「真值未回填」的空窗里）：同值 = 真值接管，
+      // 异值 = pi 实际已落在别处、认领作废；真值为空（新会话尚未落盘）则保留认领
+      if (this.lastSessionFile) this.claimedFile = null;
       // 上下文阈值预警（工单六）：涨破阈值提醒一次，占比回落（压缩后）re-arm 并收预警横幅。
       // 阈值走 VS Code 设置 piChat.contextWarnPercent（默认 70），经 caps 读取不碰 vscode
       const pct = stats?.contextUsage?.percent ?? null;

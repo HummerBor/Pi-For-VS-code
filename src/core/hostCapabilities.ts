@@ -45,4 +45,8 @@ export interface HostCapabilities {
   notify(level: "info" | "warn" | "error", message: string, actions?: string[]): Promise<string | undefined>;
   /** pi 扩展发来的 UI 请求（extension_ui_request）由宿主用原生 UI 处理 */
   uiRequest(req: any): void;
+  /** 跨实例会话双开守卫的闸：file 是否已被「别的实例/页签」持有。
+   *  selfTabKey = 询问方自己的 tabKey（同 provider 同页签自己问不算占用——幂等重开无害）。
+   *  可选：宿主没有多实例信息时省略，核心退化为不过闸（单实例行为不变） */
+  isSessionHeld?(file: string, selfTabKey: string): boolean;
 }

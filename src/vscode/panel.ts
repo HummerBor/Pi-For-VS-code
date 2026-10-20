@@ -295,6 +295,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       for (const [tid, c] of p.cores) {
         if (c.currentSessionFile && samePath(file, c.currentSessionFile)) return { p, tabId: tid };
       }
+      // 点击→webviewReady 握手的空窗（编辑器标签已建、核心还没起）：pendingSessionFile
+      // 也算持有——否则连点两下同一会话照样开出两份（2026-10-22 实测路径之一）
+      if (p.pendingSessionFile && samePath(file, p.pendingSessionFile)) return { p, tabId: p.activeTabId };
     }
     return undefined;
   }
@@ -323,6 +326,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         vscode.workspace.getConfiguration(section).get<T>(key, defaultValue),
       getPersist: <T>(key: string, defaultValue: T): T => this.globalState.get<T>(key, defaultValue),
       setPersist: (key, value) => void this.globalState.update(key, value),
+      // 跨实例会话双开守卫的闸（宿主侧实现，核心经 claimSession 调用）：
+      // findHolder 视角回答「是否已被别的实例/页签持有」——同 provider 同页签自己问
+      // 不算占用（幂等重开无害）。findHolder 读的 currentSessionFile 含 piCore 的
+      // 提前认领量（claimedFile），boot 空窗期也看得见持有者
+      isSessionHeld: (file, selfTabKey) => {
+        const h = ChatPanelProvider.findHolder(file);
+        return !!h && !(h.p === this && h.tabId === selfTabKey);
+      },
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
         vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
       showInputBox: async (options) => vscode.window.showInputBox(options),
@@ -542,15 +553,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // pickSession 主路径渲染链）；null = 普通新会话，不走此分支
         if (this.pendingSessionFile) {
           const f = this.pendingSessionFile;
+          // 先过闸认领再清 pending（顺序即正确性）：清了 pending 又还没认领的空窗里，
+          // findHolder 两边都看不见，同一会话会被并发改开第二份
+          if (!this.core.claimSession(f)) {
+            this.pendingSessionFile = null;
+            // 竞态被占（点击时无持有者、握手前已被别处认领）：本标签只为此会话而开，
+            // 聚焦持有者 + 提示后关掉，不留空壳标签
+            const h = ChatPanelProvider.findHolder(f);
+            h?.p.focusSelf();
+            h?.p.post({ type: "notice", text: this.L.sessionOpenInTab });
+            this.editorPanel?.dispose();
+            return;
+          }
           this.pendingSessionFile = null;
           void (async () => {
             try {
               const r = await this.core.ensureClient().switchSession(f);
-              if (r?.cancelled) return;
+              if (r?.cancelled) { this.core.releaseSessionClaim(); return; }
               const d = await this.core.clientRef?.getMessages();
               this.post({ type: "render", messages: d?.messages ?? [] });
               await this.core.reapplyModelMemory();
             } catch (err) {
+              this.core.releaseSessionClaim();
               dbgLog("openEditorTab switch FAIL: " + String(err));
             }
           })();
@@ -1128,8 +1152,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           }
           this.handleTabNew();
           const nc = this.ensureCore(this.activeTabId);
+          if (!nc.claimSession(pick.file)) {
+            ChatPanelProvider.findHolder(pick.file)?.p.focusSelf();
+            this.post({ type: "notice", text: this.L.sessionOpenInTab });
+            return;
+          }
           const r2 = await nc.ensureClient().switchSession(pick.file);
-          if (r2?.cancelled) { this.post({ type: "notice", text: this.L.switchCancelled }); return; }
+          if (r2?.cancelled) { nc.releaseSessionClaim(); this.post({ type: "notice", text: this.L.switchCancelled }); return; }
           const d2 = await nc.ensureClient().getMessages();
           this.post({ type: "render", messages: d2?.messages ?? [] });
           const name2 = (pick.label ?? "").replace(/^\$\(history\) /, "");
@@ -1139,8 +1168,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
           return;
         }
+        // 闸与认领（2026-10-22）：上方 findHolder 是 check，这里 claimSession 原子地
+        // 复查并提前认领——认领后其他实例立刻看得见，不等 refreshState 真值回填
+        if (!this.core.claimSession(pick.file)) {
+          ChatPanelProvider.findHolder(pick.file)?.p.focusSelf();
+          this.post({ type: "notice", text: this.L.sessionOpenInTab });
+          return;
+        }
         const r = await client.switchSession(pick.file);
         if (r?.cancelled) {
+          this.core.releaseSessionClaim();
           this.post({ type: "notice", text: this.L.switchCancelled });
           return;
         }
