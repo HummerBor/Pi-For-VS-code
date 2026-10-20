@@ -449,13 +449,17 @@ export class PiClient {
     });
   }
 
-  /** 加载指定的历史会话文件（*.jsonl）；R 刀：目标已是 open 直连的同一文件时跳过
-   *  （避免无谓的会话替换重载——已挂在目标上 */
+  /** 加载指定的历史会话文件（*.jsonl）；已在目标上则跳过（避免无谓的会话替换重载）。
+   *  【坑】「已在目标上」只能比当前挂载（session.sessionFile，与 getState 同源），绝不能
+   *  比 boot 的 startOpts.openPath——页签中途切走过别的会话后，openPath 早已不是当前
+   *  会话，拿它短路 = 「切回 boot 会话永远无效却报成功」（2026-10-20 实测：列表点击提示
+   *  「已恢复会话」、内容页头全是旧会话）。路径比对做归一（Windows 大小写/斜杠） */
   switchSession(sessionPath: string): Promise<any> {
-    if (sessionPath === this.startOpts?.openPath) {
-      return this.ready().then(() => ({ cancelled: false }));
-    }
+    const norm = (p?: string) => (p ? p.replace(/[\\/]+/g, "/").toLowerCase() : "");
     return this.ready().then(async () => {
+      if (norm(sessionPath) && norm(this.session?.sessionFile) === norm(sessionPath)) {
+        return { cancelled: false };
+      }
       const r = await this.runtime.switchSession(sessionPath);
       this.afterSessionSwap();
       return { cancelled: !!r?.cancelled };

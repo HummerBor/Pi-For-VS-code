@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-10-20 列表点击改「右侧=切换」（applySessionPick 收口复用 + focusSelf 打空修复）；前置：刀6 B、双开守卫收口（bf0c28b）
+最后更新：2026-10-20 列表点击改「右侧=切换」（applySessionPick 收口 + focusSelf 打空修复）+ piClient switchSession 假成功修复（R 刀短路比错字段）；前置：刀6 B、双开守卫收口（bf0c28b）
 
 # 列表点击交互修：右侧=切换（2026-10-20 用户实测「点列表选中的会话打不开」+「交互有问题」）
 
@@ -33,6 +33,15 @@
   ④ 右侧 busy 时点列表 → 新开副栏页签不中断任务；⑤ 已在当前页签显示的会话再点 → 提示不重复开。
 - **债务**：sv* 上行消息（svOpen/svDelete/svNew/svRefresh）未进 protocol.ts 登记（刀6 B
   遗留，本次只改了 svOpen 形状）；webview 双 webview 协议是否归主 protocol 待总监定口径。
+
+## 追加（2026-10-20 用户截图实锤：点了列表、提示「已恢复会话」、内容页头没换）
+真凶在 piClient 的 R 刀短路：switchSession 用 boot 的 startOpts.openPath 判「已挂在
+目标上」直接报成功——页签 boot 直连过 A、中途切到 B 后，再点 A 永远假成功（面板拿
+B 的消息当恢复结果渲染）。这也是「有些之前打开过的会话打不开」的另一半根因。
+修：短路改比当前挂载 session.sessionFile（与 getState 同源，路径归一大小写/斜杠）。
+验证：compile 绿、smoke-boot PASS、smoke-multiSession 连跑 3 次判定全 true（首跑
+"B got own answer: false" 为模型回答内容抖动，同版本复跑两次均 true）。待实测：
+boot 直连过的会话切走后再点列表 → 能真切回来（内容/页头都换）。
 
 # 刀6 B：会话列表改写成 webview（2026-10-19/20 用户直令 B，commit c9d33bc）
 
