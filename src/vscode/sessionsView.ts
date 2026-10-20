@@ -45,6 +45,7 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       if (m.type === "svReady") void this.sendItems();
       else if (m.type === "svRefresh") void this.sendItems();
       else if (m.type === "svNew") void vscode.commands.executeCommand("piChat.openInEditor");
+      else if (m.type === "svMore") ChatPanelProvider.moreFromList(); // ⚡ 菜单（2026-10-20 图2：中间区 ✳ 移列）
       else if (m.type === "svOpen" && m.file) void ChatPanelProvider.openOrFocusSession(m.file, m.label);
       else if (m.type === "svDelete" && m.file) {
         // 守卫/确认/落盘复用 panel.deleteSessionFile 单一真相（跨实例双开保护同款）；

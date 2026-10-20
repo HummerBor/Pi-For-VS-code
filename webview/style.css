@@ -27,6 +27,23 @@ body {
   border-bottom: 1px solid var(--pi-header-border);
 }
 
+/* —— 中间编辑区实例（2026-10-20 拍板「去掉/隐藏红框页头」）：会话标题·历史·新建·
+   菜单（含 logo）移交左侧会话列表，页头整行默认隐藏；subind（子 agent 收合开关）是
+   页头内唯一活控件——子 agent 运行时由 main.ts 露出 subind-live 行，功能不丢 */
+body.editor-panel #header {
+  display: none;
+}
+body.editor-panel.subind-live #header {
+  display: block;
+}
+body.editor-panel #logo,
+body.editor-panel #session,
+body.editor-panel #history,
+body.editor-panel #newchat,
+body.editor-panel #more {
+  display: none !important;
+}
+
 #hdr-row1 {
   display: flex;
   align-items: center;

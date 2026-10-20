@@ -1778,6 +1778,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 图标跟页签走：只有活动页签有子 agent 数据时才显示（缓存判空，全局单例不串台）
     var show = !!subdock && activeTabId !== null && !!subRunsOf(activeTabId) && Object.keys(subRunsOf(activeTabId)!).length > 0;
     subindEl.style.display = show ? 'inline-flex' : 'none';
+    // 编辑器实例页头默认整行隐藏（CSS）；子 agent 运行中才露出仅含 subind 的页头行
+    document.body.classList.toggle('subind-live', show);
     subindEl.classList.toggle('spin', subRunning);
     subindEl.title = subCollapsed ? L.smReopen : L.smCollapse;
   }
@@ -2149,7 +2151,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (m.type === 'duck') { applyDuck(m.uri); return; }
     // 刀3 编辑器面板：tabKey 存进 webview state 快照（VS Code 序列化面板时捕获，
     // 重启后 serializer 传回宿主 → 面板按原 tabKey 恢复原会话）。纯存储不渲染
-    if (m.type === 'panelInfo') { vscodeApi.setState({ tabKey: (m as any).tabKey }); return; }
+    if (m.type === 'panelInfo') {
+      vscodeApi.setState({ tabKey: (m as any).tabKey });
+      // 2026-10-20 拍板（图1 红框退役）：中间编辑区页头整行隐藏——会话标题/历史/新建/
+      // 菜单（含 logo）全部移交左侧会话列表（列表点击=打开&切换、＋=新增、齿轮=菜单）。
+      // panelInfo 只发给编辑器实例（panel.ts webviewReady），副栏页头原样保留；
+      // subind（子 agent 收合开关）是页头唯一活控件，updateSubInd 露出 subind-live 行保功能
+      document.body.classList.add('editor-panel');
+      return;
+    }
     // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
     // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
     routeMsg(m);

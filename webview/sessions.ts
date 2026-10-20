@@ -17,6 +17,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   const emptyEl = document.getElementById("empty")!;
   (document.getElementById("new") as HTMLElement).innerHTML = ico("plus");
   (document.getElementById("refresh") as HTMLElement).innerHTML =ico("refresh");
+  (document.getElementById("gear") as HTMLElement).innerHTML = ico("gear");
 
   /** 全量条目（宿主 svItems 唯一事实源）；sel = 选中下标（键盘导航），渲染即过滤 */
   let items: { file: string; label: string; time: string }[] = [];
@@ -28,6 +29,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       plus: '<path d="M12 5v14M5 12h14"/>',
       refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
       trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
+      // 与聊天页头 ✳ 同一个齿轮（main.ts ICON_PATHS.gear 同形）——菜单入口移列，图标不换脸
+      gear: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2M3.5 3.5l1.6 1.6M10.9 10.9l1.6 1.6M12.5 3.5l-1.6 1.6M5.1 10.9l-1.6 1.6"/>',
     };
     return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${p[name] || ""}</svg>`;
   }
@@ -102,6 +105,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   (document.getElementById("new") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svNew" }));
   (document.getElementById("refresh") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svRefresh" }));
+  // ⚡ 菜单（宿主路由到最近激活的编辑器标签，副栏兑底——见 panel.moreFromList）
+  (document.getElementById("gear") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svMore" }));
 
   // 宿主→webview：svItems 唯一事实源（全量重发，本地零影子状态——与聊天 tabs 同纪律）；
   // svTheme = 主题广播（body[data-theme] 就地换，与聊天面板同款 token）

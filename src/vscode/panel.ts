@@ -48,6 +48,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 副栏（聊天视图）唯一实例：extension.activate 建的那个 provider（编辑器标签
    *  实例不设）——左侧会话列表点击的路由目标（2026-10-22「右侧=切换」交互） */
   private static sidebar: ChatPanelProvider | undefined;
+  /** 中间编辑区最近激活的编辑器标签实例（2026-10-20 职责重划：左侧列表负责中间区的
+   *  会话打开&切换/齿轮菜单）——激活即记（onDidChangeViewState），dispose 退位时从
+   *  幸存编辑器实例补位（关掉当前活动标签 VS Code 会激活另一个） */
+  private static lastActiveEditor: ChatPanelProvider | undefined;
   /** pi-head scheme 全局只注册一次（刀3：多实例共享同一个 TextDocumentContentProvider，
    *  prerun 内容按 uri 分发到持有 detail 状态的那个实例——HEAD 分支是纯工作区函数谁算都行） */
   private static headRegistration: vscode.Disposable | undefined;
@@ -163,6 +167,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.freshTabs.add(this.activeTabId);
       }
       this.tabMeta.set(this.activeTabId, { title: this.L.tabUntitled, busy: false });
+      ChatPanelProvider.lastActiveEditor = this; // 新开的编辑器标签必然是激活态
       return;
     }
     // 标签栏重建必须先于一切 ensureCore/postTabs：活动标签 id 决定首个核心的 tabKey，
@@ -283,24 +288,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 刀4 会话列表点击入口（sessionsView 命令路由）：已打开 → 聚焦持有者；
    *  未打开 → 开编辑器标签并首开该会话 */
-  /** 左侧会话列表点击（2026-10-22 用户拍板交互「右侧是切换，而不是再打开一个多页签」）：
-   *  走 ⏱ 选择器同一条 applySessionPick 链——已持有就切到持有页签并聚焦，没有则副栏
-   *  当前页签就地切换，busy 才开新并行标签；不再默认在中间开编辑器标签（仅无副栏
-   *  实例时兑底）。焦点归谁看持有者：持有者在编辑器标签时聚焦归它，别被副栏抢回 */
+  /** 左侧会话列表点击（2026-10-20 职责重划拍板：列表 + 「新增」负责中间编辑区的
+   *  会话新增/打开&切换，中间区页头随之退役）：
+   *  · 有活动编辑器标签 → 走 applySessionPick 同一条链：已开=切到持有者，未开且空闲=
+   *    就地切换（不乱开页签，2026-10-20「而不是再打开一个多页签」），busy=开并行编辑器标签；
+   *  · 从未有过编辑器标签 → 打开新编辑器标签装它（打开）；
+   *  · 编辑器已全关、持有者在副栏 → 切到副栏持有页签再聚焦 */
   static async openOrFocusSession(file: string, label?: string): Promise<void> {
-    const sb = ChatPanelProvider.sidebar;
-    if (!sb) {
-      ChatPanelProvider.factories.openEditorTab?.(file);
+    const lbl = label ?? file.split(/[\\/]/).pop() ?? file;
+    const ed = ChatPanelProvider.lastActiveEditor;
+    if (ed) {
+      const holder0 = ChatPanelProvider.findHolder(file);
+      const holderOut = !!holder0 && holder0.p !== ed;
+      await ed.applySessionPick({ action: "file", file, label: lbl });
+      // 聚焦看结果而非看入口：busy 分支刚开了并行编辑器标签（constructor 已把
+      // lastActiveEditor 指过去），此时回焦 ed 会把新标签抢回后台——焦点跟着最后激活走
+      if (!holderOut) (ChatPanelProvider.lastActiveEditor ?? ed).focusSelf();
       return;
     }
     const holder = ChatPanelProvider.findHolder(file);
-    const holderOut = !!holder && holder.p !== sb;
-    await sb.applySessionPick({
-      action: "file",
-      file,
-      label: label ?? file.split(/[\\/]/).pop() ?? file,
-    });
-    if (!holderOut) sb.focusSelf();
+    if (holder) {
+      if (holder.p === ChatPanelProvider.sidebar && holder.tabId !== holder.p.activeTabId) {
+        holder.p.handleTabSwitch(holder.tabId);
+      }
+      holder.p.focusSelf();
+      return;
+    }
+    ChatPanelProvider.factories.openEditorTab?.(file);
+  }
+
+  /** 列表齿轮按钮（2026-10-20 图2 拍板：中间区 ✳ 菜单移到左侧列表）：⚡ 命令菜单开在
+   *  列表当前负责的实例上——最近激活的编辑器标签优先，没有则副栏（与点击路由同口径） */
+  static moreFromList(): void {
+    const p = ChatPanelProvider.lastActiveEditor ?? ChatPanelProvider.sidebar;
+    void p?.runCommand();
   }
 
   /** 跨实例查找持有某会话文件的核心（刀3 双开守卫）：返回所属实例与标签 id——
@@ -525,6 +546,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       onDidChangeVisibility: (listener) => panel.onDidChangeViewState(() => listener()),
     };
     this.attachView(hv);
+    panel.onDidChangeViewState(() => {
+      if (panel.active) ChatPanelProvider.lastActiveEditor = this;
+    });
     panel.onDidDispose(() => this.dispose());
   }
 
@@ -709,6 +733,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   dispose(): void {
     ChatPanelProvider.allProviders.delete(this);
+    if (ChatPanelProvider.lastActiveEditor === this) {
+      // 退位补位：还有别的编辑器标签就指过去，全关了才归 undefined
+      ChatPanelProvider.lastActiveEditor = [...ChatPanelProvider.allProviders].find((p) => p.editorPanel);
+    }
     if (ChatPanelProvider.sidebar === this) ChatPanelProvider.sidebar = undefined;
     // 工单十五：全部标签的核心一起回收（dispose 链各核心互不共享 PiClient）
     for (const core of this.cores.values()) core.dispose();
