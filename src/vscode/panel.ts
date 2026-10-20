@@ -286,26 +286,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return core;
   }
 
-  /** 刀4 会话列表点击入口（sessionsView 命令路由）：已打开 → 聚焦持有者；
-   *  未打开 → 开编辑器标签并首开该会话 */
-  /** 左侧会话列表点击（2026-10-20 职责重划拍板：列表 + 「新增」负责中间编辑区的
-   *  会话新增/打开&切换，中间区页头随之退役）：
-   *  · 有活动编辑器标签 → 走 applySessionPick 同一条链：已开=切到持有者，未开且空闲=
-   *    就地切换（不乱开页签，2026-10-20「而不是再打开一个多页签」），busy=开并行编辑器标签；
-   *  · 从未有过编辑器标签 → 打开新编辑器标签装它（打开）；
-   *  · 编辑器已全关、持有者在副栏 → 切到副栏持有页签再聚焦 */
-  static async openOrFocusSession(file: string, label?: string): Promise<void> {
-    const lbl = label ?? file.split(/[\\/]/).pop() ?? file;
-    const ed = ChatPanelProvider.lastActiveEditor;
-    if (ed) {
-      const holder0 = ChatPanelProvider.findHolder(file);
-      const holderOut = !!holder0 && holder0.p !== ed;
-      await ed.applySessionPick({ action: "file", file, label: lbl });
-      // 聚焦看结果而非看入口：busy 分支刚开了并行编辑器标签（constructor 已把
-      // lastActiveEditor 指过去），此时回焦 ed 会把新标签抢回后台——焦点跟着最后激活走
-      if (!holderOut) (ChatPanelProvider.lastActiveEditor ?? ed).focusSelf();
-      return;
-    }
+  /** 左侧会话列表点击（2026-10-20 二轮拍板：「点击 = 中间编辑区新打开一个页签，
+   *  不用切换」）：
+   *  · 未打开 → 中间区开新编辑器标签装它（绝不就地换掉活动标签的会话）；
+   *  · 已打开 → 切到持有者（副栏后台持有先切页签再聚焦）——占用守卫同在此，绝开第二份；
+   *  副栏「当前会话内切换」是另一条链路（副栏自己的 🕐 选择器），用户拍板不动 */
+  static async openOrFocusSession(file: string, _label?: string): Promise<void> {
     const holder = ChatPanelProvider.findHolder(file);
     if (holder) {
       if (holder.p === ChatPanelProvider.sidebar && holder.tabId !== holder.p.activeTabId) {
@@ -318,7 +304,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   /** 列表齿轮按钮（2026-10-20 图2 拍板：中间区 ✳ 菜单移到左侧列表）：⚡ 命令菜单开在
-   *  列表当前负责的实例上——最近激活的编辑器标签优先，没有则副栏（与点击路由同口径） */
+   *  最近激活的编辑器标签上，副栏兑底（列表点击改回新页签后，齿轮仍看 lastActiveEditor） */
   static moreFromList(): void {
     const p = ChatPanelProvider.lastActiveEditor ?? ChatPanelProvider.sidebar;
     void p?.runCommand();
@@ -1170,10 +1156,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     await this.applySessionPick(pick);
   }
 
-  /** ⏱ 选择器选中项的落地链（单一真相；2026-10-22 起左侧会话列表点击也走这里）：
-   *  占用守卫 → 就地切换/切到持有页签/忙碌才开新并行标签 → 渲染链 + 记忆补回。
-   *  交互拍板（2026-10-22 用户「右侧是切换，而不是再打开一个多页签」）：列表点击不再
-   *  默认在中间开编辑器标签，与选择器选中同链，行为只有一处定义 */
+  /** ⏱ 选择器选中项的落地链（单一真相）：占用守卫 → 就地切换/切到持有页签/忙碌才开
+   *  新并行标签 → 渲染链 + 记忆补回。副栏 🕐 选择器用它（副栏「当前会话内切换」用户
+   *  拍板 2026-10-20 保持不动）；左侧列表点击不走这里——列表 = 中间区新页签打开，
+   *  见 openOrFocusSession 二轮拍板（2026-10-20） */
   private async applySessionPick(pick: {
     label: string;
     action: "file" | "newTab" | "all" | "delete";
