@@ -4,7 +4,52 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-10-22 会话双开守卫收口（同一会话在副栏+编辑器标签各开一份，用户实测）
+最后更新：2026-10-20 刀6 B 交接：会话列表改 webview（与聊天共用 tokens 同色）；前置：双开守卫收口（bf0c28b）
+
+# 刀6 B：会话列表改写成 webview（2026-10-19/20 用户直令 B，commit c9d33bc）
+
+## 动因（用户拍板原话脉络）
+原生 TreeView 只认 VS Code 主题，插件主题（午夜蓝/CC 暗黑）够不着 → 三块布局（副栏/
+编辑器标签/列表）样式永远分裂，适配新主题要两套体系。CC 自己的会话列表也是 webview。
+
+## 已交付
+- **webview/tokens.css**：语义 token（--pi-*）从 style.css 抽独立文件，style.css 与
+  sessions.css 各自 @import 同一份——两 webview 永远同色；**加主题/改色只动 tokens.css**
+（尾部加一个 body[data-theme] 块）。
+- **webview/sessions.{html,ts,css}**：独立 bundle（sessions.js 37KB）。自绘对齐原生树
+  能力：搜索过滤、↑↓+Enter 键盘导航、悬停删除、点击打开；ES5 var + strict:false 类型
+  门禁与 main.ts 同纪律；宿主消息 svReady/svItems/svTheme、上行 svOpen/svDelete/svNew/
+  svRefresh（sessions.ts 顶部注释有协议说明）。
+- **构建双入口**：vite.sessions.config.mts（第二入口）+ scripts/build/watch-webview.mjs
+  （watch 双跑）+ clean-webview.mjs（前置一次性清目录）。**坑：两入口 emptyOutDir 全关**
+（谁开谁把对方产物清掉，watch 每次重编都清）——清目录只在 build:webview 前置跑。
+- **sessionsView.ts 重写**：SessionsTreeProvider → SessionsViewProvider（webview），
+  数据源/点击路由/删除守卫（deleteSessionFile 单一真相）全沿用；retainContextWhenHidden
+  保搜索框状态；manifest tree→webview，树专属 4 命令/菜单已清。
+- **广播补齐**：列表不在 allProviders（不是 ChatPanelProvider）里，主题/语言切换收不到
+  ——panel.pickTheme/toggleLang 补 notifySessionsTheme/Lang（svTheme 就地换 data-theme、
+  语言重生成 HTML）。**三块同色的最后一环。**
+- **i18n 新键**：svSearch/svNew/svRefresh/svEmpty/svDelete（zh+en）。
+
+## 验证
+- compile 绿；六套用例全绿（html/detail/subagent/revert/linkify/migration）。
+- 构建产物核验：main.css/sessions.css 各含 1 份 :root token + midnight/cc-dark 主题块。
+- 残留 grep 干净（piChat.openSession/deleteSession/newSession/refreshSessions、
+  SessionsTreeProvider、createTreeView 零命中）。
+
+## 待实测（用户侧）
+1. **切一次主题 → 三块（副栏/编辑器标签/左侧列表）立即同色**（本刀最终验收点）；
+2. 列表：搜索/↑↓+Enter/悬停删除/点击打开与聚焦已打开者；
+3. 重启 → 列表正常、编辑器标签恢复原会话；4. 聊天面板原链路不回归（tokens 抽取是等价
+   重写，三主题视觉应与改造前逐处一致）。
+
+## 挂账/边界
+- sessions.js 含打包的 i18n 字典（37KB），两 bundle 各一份运行时——抠体积时抽共享 chunk，
+  现不动。
+- preview.html 只覆盖聊天主面板，sessions webview 无浏览器预览页（要看就 F5）。
+- 本地 main 领先 origin/main 2 提交（bf0c28b 双开 + c9d33bc 本刀）**未 push**（等用户指示）；
+  package.json 本地未提交改动 0.1.39→0.1.40 是 package 测试号（随下次提交入库，不参与
+  发版纪律）；**ship 用户手动发，别再跑 ship/bump 脚本**（2026-10-20 用户拍板）。
 
 # 会话双开守卫收口（2026-10-22，用户报「能打开同一个会话，点击会话列表打开前是不是该验证一下」）
 
@@ -62,6 +107,8 @@
 
 ## 未动（有意留待确认）
 - 副栏 webview 内部页签栏：与编辑器标签是两套并行入口，是否退役待用户实测后立单。
+- 布局改造全量待实测清单（CC 四刀 + 样式 + 列表删除的合并验收项）见下方「CC 布局改造」
+  段的「待实测」，与刀6 B 清单叠加执行。
 
 # Q~U 刀：启动慢连环结案（2026-09-23，全程用户实测驱动，2s 收工）
 
