@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-10-20 二轮拍板：列表点击 = 中间区新页签打开（不就地切换）、副栏切换不动；同日：列表接管中间区 + 齿轮 + 中间区页头退役
+最后更新：2026-10-20 二轮拍板：列表点击 = 中间区新页签打开（不就地切换）、副栏切换不动；同日：列表接管中间区 + 齿轮 + 页头退役 + 标签/按钮图标换 pi-icon-small.svg（连带修 media 白名单漏包）
 
 # 交互重排：列表接管中间编辑区（2026-10-20 用户图1/图2 直令）
 
@@ -39,6 +39,16 @@
   经副栏 🕐；列表只列当前项目）——若需要，后续把「浏览全部」挂进齿轮菜单；
   ⓑ sessionsView.ts 本次只入库 svMore 一行（分 hunk 暂存），同文件里并行会话的「渐进上屏」
   改动仍为未提交状态，由其会话自行入库；ⓒ sv* 消息仍未进 protocol.ts（刀6 B 遗留同前）。
+
+## 追加（2026-10-20 用户拍板「两个图标换 pi-icon-small.svg」）
+- 标签图标：extension.ts 两处（createWebviewPanel + serializer 恢复）设 `panel.iconPath`
+ （iconPath 不进 webview state，重启恢复必须重设）；
+- 按钮图标：package.json `piChat.openInEditor` 的 icon `$(comment-add)` →
+  `media/source/pi-icon-small.svg`；
+- **.vscodeignore 白名单修正（顺手挖出存量漏洞）**：旧 `media/*` 只罩平铺文件、子目录整个
+  漏网——`media/动画` 十来个 svg 一直进 vsix（与 AGENTS「只带两个文件」口径相违）。改
+  `media/**` + 逐个放行，实测 `vsce ls` 恰好 3 个：pi-icon.png / pi-logo.svg /
+  source/pi-icon-small.svg；AGENTS 白名单句已同步。
 
 # 列表点击交互修：右侧=切换（2026-10-20 用户实测「点列表选中的会话打不开」+「交互有问题」）
 

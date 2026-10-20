@@ -89,7 +89,7 @@
         "command": "piChat.openInEditor",
         "title": "pi: 新建会话（编辑器标签）",
         "category": "pi",
-        "icon": "$(comment-add)"
+        "icon": "media/source/pi-icon-small.svg"
       }
     ],
     "menus": {

@@ -29,6 +29,10 @@ export function activate(ctx: vscode.ExtensionContext): void {
   //（独立 PiCore/独立会话，跨实例守卫见 panel.ts findHolder）。
   // viewType 稳定串：VS Code 用它序列化/恢复编辑器标签（重启后标签还在，webview 重建
   // 会重发 webviewReady 握手，会话记忆按实例 tabKey p{n} 恢复）
+  // 编辑器标签 tab 图标（2026-10-20 用户拍板：标签图标与 editor/title 按钮都换
+  // pi-icon-small.svg）：WebviewPanel.iconPath 单 Uri（彩色 svg，亮暗同用）；
+  // 文件在 media/source/，必须过 .vscodeignore 的 media/* 白名单才进 vsix
+  const tabIcon = vscode.Uri.joinPath(ctx.extensionUri, "media", "source", "pi-icon-small.svg");
   const openEditorTab = (sessionFile?: string) => {
     const panel = vscode.window.createWebviewPanel(
       "piChat.editorPanel",
@@ -36,6 +40,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true }
     );
+    panel.iconPath = tabIcon;
     const inst = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version, panel);
     inst.attachEditorPanel(sessionFile);
   };
@@ -49,6 +54,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.window.registerWebviewPanelSerializer("piChat.editorPanel", {
       deserializeWebviewPanel: async (panel, state) => {
         const tabKey = (state as { tabKey?: string } | undefined)?.tabKey;
+        panel.iconPath = tabIcon; // 重启恢复的标签同样要图标（iconPath 不进 webview state）
         const inst = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version, panel, tabKey);
         inst.attachEditorPanel();
       },

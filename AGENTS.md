@@ -29,7 +29,8 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   hostCapabilities.ts 接口注入）+ panel.ts（VS Code adapter：实现 HostCapabilities/UiActions，组装 PiCore）。
   改核心逻辑（状态机/prompt 组装/事件路由）去 piCore.ts，VS Code UI 流程留 panel.ts；
   webview 消息路由入口是 core.onWebviewMessage。对账基线与漂移清单见 归档.md 工单四
-- **vsix 瘦身**：vsix 包内 media 只带 `pi-icon.png`/`pi-logo.svg`（.vscodeignore 白名单）；
+- **vsix 瘦身**：vsix 包内 media 只带 `pi-icon.png`/`pi-logo.svg`/`source/pi-icon-small.svg`
+  （.vscodeignore 白名单，2026-10-20 起标签图标/editor-title 按钮用它）；
   README 截图引用 `raw.githubusercontent.com` 仓库 URL——改截图必须 push 后才在市场生效。
 - **`media/duck.svg` 禁删（2026-09-24 用户拍板）**：欢迎页鸭子的矢量源稿（GPT 从 pi-icon.png
   逐像素重绘找回）。初代 duck.svg（16×16 crispEdges）从未进过 git，v0.0.57「media 清理」时连
