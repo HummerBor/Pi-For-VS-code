@@ -27,8 +27,6 @@ BUILDER.md
 media/**
 !media/pi-icon.png
 !media/pi-logo.svg
-# 编辑器标签 tab 图标 + editor/title 按钮图标（2026-10-20 拍板换 pi-icon-small.svg）。
-# 【坑】旧写法 media/* 只匹配 media 下的平铺文件、子目录整个漏网（media/动画 十来个 svg
-# 一直进了 vsix 而 AGENTS 白名单口径说只带两个）——用 media/** 才罩得住整棵树，
-# 再逐个放行：source/ 只放行用得上的 pi-icon-small.svg，egg/flap 动画帧仍不进包
 !media/source/pi-icon-small.svg
+!media/source/pi-icon-small-egg.svg
+!media/source/pi-icon-small-flap.svg
