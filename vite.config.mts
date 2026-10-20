@@ -25,7 +25,10 @@ export default defineConfig({
   plugins: [copyHtmlTemplate()],
   build: {
     outDir: "dist/webview",
-    emptyOutDir: true,
+    // false：现在是双入口（main + sessions）两个构建写同一目录，谁置 true 谁会把
+    // 对方产物清掉（watch 双跑时每次重编都清）——清目录由 build:webview 前置
+    // clean-webview.mjs 一次性完成（刀6 B）
+    emptyOutDir: false,
     target: "es2020",
     // 工单二十：产物是经 CSP nonce 注入的内联脚本且不开 sourcemap，保注释无可读性收益——
     // minify 同时去除 esbuild 自带的 //#region 标记并缩体积

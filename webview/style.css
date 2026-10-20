@@ -1,3 +1,6 @@
+/* 共享语义 token（聊天与会话列表同源同色，2026-10-19 B 刀）——CSS @import 必须在文件首 */
+@import "./tokens.css";
+
 html,
 body {
   height: 100%;
@@ -9,32 +12,6 @@ html {
 }
 
 /* 默认地板色；宿主按设置追加 inline 覆盖 */
-/* ── 语义色 token（样式统一/主题留路）──
-   基线值 = auto 主题（跟随 VS Code 变量）；内置主题（midnight/cc-dark）只在文件尾
-   body[data-theme] 块里赋值，不再逐选择器覆盖。适配新主题 = 尾部加一个变量块；
-   改色 = 改 token，不必碰各处选择器。新颜色一律先入 token，别再写死进规则（
-   除 var(--vscode-*, #hex) 形式的主题变量兑底） */
-:root {
-  --pi-bg: var(--vscode-sideBar-background);
-  --pi-fg: var(--vscode-editor-foreground);
-  --pi-header-border: var(--vscode-panel-border, rgba(128, 128, 128, .25));
-  --pi-user-bubble-bg: var(--vscode-button-background);
-  --pi-user-bubble-fg: var(--vscode-button-foreground);
-  --pi-assistant-bubble-bg: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
-  --pi-tool-hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .12));
-  --pi-toolbox-bg: transparent;
-  --pi-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, .15));
-  --pi-composer-bg: var(--vscode-input-background);
-  --pi-composer-border: var(--vscode-input-border, rgba(128, 128, 128, .35));
-  --pi-input-fg: var(--vscode-input-foreground);
-  --pi-suggest-bg: var(--vscode-editorWidget-background, #252526);
-  --pi-suggest-border: var(--vscode-panel-border, rgba(128, 128, 128, .3));
-  /* 语义状态色（busy/unread/ok/err 圆点）：默认与 VS Code 错误色对齐，主题块可覆盖 */
-  --pi-status-busy: #e8a33d;
-  --pi-status-ok: #4ec96e;
-  --pi-status-err: #f66;
-}
-
 body {
   display: flex;
   flex-direction: column;
@@ -1626,42 +1603,7 @@ details.think.compaction-flash>summary {
   }
 }
 
-/* ── 主题（🎨 切换，跟随 VS Code / CC 暗黑 / 午夜蓝）──
-   主题块只赋语义 token（--pi-*），不逐选择器覆盖——新主题照此加一个块即可 */
-body[data-theme='cc-dark'] {
-  --pi-bg: #0a0a0c;
-  --pi-fg: #e6e6e9;
-  --pi-header-border: #22222a;
-  --pi-user-bubble-bg: #8a4b2f;
-  --pi-user-bubble-fg: #fff;
-  --pi-assistant-bubble-bg: #17171c;
-  --pi-tool-hover: #121216;
-  --pi-toolbox-bg: #121216;
-  --pi-code-bg: #121216;
-  --pi-composer-bg: #131318;
-  --pi-composer-border: #2a2a33;
-  --pi-input-fg: #e6e6e9;
-  --pi-suggest-bg: #17171c;
-  --pi-suggest-border: #2a2a33;
-}
-
-body[data-theme='midnight'] {
-  --pi-bg: #0b1220;
-  --pi-fg: #dbe4f0;
-  /* header 边框不赋值：原 midnight 块就没覆盖它（沿基线 vscode-panel-border），
-     加值 = 视觉变更，不借统一之名夹带 */
-  --pi-user-bubble-bg: #2b4a7a;
-  --pi-user-bubble-fg: #fff;
-  --pi-assistant-bubble-bg: #14203a;
-  --pi-tool-hover: #101a30;
-  --pi-toolbox-bg: #101a30;
-  --pi-code-bg: #101a30;
-  --pi-composer-bg: #0e1830;
-  --pi-composer-border: #22345c;
-  --pi-input-fg: #dbe4f0;
-  --pi-suggest-bg: #14203a;
-  --pi-suggest-border: #22345c;
-}
+/* 主题（🎨 切换）的 token 赋值块已搬入 tokens.css（刀6：会话列表 webview 与聊天共用） */
 
 /* ── 压缩横幅（工单六）+ 变更文件条（工单七）：header 下、messages 上的单行通知条，随主题走 VS Code 变量 ──
    注意：本文件注释只能用成对的星号斜杠包住，双斜杠会整段失效（老坑，别改） ── */

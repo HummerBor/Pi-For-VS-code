@@ -33,8 +33,7 @@ export function getHtml(
   bgImage = "",
   bgOpacity = 0.35,
   lang: Lang = "zh",
-): string {
-  const L = STRINGS[lang];
+): string {  const L = STRINGS[lang];
   const nonce = Math.random().toString(36).slice(2);
   const { template, js, css } = loadAssets();
 
@@ -63,6 +62,44 @@ export function getHtml(
       return String(L[key] ?? "");
     }
     if (!(key in vars)) console.warn("[pi-for-vscode] HTML 模板未知占位符: {{" + key + "}}");
+    return vars[key] ?? "";
+  });
+}
+
+let cachedSessionsTemplate = "";
+let cachedSessionsJs = "";
+let cachedSessionsCss = "";
+
+/** 会话列表 webview HTML（刀6 B：与聊天共用 tokens 同一套语义色，两 webview 永远同色）。
+ *  模板/产物/占位符机制与 getHtml 同构（模板 webview/sessions.html → dist；
+ *  {{t:key}} i18n、{{nonce}} CSP、{{js}} 产物内联） */
+export function getSessionsHtml(
+  theme = "midnight",
+  floorColor = "#1f1f1f",
+  lang: Lang = "zh",
+): string {
+  const L = STRINGS[lang];
+  const nonce = Math.random().toString(36).slice(2);
+  const dir = join(__dirname, "..", "..", "dist", "webview");
+  if (!cachedSessionsTemplate) cachedSessionsTemplate = readFileSync(join(dir, "sessions.html"), "utf8");
+  if (!cachedSessionsJs) cachedSessionsJs = readFileSync(join(dir, "sessions.js"), "utf8");
+  if (!cachedSessionsCss) {
+    try { cachedSessionsCss = readFileSync(join(dir, "sessions.css"), "utf8"); } catch { cachedSessionsCss = ""; }
+  }
+  const vars: Record<string, string> = {
+    lang,
+    theme,
+    nonce,
+    headAssets: "<style>" + cachedSessionsCss + "</style>" +
+      "<style>html { background: " + floorColor + " !important; }</style>",
+    js: cachedSessionsJs.replace(/<\/script/gi, "<\\/script"),
+  };
+  return cachedSessionsTemplate.replace(/\{\{(?:(\w+):)?([\w.]+)\}\}/g, (_, ns: string | undefined, key: string) => {
+    if (ns === "t") {
+      if (!(key in L)) console.warn("[pi-for-vscode] i18n 字典缺少 key: " + key);
+      return String(L[key] ?? "");
+    }
+    if (!(key in vars)) console.warn("[pi-for-vscode] 会话列表 HTML 未知占位符: {{" + key + "}}");
     return vars[key] ?? "";
   });
 }

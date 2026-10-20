@@ -22,7 +22,7 @@ import { extractText, msgBrief, sessionMemoryFor, PiCore, UiActions, dbgAppend }
 import { ChangesController } from "./changes";
 import { PiSetup } from "./piSetup";
 import { listSessions, peekListSessions, invalidateListMemo, samePath, type SessionInfo } from "./sessionCache";
-import { notifySessionsChanged } from "./sessionsView";
+import { notifySessionsChanged, notifySessionsLang, notifySessionsTheme } from "./sessionsView";
 import type { HostCapabilities, HostQuickItem } from "../core/hostCapabilities";
 
 /** 宿主容器抽象（刀1 CC 布局改造）：WebviewView（侧边栏视图）与 WebviewPanel（编辑器标签）
@@ -946,6 +946,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       p.core.lang = next; // 核心的通知/状态文案跟随
       p.applyHtml(); // 重生成该实例的 webview HTML（webviewReady 握手重绘历史）
     }
+    notifySessionsLang(); // 列表 webview 同步（刀6：文案烧在 HTML 里，重生成）
   }
 
   /** 🎨 主题/背景选择，持久化 globalState，重载后自动应用 */
@@ -971,6 +972,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     for (const p of ChatPanelProvider.allProviders) {
       p.post({ type: "theme", name: pick.id });
     }
+    notifySessionsTheme(pick.id); // 列表 webview 同步（刀6：body[data-theme] 就地换）
     this.post({ type: "notice", text: this.L.themeSet + pick.label });
   }
 

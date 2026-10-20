@@ -1,0 +1,65 @@
+/* ── 语义色 token（样式统一/主题留路，2026-10-19 用户拍板 B：聊天与会话列表共用同一套）──
+   基线值 = auto 主题（跟随 VS Code 变量）；内置主题只在文件尾 body[data-theme] 块里赋值，
+   不再逐选择器覆盖。适配新主题 = 尾部加一个变量块；改色 = 改 token，不碰各处选择器。
+   消费方：style.css（聊天面板）+ sessions.css（会话列表 webview）——两个 webview 因此
+   永远同色（用户 2026-10-19 截图实锤原生 TreeView 与聊天两套色的分裂，B 刀真统一）。
+   新颜色一律先入 token，别再写死进规则（除 var(--vscode-*, #hex) 形式的主题变量兜底） */
+:root {
+  --pi-bg: var(--vscode-sideBar-background);
+  --pi-fg: var(--vscode-editor-foreground);
+  --pi-header-border: var(--vscode-panel-border, rgba(128, 128, 128, .25));
+  --pi-user-bubble-bg: var(--vscode-button-background);
+  --pi-user-bubble-fg: var(--vscode-button-foreground);
+  --pi-assistant-bubble-bg: var(--vscode-editorWidget-background, rgba(128, 128, 128, .10));
+  --pi-tool-hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .12));
+  --pi-toolbox-bg: transparent;
+  --pi-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, .15));
+  --pi-composer-bg: var(--vscode-input-background);
+  --pi-composer-border: var(--vscode-input-border, rgba(128, 128, 128, .35));
+  --pi-input-fg: var(--vscode-input-foreground);
+  --pi-suggest-bg: var(--vscode-editorWidget-background, #252526);
+  --pi-suggest-border: var(--vscode-panel-border, rgba(128, 128, 128, .3));
+  /* 列表专用（会话列表 webview，刀6）：行选中/激活跟随 VS Code 列表语义色 */
+  --pi-list-active-bg: var(--vscode-list-activeSelectionBackground);
+  --pi-list-active-fg: var(--vscode-list-activeSelectionForeground);
+  --pi-list-inactive-bg: var(--vscode-list-inactiveSelectionBackground);
+  /* 语义状态色（busy/unread/ok/err 圆点）：默认与 VS Code 错误色对齐，主题块可覆盖 */
+  --pi-status-busy: #e8a33d;
+  --pi-status-ok: #4ec96e;
+  --pi-status-err: #f66;
+}
+
+body[data-theme='cc-dark'] {
+  --pi-bg: #0a0a0c;
+  --pi-fg: #e6e6e9;
+  --pi-header-border: #22222a;
+  --pi-user-bubble-bg: #8a4b2f;
+  --pi-user-bubble-fg: #fff;
+  --pi-assistant-bubble-bg: #17171c;
+  --pi-tool-hover: #121216;
+  --pi-toolbox-bg: #121216;
+  --pi-code-bg: #121216;
+  --pi-composer-bg: #131318;
+  --pi-composer-border: #2a2a33;
+  --pi-input-fg: #e6e6e9;
+  --pi-suggest-bg: #17171c;
+  --pi-suggest-border: #2a2a33;
+}
+
+body[data-theme='midnight'] {
+  --pi-bg: #0b1220;
+  --pi-fg: #dbe4f0;
+  /* header 边框不赋值：原 midnight 块就没覆盖它（沿基线 vscode-panel-border），
+     加值 = 视觉变更，不借统一之名夹带 */
+  --pi-user-bubble-bg: #2b4a7a;
+  --pi-user-bubble-fg: #fff;
+  --pi-assistant-bubble-bg: #14203a;
+  --pi-tool-hover: #101a30;
+  --pi-toolbox-bg: #101a30;
+  --pi-code-bg: #101a30;
+  --pi-composer-bg: #0e1830;
+  --pi-composer-border: #22345c;
+  --pi-input-fg: #dbe4f0;
+  --pi-suggest-bg: #14203a;
+  --pi-suggest-border: #22345c;
+}

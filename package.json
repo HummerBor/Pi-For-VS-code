@@ -65,7 +65,7 @@
       ],
       "piChatSessions": [
         {
-          "type": "tree",
+          "type": "webview",
           "id": "piChat.sessions",
           "name": ""
         }
@@ -90,54 +90,9 @@
         "title": "pi: 新建会话（编辑器标签）",
         "category": "pi",
         "icon": "$(comment-add)"
-      },
-      {
-        "command": "piChat.newSession",
-        "title": "新会话",
-        "icon": "$(add)"
-      },
-      {
-        "command": "piChat.refreshSessions",
-        "title": "刷新会话列表",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "piChat.deleteSession",
-        "title": "删除会话",
-        "icon": "$(trash)"
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "piChat.deleteSession",
-          "when": "false"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "piChat.deleteSession",
-          "when": "view == piChat.sessions && viewItem == piSession",
-          "group": "inline@1"
-        },
-        {
-          "command": "piChat.deleteSession",
-          "when": "view == piChat.sessions && viewItem == piSession",
-          "group": "1_destructive"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "piChat.newSession",
-          "when": "view == piChat.sessions",
-          "group": "navigation@1"
-        },
-        {
-          "command": "piChat.refreshSessions",
-          "when": "view == piChat.sessions",
-          "group": "navigation@2"
-        }
-      ],
       "editor/title": [
         {
           "command": "piChat.openInEditor",
@@ -208,8 +163,8 @@
   },
   "scripts": {
     "typecheck:webview": "tsc -p webview --noEmit",
-    "build:webview": "vite build",
-    "watch:webview": "vite build --watch",
+    "build:webview": "node scripts/build/clean-webview.mjs && vite build && vite build --config vite.sessions.config.mts",
+    "watch:webview": "node scripts/build/watch-webview.mjs",
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "test:detail": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/toolDetail.test.mts",
     "test:subagent": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/subagentSnapshot.test.mts",

@@ -1,0 +1,136 @@
+/* 会话列表 webview 样式（刀6 B：与聊天共用 tokens.css 同一套语义 token——
+   两个 webview 因此永远同色，主题适配只改 tokens.css 一处） */
+@import "./tokens.css";
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  background: #1f1f1f !important;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--pi-fg);
+  background: var(--pi-bg);
+}
+
+#box {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#hdr {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--pi-header-border);
+}
+
+#q {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--pi-composer-border);
+  border-radius: 4px;
+  background: var(--pi-composer-bg);
+  color: var(--pi-input-fg);
+  outline: none;
+}
+
+#q:focus {
+  border-color: var(--vscode-focusBorder, #0078d4);
+}
+
+.ico-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: .7;
+}
+
+.ico-btn:hover {
+  opacity: 1;
+  background: var(--pi-tool-hover);
+}
+
+#list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.row:hover {
+  background: var(--pi-tool-hover);
+}
+
+.row.sel {
+  background: var(--vscode-list-activeSelectionBackground, var(--pi-tool-hover));
+  color: var(--vscode-list-activeSelectionForeground, var(--pi-fg));
+}
+
+.r-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-time {
+  flex: none;
+  font-size: 11px;
+  opacity: .55;
+}
+
+/* 悬停删除按钮（原生树的 view/item/context inline 在 webview 里自绘） */
+.r-del {
+  flex: none;
+  display: none;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--pi-status-err);
+  opacity: .8;
+}
+
+.row:hover .r-del {
+  display: inline-flex;
+}
+
+.r-del:hover {
+  opacity: 1;
+  background: var(--pi-tool-hover);
+}
+
+#empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  opacity: .55;
+}
