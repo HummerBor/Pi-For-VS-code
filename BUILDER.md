@@ -4,7 +4,7 @@
 > 已完结工单的施工回报、历史决策与教训已随验收归档到 [归档.md](归档.md)「九、施工回报存档」——
 > 交接需复盘历史时去归档.md，本文件只留未完结项。随台账入库（与 DIRECTOR.md 同，94ff28d 起）。
 
-最后更新：2026-10-20 二轮拍板：列表点击 = 中间区新页签打开（不就地切换）、副栏切换不动；同日：列表接管中间区 + 齿轮 + 页头退役 + 标签/按钮图标换 pi-icon-small.svg（连带修 media 白名单漏包）
+最后更新：2026-10-20 新建标签初始题 "pi"→「新会话」；同日：列表接管中间区 + 齿轮 + 页头退役 + 标签/按钮图标换 pi-icon-small.svg（连带修 media 白名单漏包）
 
 # 交互重排：列表接管中间编辑区（2026-10-20 用户图1/图2 直令）
 
@@ -49,6 +49,13 @@
   漏网——`media/动画` 十来个 svg 一直进 vsix（与 AGENTS「只带两个文件」口径相违）。改
   `media/**` + 逐个放行，实测 `vsce ls` 恰好 3 个：pi-icon.png / pi-logo.svg /
   source/pi-icon-small.svg；AGENTS 白名单句已同步。
+
+## 追加（2026-10-20 用户拍板：新建会话标题 "pi" → 「新会话」）
+- 根因两头：① `createWebviewPanel` 初始题写死 `"pi"`；② `syncTabMeta` 只在 title **变化**
+  时才回写面板标题，而 tabMeta 初值本来就是「新会话」→ 永不触发，标签永久挂 "pi"；
+- 修：extension.ts 初始题取 `STRINGS[lang].tabUntitled`（与 tabMeta 初值同源同语，
+  语言切换口径一致）；panel.ts 回写条件改为 `titleDirty || editorPanel.title !== meta.title`
+ （初值分歧不等变化，serializer 恢复的旧题也靠它归正）。
 
 # 列表点击交互修：右侧=切换（2026-10-20 用户实测「点列表选中的会话打不开」+「交互有问题」）
 

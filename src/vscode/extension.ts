@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ChatPanelProvider } from "./panel";
 import { registerSessionsView, setSessionsView } from "./sessionsView";
 import { prewarmPiServices } from "../pi/piClient";
-import { bb, Lang } from "../core/i18n";
+import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
 
 export function activate(ctx: vscode.ExtensionContext): void {
@@ -14,6 +14,11 @@ export function activate(ctx: vscode.ExtensionContext): void {
   const ws0 = vscode.workspace.workspaceFolders?.[0];
   if (ws0) prewarmPiServices(ws0.uri.fsPath);
   const version = ctx.extension.packageJSON.version;
+  // 新建编辑器标签的初始题（2026-10-20 用户拍板「新建会话由 "pi" 改成 "新会话"」）：
+  // 与 panel 的 tabMeta 初值同源同语（tabUntitled），首帧 state 到达前标签就是最终文案；
+  // 同时 panel.syncTabMeta 有补写兑底（初值分歧不等 titleDirty），两头夹住不回退 "pi"
+  const lang0 = (ctx.globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
+  const newTabTitle: string = STRINGS[lang0].tabUntitled;
   const provider = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version);
   // CC 同款版本门槛（抄技巧不抄代码）：viewsContainers.secondarySidebar 声明点是
   // VS Code 1.106+ 才有的；老版本忽略该键（manifest 未知贡献点静默忽略），靠
@@ -36,7 +41,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
   const openEditorTab = (sessionFile?: string) => {
     const panel = vscode.window.createWebviewPanel(
       "piChat.editorPanel",
-      "pi",
+      newTabTitle,
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true }
     );
