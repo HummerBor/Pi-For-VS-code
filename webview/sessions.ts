@@ -73,9 +73,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!row) return;
     const file = row.getAttribute("data-file") || "";
     if (del) { vscode.postMessage({ type: "svDelete", file }); return; }
-    sel = parseInt(row.getAttribute("data-idx") || "-1", 10);
+    const ridx = parseInt(row.getAttribute("data-idx") || "-1", 10);
+    sel = ridx;
     render();
-    vscode.postMessage({ type: "svOpen", file });
+    // label 随行带上：宿主侧「已恢复会话: xxx」提示用人话标题，不落 jsonl 文件名
+    vscode.postMessage({ type: "svOpen", file, label: items[ridx] ? items[ridx].label : undefined });
   });
 
   // 键盘导航：↑↓ 移动选中（带过滤态换算）、Enter 打开、Esc 清选
@@ -90,7 +92,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       sel = list[pos].idx;
       render();
     } else if (e.key === "Enter") {
-      if (sel >= 0 && sel < items.length) vscode.postMessage({ type: "svOpen", file: items[sel].file });
+      if (sel >= 0 && sel < items.length) vscode.postMessage({ type: "svOpen", file: items[sel].file, label: items[sel].label });
     } else if (e.key === "Escape") {
       sel = -1;
       render();

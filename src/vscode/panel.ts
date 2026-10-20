@@ -45,6 +45,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 全部存活实例（刀3 CC 布局）：侧边栏一个 + 每编辑器标签各一——跨实例会话双开
    *  守卫/删除保护、head 内容分发都扫这里（同实例多页签的旧守卫不够用了） */
   private static readonly allProviders = new Set<ChatPanelProvider>();
+  /** 副栏（聊天视图）唯一实例：extension.activate 建的那个 provider（编辑器标签
+   *  实例不设）——左侧会话列表点击的路由目标（2026-10-22「右侧=切换」交互） */
+  private static sidebar: ChatPanelProvider | undefined;
   /** pi-head scheme 全局只注册一次（刀3：多实例共享同一个 TextDocumentContentProvider，
    *  prerun 内容按 uri 分发到持有 detail 状态的那个实例——HEAD 分支是纯工作区函数谁算都行） */
   private static headRegistration: vscode.Disposable | undefined;
@@ -136,6 +139,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.editorPanel = editorPanel;
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
     ChatPanelProvider.allProviders.add(this);
+    if (!editorPanel) ChatPanelProvider.sidebar = this; // 副栏实例（构造器无面板 = 视图 provider）
     // pi-head 全局一次：多实例共享，prerun 内容分发到持有 detail 的实例（刀3）；
     // 原每实例注册会被后建面板顶掉侧边栏的 provider → 侧边栏 diff 左侧白屏
     if (!ChatPanelProvider.headRegistration) {
@@ -279,13 +283,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   /** 刀4 会话列表点击入口（sessionsView 命令路由）：已打开 → 聚焦持有者；
    *  未打开 → 开编辑器标签并首开该会话 */
-  static async openOrFocusSession(file: string): Promise<void> {
-    const holder = ChatPanelProvider.findHolder(file);
-    if (holder) {
-      holder.p.focusSelf();
+  /** 左侧会话列表点击（2026-10-22 用户拍板交互「右侧是切换，而不是再打开一个多页签」）：
+   *  走 ⏱ 选择器同一条 applySessionPick 链——已持有就切到持有页签并聚焦，没有则副栏
+   *  当前页签就地切换，busy 才开新并行标签；不再默认在中间开编辑器标签（仅无副栏
+   *  实例时兑底）。焦点归谁看持有者：持有者在编辑器标签时聚焦归它，别被副栏抢回 */
+  static async openOrFocusSession(file: string, label?: string): Promise<void> {
+    const sb = ChatPanelProvider.sidebar;
+    if (!sb) {
+      ChatPanelProvider.factories.openEditorTab?.(file);
       return;
     }
-    ChatPanelProvider.factories.openEditorTab?.(file);
+    const holder = ChatPanelProvider.findHolder(file);
+    const holderOut = !!holder && holder.p !== sb;
+    await sb.applySessionPick({
+      action: "file",
+      file,
+      label: label ?? file.split(/[\\/]/).pop() ?? file,
+    });
+    if (!holderOut) sb.focusSelf();
   }
 
   /** 跨实例查找持有某会话文件的核心（刀3 双开守卫）：返回所属实例与标签 id——
@@ -302,10 +317,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return undefined;
   }
 
-  /** 聚焦到本实例视图：面板实例 reveal 编辑器标签；侧边栏实例 focus 视图（刀3 守卫跳转用） */
+  /** 聚焦到本实例视图：面板实例 reveal 编辑器标签；侧边栏实例 focus 视图（刀3 守卫跳转用）
+   *  【坑】副栏布局下 piChat.view 被 when 隐藏、focus 打空（extension.ts 状态栏有同款
+   *  版本门槛而这里漏了，2026-10-22 列表点击「打不开」事故之一）：优先 focus 副栏视图，
+   *  老版本（<1.106 无副栏容器）该命令不存在 → catch 回退活动栏视图 */
   private focusSelf(): void {
-    if (this.editorPanel) this.editorPanel.reveal(vscode.ViewColumn.Active);
-    else void vscode.commands.executeCommand(ChatPanelProvider.viewId + ".focus");
+    if (this.editorPanel) {
+      this.editorPanel.reveal(vscode.ViewColumn.Active);
+      return;
+    }
+    const [major, minor] = vscode.version.split(".").map(Number);
+    const noSecondary = (major ?? 1) < 1 || (major === 1 && (minor ?? 0) < 106);
+    const id = noSecondary ? ChatPanelProvider.viewId : ChatPanelProvider.secondaryViewId;
+    // Thenable 无 .catch（VS Code 接口只声明 then），用拒绝回调兑底
+    void vscode.commands.executeCommand(id + ".focus").then(
+      undefined,
+      () => void vscode.commands.executeCommand(ChatPanelProvider.viewId + ".focus")
+    );
   }
 
   /** 刀3：构造时指定首开会话（openEditorTab(sessionFile) 工厂入参）——webviewReady
@@ -681,6 +709,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   dispose(): void {
     ChatPanelProvider.allProviders.delete(this);
+    if (ChatPanelProvider.sidebar === this) ChatPanelProvider.sidebar = undefined;
     // 工单十五：全部标签的核心一起回收（dispose 链各核心互不共享 PiClient）
     for (const core of this.cores.values()) core.dispose();
     this.cores.clear();
@@ -1110,6 +1139,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    await this.applySessionPick(pick);
+  }
+
+  /** ⏱ 选择器选中项的落地链（单一真相；2026-10-22 起左侧会话列表点击也走这里）：
+   *  占用守卫 → 就地切换/切到持有页签/忙碌才开新并行标签 → 渲染链 + 记忆补回。
+   *  交互拍板（2026-10-22 用户「右侧是切换，而不是再打开一个多页签」）：列表点击不再
+   *  默认在中间开编辑器标签，与选择器选中同链，行为只有一处定义 */
+  private async applySessionPick(pick: {
+    label: string;
+    action: "file" | "newTab" | "all" | "delete";
+    file?: string;
+    busy?: boolean;
+  }): Promise<void> {
     const client = this.core.ensureClient();
     try {
       if (pick.action === "newTab") {

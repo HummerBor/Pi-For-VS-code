@@ -22,7 +22,9 @@ interface SvItem {
  * 视觉与交互对齐原生树既有能力：搜索过滤、↑↓+Enter 导航、悬停删除、点击打开。
  *
  * 数据源不变：pi 原生 SessionManager（sessionCache.listSessions，与 ⏱ 选择器同源同真值）。
- * 点击路由不变：openOrFocusSession（已打开→聚焦，未打开→编辑器标签）；
+ * 点击路由（2026-10-22「右侧=切换」交互拍板）：openOrFocusSession —— 与 ⏱ 选择器
+ * 选中同一条 applySessionPick 链（已打开→切到持有页签，未打开→副栏当前页签就地切换，
+ * busy 才开新并行标签），不再默认在中间开编辑器标签；
  * 删除不变：deleteSessionFile 单一真相（跨实例守卫/边界/模态确认）。
  */
 export class SessionsViewProvider implements vscode.WebviewViewProvider {
@@ -39,11 +41,11 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     this.view = view;
     view.webview.options = { enableScripts: true };
     this.applyHtml();
-    view.webview.onDidReceiveMessage(async (m: { type: string; file?: string }) => {
+    view.webview.onDidReceiveMessage(async (m: { type: string; file?: string; label?: string }) => {
       if (m.type === "svReady") void this.sendItems();
       else if (m.type === "svRefresh") void this.sendItems();
       else if (m.type === "svNew") void vscode.commands.executeCommand("piChat.openInEditor");
-      else if (m.type === "svOpen" && m.file) void ChatPanelProvider.openOrFocusSession(m.file);
+      else if (m.type === "svOpen" && m.file) void ChatPanelProvider.openOrFocusSession(m.file, m.label);
       else if (m.type === "svDelete" && m.file) {
         // 守卫/确认/落盘复用 panel.deleteSessionFile 单一真相（跨实例双开保护同款）；
         // 结果码 → 原生通知（双语 bb，同原树删除按钮口径）
