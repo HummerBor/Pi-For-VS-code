@@ -74,6 +74,33 @@ body {
   overflow-y: auto;
 }
 
+/* 滚动条与聊天面板（style.css 同款块）一致：标准属性派 thin + 灰 thumb 透明轨道（2026-09-22
+ * 用户拍板），webkit 伪类是老内核兑底。三条世代结论与「两层不共存别删任何一层」的坑见
+ * style.css 的滚动条注释——两处改样式必须同步，别只改一边。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, .45) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, .45);
+  border-radius: 1.5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, .65);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .row {
   display: flex;
   align-items: center;

@@ -15,24 +15,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   const qEl = document.getElementById("q") as HTMLInputElement;
   const listEl = document.getElementById("list")!;
   const emptyEl = document.getElementById("empty")!;
-  (document.getElementById("new") as HTMLElement).innerHTML = ico("plus");
-  (document.getElementById("refresh") as HTMLElement).innerHTML =ico("refresh");
-  (document.getElementById("gear") as HTMLElement).innerHTML = ico("gear");
+  (document.getElementById("new") as HTMLElement).innerHTML = ico("plus", 16);
+  (document.getElementById("refresh") as HTMLElement).innerHTML = ico("refresh", 16);
+  (document.getElementById("gear") as HTMLElement).innerHTML = ico("gear", 16);
 
   /** 全量条目（宿主 svItems 唯一事实源）；sel = 选中下标（键盘导航），渲染即过滤 */
   let items: { file: string; label: string; time: string }[] = [];
   let sel = -1;
 
-  function ico(name: string): string {
-    // 与聊天面板同款 feather 风格线性图标（currentColor 描边，随主题文字色）
+  /** feather 风格线性图标（currentColor 描边，随主题文字色）。网格约定：viewBox 固定 24，
+   *  所有路径必须画在 24 网格上——事故：gear 直接抄 main.ts ICON_PATHS.gear（那是 16 网格，
+   *  配 viewBox 16 用），塞进 24 画布后既缩成 16/24 又整体偏左上，大小位置一起错（2026-10-20）。*/
+  function ico(name: string, size?: number): string {
+    const s = size || 14;
     const p: Record<string, string> = {
       plus: '<path d="M12 5v14M5 12h14"/>',
       refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
       trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
-      // 与聊天页头 ✳ 同一个齿轮（main.ts ICON_PATHS.gear 同形）——菜单入口移列，图标不换脸
-      gear: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2M3.5 3.5l1.6 1.6M10.9 10.9l1.6 1.6M12.5 3.5l-1.6 1.6M5.1 10.9l-1.6 1.6"/>',
+      // 与聊天页头 ✳ 同一个齿轮（main.ts ICON_PATHS.gear 同形，按 ×1.5 从 16 网格换算到 24）——菜单入口移列，图标不换脸
+      gear: '<circle cx="12" cy="12" r="3.15"/><path d="M12 2.25v3.3M12 18.45v3.3M2.25 12h3.3M18.45 12h3.3M5.25 5.25l2.4 2.4M16.35 16.35l2.4 2.4M18.75 5.25l-2.4 2.4M7.65 16.35l-2.4 2.4"/>',
     };
-    return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${p[name] || ""}</svg>`;
+    return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${p[name] || ""}</svg>`;
   }
 
   function esc(s: string): string {

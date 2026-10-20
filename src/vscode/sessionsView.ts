@@ -95,7 +95,20 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const cached = peekListSessions(cwd);
     if (cached) void view.webview.postMessage({ type: "svItems", items: toItemMsgs(cached) });
-    const sessions = await listSessions(cwd, 50).catch(() => []);
+    // 渐进上屏（与 ⏱ 选择器同款，2026-10-22「2比1加载慢」定案）：原来 await 全量才发，
+    // 死等 1.2~2s（宿主拥堵下 22~30s）期间侧栏空白——partial 首批 ~19ms 就有货，
+    // picker 先修了这里漏了。有缓存时不再上屏 partial（秒出已兜底，真值到达原地替换）；
+    // 200ms 限流同 picker：pi 每批回调都 postMessage 会抢事件循环
+    let lastProgressAt = 0;
+    let paintedPartial = false;
+    const sessions = await listSessions(cwd, 50, (_loaded, _total, partial) => {
+      if (cached || !partial?.length) return;
+      const now = Date.now();
+      if (paintedPartial && now - lastProgressAt < 200) return;
+      paintedPartial = true;
+      lastProgressAt = now;
+      void view.webview.postMessage({ type: "svItems", items: toItemMsgs(partial) });
+    }).catch(() => []);
     void view.webview.postMessage({ type: "svItems", items: toItemMsgs(sessions) });
   }
 
