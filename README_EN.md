@@ -1,6 +1,6 @@
 # <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
-[English](./README_EN.md) | [简体中文](./README.md)
+[English](https://github.com/HummerBor/Pi-For-VS-code/blob/main/README_EN.md) | [简体中文](https://github.com/HummerBor/Pi-For-VS-code/blob/main/README.md)
 
 A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) that embeds the pi engine in-process — streaming as fast as the terminal. Claude Code-style interaction; lightweight, and the UI is yours to tweak — it's just a few local files; edit and reload.
 
@@ -19,7 +19,13 @@ A visual VS Code extension for [Pi](https://www.npmjs.com/package/@earendil-work
 
 Search `Pi For VSC` in the [Marketplace](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) → click the pi icon in the activity bar. Missing pi triggers a one-click install; missing keys walk you through setup. Then just chat:
 
-![Working](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E6%B5%8B%E8%AF%95.png)
+![Working](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-1.png)
+
+## Even better with Hot Duck
+
+One window, three columns: session list in the sidebar, code in the editor, pi in the side panel. Swap the sidebar for [Hot Duck](https://marketplace.visualstudio.com/items?itemName=HummerBor.hot-duck) (AI / Baidu / Weibo / Tencent trending charts) — your feed and your work side by side, and switching is just one click:
+
+![Hot Duck trending in the sidebar + Pi panel on the right](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-2.png)
 
 ## Built with itself
 

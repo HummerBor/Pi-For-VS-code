@@ -1,6 +1,6 @@
 # <img src="https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/pi-icon.png" width="36" align="top" alt="Pi For VSC"> Pi For VSC
 
-[简体中文](./README.md) | [English](./README_EN.md)
+[简体中文](https://github.com/HummerBor/Pi-For-VS-code/blob/main/README.md) | [English](https://github.com/HummerBor/Pi-For-VS-code/blob/main/README_EN.md)
 
 一个 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的可视化 VS Code 插件，把 pi 引擎进程内直连嵌进编辑器，流式体验与终端同速；交互参考 Claude Code，轻量不拖慢编辑器，界面代码就是几份本地文件，想改就改。
 
@@ -19,7 +19,13 @@
 
 在 [扩展商店](https://marketplace.visualstudio.com/items?itemName=HummerBor.pi-for-vscode) 搜 `Pi For VSC` 安装 → 点活动栏 pi 图标。没装 pi 会引导一键安装，没配 key 会引导配置，然后就能聊了：
 
-![干活实景](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/%E6%B5%8B%E8%AF%95.png)
+![干活实景](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-1.png)
+
+## 搭配 Hot Duck 更香
+
+一个窗口三栏到底：左侧栏放会话列表、中间编辑区干活、右侧挂 Pi 面板对话。左侧栏再换成 [Hot Duck](https://marketplace.visualstudio.com/items?itemName=HummerBor.hot-duck)（AI / 百度 / 微博 / 腾讯热搜榜），摸鱼信息流和干活界面并排，切过去只是一次侧栏点击：
+
+![左侧 Hot Duck 热搜榜 + 右侧 Pi 面板](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-2.png)
 
 ## 用它开发它自己
 
