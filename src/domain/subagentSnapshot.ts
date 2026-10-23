@@ -176,6 +176,13 @@ function capText(s: string, max: number): string {
  * 用户看着图标全程没动）。修法："toolCall" 明确视为 running，未知收尾值保守回 running。
  */
 function taskStatus(r: Record<string, unknown>): "running" | "done" | "failed" {
+  // 显式真值优先（2026-10-23 实测事故「跑着的子 agent 浮窗显示 ✓」）：扩展 asyncDetails
+  // 随载荷带 running/status——下方 stopReason 启发式只兜旧载荷：每回合结束 stopReason 都会
+  // 更新成正常值，「回合收尾」被误读成「任务收尾」，跑着的 run 被标 done
+  if (r.running === true) return "running";
+  const explicit = r.status;
+  if (explicit === "failed" || explicit === "killed") return "failed";
+  if (explicit === "completed") return "done";
   const exitCode = r.exitCode;
   const stop = r.stopReason;
   if (exitCode !== 0 && typeof exitCode === "number") return "failed";

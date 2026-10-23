@@ -1148,6 +1148,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var list = String(raw || '').split(/\s+/).filter(function (u) { return /^file:/i.test(u); });
       if (list.length) uris = list;
     }
+    // 资源管理器拖入的部分 VS Code 版本 dataTransfer.files 为空、只带 text/uri-list——
+    // 循环体一行不进，attachUri 永远发不出去，drop 又被 preventDefault 吞掉：体感
+    // 「拖进输入框没反应」（2026-10 用户实测）。无 File 对象也照走 URI 通道
+    if (uris && (!files || !files.length)) { vpost({ type: 'attachUri', uris: uris }); return; }
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
       // 图片判定：f.type 不可靠——从 VS Code 资源管理器拖入的 File 没有 MIME（type 为空），
@@ -1959,7 +1963,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var rowEl = el('div', 'sm-row ' + t.status);
     rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     var main = el('div', 'sm-row-main');
-    main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '')));
+    // 名字行带进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
+    // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
+    main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '') + (t.status === 'running' && t.usage ? ' · ' + t.usage : '')));
     // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
     var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : '';
     var taskSnipBase = t.status === 'failed'
@@ -2035,7 +2041,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
   newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
-  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length && activeTabId !== null) viewFor(activeTabId).handleFiles(dt.files, dt); }); // 三期：drop 落到活动视图
+  // 三期：drop 落到活动视图。守卫不能只看 files——资源管理器拖入可能 files 为空、只有
+  // text/uri-list（只认 files 时拖入被 preventDefault 白吞，输入框毫无反应，2026-10 用户实测）
+  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && activeTabId !== null && ((dt.files && dt.files.length) || dt.getData('text/uri-list') || dt.getData('resourceurls'))) viewFor(activeTabId).handleFiles(dt.files || [], dt); });
   // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
   // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
   // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
