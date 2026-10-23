@@ -1966,14 +1966,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 失败行带原因（B1，2026-10-23）：快照 output 对失败任务取 errorMessage/stderr
       // （subagentSnapshot 口径），列表行直接见「为什么挂」（如 402 额度），不用点下钻
       ? (((t.output || '').split('\n')[0] || '').trim() || t.task || '')
-      : (t.task || '');
+      // 运行中行带活状态（2026-10-23 用户拍板「要体现子智能体的状态」）：第二行滚动显示
+      // 活动流尾条（与下钻同源），比静态任务摘要更像「它此刻在干嘛」；秒表每秒重绘会刷新
+      : (t.status === 'running' && t.items && t.items.length)
+        ? String(t.items[t.items.length - 1]).replace(/^\s*⮑\s*/, '')
+        : (t.task || '');
     var taskSnip = taskSnipBase.replace(/\s+/g, ' ').slice(0, 48);
     main.appendChild(el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), stTxt ? stTxt + ' · ' + taskSnip : taskSnip));
     rowEl.appendChild(main);
-    // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）
+    // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
+    // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
     var time = t.status === 'running'
       ? (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : '')
-      : (row.rec.endAt ? fmtRel(row.rec.endAt) : '');
+      : ((row.rec.endAt || row.rec.startAt) ? fmtRel(row.rec.endAt || row.rec.startAt) : '');
     if (time) rowEl.appendChild(el('span', 'sm-time', time));
     rowEl.addEventListener('click', function () { openSubDetail(row.runId, row.ti); });
     return rowEl;
