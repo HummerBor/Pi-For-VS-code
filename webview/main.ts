@@ -1768,7 +1768,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function dockSetCollapsed(c: boolean) {
     subCollapsed = c;
     if (activeTabId !== null) subCollapsedByTab[activeTabId] = c; // 收起偏好按页签记忆，切回不串台
-    if (subdock) subdock.classList.toggle('hidden', c);
+    if (subdock) {
+      // 收起=单行胶囊不是消失（2026-10-23 交互拍板）：一细条贴右上、实时可见不压正文，
+      // 点胶囊/⚙ 均可展开。真正隐藏只归「该页签没有子 agent 数据」
+      subdock.classList.toggle('pill', c);
+      if (!c) subdock.classList.remove('hidden');
+    }
     updateSubInd();
   }
   /** 头部 loading 图标：浮窗的锚点——首次有子 agent 后常驻（用户拍板：图标不消失）；
@@ -1821,7 +1826,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     head.addEventListener('click', function (e) {
       var tg = e.target as HTMLElement;
       if (tg && tg.closest && tg.closest('.sd-btn')) return; // 按钮自处理，别把点击吞成收起
-      if (!dragMoved) dockSetCollapsed(true);
+      if (!dragMoved) dockSetCollapsed(!subCollapsed); // 胶囊态点开、展开态收起（2026-10-23）
     });
     document.body.appendChild(d);
     subdock = d;
@@ -1869,7 +1874,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // toolCallId/异步句柄两类 id 都不靠隐式转换或内容碰运气
     var rid = String(id);
     var runs = subRunsByTab[tab] || (subRunsByTab[tab] = {});
-    var rec = runs[rid] || (runs[rid] = { snap: snap, final: final });
+    var rec = runs[rid];
+    if (!rec) {
+      rec = runs[rid] = { snap: snap, final: final };
+      // 新 run 首次报到自动展开一次（2026-10-23）：只对「从没碰过开合」的页签生效——
+      // 保首次可发现性；用户手动收起过（账本有记录）则偏好优先，不弹不烦
+      if (subCollapsed && subCollapsedByTab[tab] === undefined) {
+        subCollapsed = false;
+        if (subdock) subdock.classList.remove('pill');
+      }
+    }
     rec.snap = snap; rec.final = final;
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
@@ -1892,8 +1906,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       return;
     }
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
-    if (subCollapsed) d.classList.add('hidden');
-    else requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 触发从图标处缩放切出
+    if (subCollapsed) { d.classList.remove('hidden'); d.classList.add('pill'); }
+    else {
+      d.classList.remove('pill');
+      requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 首帧从图标处缩放切出
+    }
     subRunning = anySubRunning(runs);
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
@@ -1913,8 +1930,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       head.appendChild(elIco('sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
       head.appendChild(el('span', 'sm-title', L.smTitle));
     }
-    var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
-    minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
+    // 胶囊态给一行活摘要（2026-10-23）：收起也一眼知道「几个在跑」，不用展开数
+    if (subCollapsed) {
+      var pillRun = 0, pillDone = 0;
+      for (var pk in runs) {
+        var pts = runs[pk].snap.tasks;
+        for (var pj = 0; pj < pts.length; pj++) (pts[pj].status === 'running' ? pillRun++ : pillDone++);
+      }
+      head.appendChild(el('span', 'sm-count', (pillRun ? L.smRunningGroup + ' · ' + pillRun + '  ' : '') + L.smDoneGroup + ' · ' + pillDone));
+    }
+    var minB = el('span', 'sd-btn', subCollapsed ? '▸' : '—'); minB.title = subCollapsed ? L.smReopen : L.smCollapse;
+    minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(!subCollapsed); });
     head.appendChild(minB);
     body.innerHTML = '';
     if (subDetailView) { body.classList.add('sm-detail'); renderSubDetail(body); } // sm-detail：css 放开 pre-wrap
@@ -2068,7 +2094,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 浮窗被关后按钮再怎么点都回不来（2026-10-23 用户实测事故）。收起偏好只由用户点击写入
       subRunning = false;
       subCollapsed = true;
-      if (subdock) subdock.classList.add('hidden');
+      if (subdock) { subdock.classList.add('hidden'); subdock.classList.remove('pill'); }
       updateSubInd();
     }
   }
