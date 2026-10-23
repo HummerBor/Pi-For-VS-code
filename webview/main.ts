@@ -1774,9 +1774,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 头部 loading 图标：浮窗的锚点——首次有子 agent 后常驻（用户拍板：图标不消失）；
    *  运行中旋转，全部停止停转但不隐藏，点它展开/收起浮窗 */
   var subRunning = false;
+  /** 出过 subagent 记录的页签（2026-10-23 按钮常驻修复，用户实测「第一遍调用没按钮、浮窗
+   *  一关就再没入口」）：按钮判据不能用「此刻 runs 非空」——异步派发的壳 closed 事件先删
+   *  壳行，runs 空窗里按钮不露、浮窗却被 unhide 空壳挂着，关掉即失联。出过即认领，
+   *  壳删除不抹（用户拍板「图标不消失」的原语义就是常驻） */
+  var subSeenByTab: Record<string, boolean> = {};
   function updateSubInd() {
-    // 图标跟页签走：只有活动页签有子 agent 数据时才显示（缓存判空，全局单例不串台）
-    var show = !!subdock && activeTabId !== null && !!subRunsOf(activeTabId) && Object.keys(subRunsOf(activeTabId)!).length > 0;
+    // 图标跟页签走：该页签出过 subagent 就常驻（判据独立于 runs 增删，收起/清行都不掉按钮）
+    var show = !!subdock && activeTabId !== null && !!subSeenByTab[activeTabId];
     subindEl.style.display = show ? 'inline-flex' : 'none';
     // 编辑器实例页头默认整行隐藏（CSS）；子 agent 运行中才露出仅含 subind 的页头行
     document.body.classList.toggle('subind-live', show);
@@ -1859,6 +1864,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 录入/更新一条运行记录（页签维度；id 同 subagentUpdate.id） */
   function updateSubRun(tab: string | null, id: string, snap: SubagentSnapshot, final: boolean, startAt?: number, endAt?: number) {
     if (tab === null || !id) return;
+    subSeenByTab[tab] = true; // 按钮常驻锚点（见 updateSubInd 头注释），只增不减
     var runs = subRunsByTab[tab] || (subRunsByTab[tab] = {});
     var rec = runs[id] || (runs[id] = { snap: snap, final: final });
     rec.snap = snap; rec.final = final;
@@ -1872,11 +1878,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function renderSubDock() {
     var d = dockEnsure();
+    var runs = subRunsOf(activeTabId);
+    // 无内容不挂空壳（2026-10-23）：原实现先 unhide 再判空——壳 closed 删行后的 runs 空窗里
+    // 浮窗空壳先弹、按钮却没露（show 当时判 runs 空），「有浮窗没按钮」怪象的根源。判空前置，
+    // 空壳直接隐藏；按钮显隐走 subSeenByTab，不受影响
+    if (!runs || !Object.keys(runs).length) {
+      subRunning = false;
+      d.classList.add('hidden');
+      updateSubInd();
+      return;
+    }
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
     if (subCollapsed) d.classList.add('hidden');
     else requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 触发从图标处缩放切出
-    var runs = subRunsOf(activeTabId);
-    if (!runs) { updateSubInd(); return; }
     subRunning = anySubRunning(runs);
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
@@ -2034,9 +2048,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (subdock && !subCollapsed) dockResetPos(subdock);
       renderSubDock();
     } else {
-      // 该页签没有子 agent 数据：浮窗收起隐藏、spinner 熄灭（图标随缓存判空自动隐藏）
+      // 该页签没有子 agent 数据：临时收起隐藏、spinner 熄灭。**不能走 dockSetCollapsed**——
+      // 它会顺手把 subCollapsedByTab[tid]=true 记账，页签一切换就永久记成「收起」，
+      // 浮窗被关后按钮再怎么点都回不来（2026-10-23 用户实测事故）。收起偏好只由用户点击写入
       subRunning = false;
-      if (subdock) dockSetCollapsed(true);
+      subCollapsed = true;
+      if (subdock) subdock.classList.add('hidden');
       updateSubInd();
     }
   }
