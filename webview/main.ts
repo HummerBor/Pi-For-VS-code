@@ -1865,8 +1865,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function updateSubRun(tab: string | null, id: string, snap: SubagentSnapshot, final: boolean, startAt?: number, endAt?: number) {
     if (tab === null || !id) return;
     subSeenByTab[tab] = true; // 按钮常驻锚点（见 updateSubInd 头注释），只增不减
+    // 运行 id 一律字符串判等（2026-10-23 拍板「无视任务内容差异」）：Map 键归一化收口，
+    // toolCallId/异步句柄两类 id 都不靠隐式转换或内容碰运气
+    var rid = String(id);
     var runs = subRunsByTab[tab] || (subRunsByTab[tab] = {});
-    var rec = runs[id] || (runs[id] = { snap: snap, final: final });
+    var rec = runs[rid] || (runs[rid] = { snap: snap, final: final });
     rec.snap = snap; rec.final = final;
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
@@ -1929,6 +1932,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         (t.status === 'running' ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
       }
     }
+    // 最新在上（2026-10-23 用户拍板）：组内按时间倒序——收尾行取 endAt、运行中取 startAt；
+    // sort 稳定，同刻（parallel 同批）保持相对序
+    var byNewest = function (a: any, b: any) {
+      return ((b.rec.endAt || b.rec.startAt) || 0) - ((a.rec.endAt || a.rec.startAt) || 0);
+    };
+    runningRows.sort(byNewest);
+    doneRows.sort(byNewest);
     if (runningRows.length === 0 && doneRows.length === 0) {
       body.appendChild(el('div', 'sm-empty', L.smNoRuns));
       return;
@@ -2154,8 +2164,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 宿主关壳：异步派发的同步壳行删除（真进度走 sa-n 句柄行）；正下钻着它就退回概览
       if ((m as any).closed) {
         var cruns = subRunsByTab[stid];
-        if (cruns) delete cruns[m.id];
-        if (subDetailView && subDetailView.split(':')[0] === m.id) subDetailView = null;
+        if (cruns) delete cruns[String(m.id)];
+        if (subDetailView && subDetailView.split(':')[0] === String(m.id)) subDetailView = null;
         if (stid === activeTabId) renderSubDock();
         return;
       }
@@ -2166,7 +2176,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 下钻响应同款截获（宿主 this.post 带发起时页签，若用户已切页签则不能丢——缓存全局）
     if (m.type === 'subagentDetail') {
       subDetailCache[m.id] = m.snapshot;
-      if (subDetailView && subDetailView.split(':')[0] === m.id) renderSubDock();
+      if (subDetailView && subDetailView.split(':')[0] === String(m.id)) renderSubDock();
       return;
     }
     // 鸭子换图是页面级（图源与页签无关），不过路由

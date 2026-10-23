@@ -172,10 +172,13 @@ export class PiCore {
 
   /** 留存/更新运行正本；超上限淘汰最早的（Map 迭代序即插入序） */
   private trackSubagentRun(id: string, details: unknown): { startAt: number; endAt?: number } {
-    let rec = this.subagentRuns.get(id);
+    // 运行 id 一律字符串判等（2026-10-23 拍板「无视任务内容差异」）：键归一化收口，
+    // toolCallId/异步句柄两类 id 在 Map 里都不靠隐式转换碰运气
+    const rid = String(id);
+    let rec = this.subagentRuns.get(rid);
     if (!rec) {
       rec = { details, startAt: Date.now() };
-      this.subagentRuns.set(id, rec);
+      this.subagentRuns.set(rid, rec);
       if (this.subagentRuns.size > 30) {
         const oldest = this.subagentRuns.keys().next().value;
         if (oldest !== undefined) this.subagentRuns.delete(oldest);
