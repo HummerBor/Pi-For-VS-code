@@ -646,6 +646,12 @@ body> :not(#bg-layer):not(.subdock) {
   opacity: 1;
 }
 
+/* 余额/配额/鉴权类错误的指引文案（无可点重试）——同字体口径防气泡里花掉 */
+.errmsg-hint {
+  font-family: var(--vscode-font-family, sans-serif);
+  opacity: .9;
+}
+
 .md-p {
   white-space: pre-wrap;
 }

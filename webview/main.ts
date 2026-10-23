@@ -7,6 +7,7 @@
 import { STRINGS, type Lang } from "../src/core/i18n";
 import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
 import { toolDetail } from "../src/domain/toolDetail";
+import { isEditRetryable } from "../src/domain/errorClass"; // 余额/配额/鉴权类错误不给「修改后重试」入口
 import type { SubagentSnapshot } from "../src/domain/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -1041,10 +1042,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (m.stopReason === 'error' && m.errorMessage) {
           var eb = el('div', 'bubble assistant errmsg');
           eb.textContent = '✘ ' + String(m.errorMessage).slice(0, 300);
-          var rb = el('span', 'errmsg-retry', L.retryEdit);
-          rb.addEventListener('click', function () { vpost({ type: 'retryFromLast' }); });
           eb.appendChild(document.createElement('br'));
-          eb.appendChild(rb);
+          // 入口分流（2026-10-23 用户拍板，402 实测事故）：余额/配额/鉴权类错误改消息也没用，
+          // 挂「修改后重试」只会引导用户白撞一次请求——换指引文案；判定口径在 errorClass.ts
+          if (isEditRetryable(String(m.errorMessage))) {
+            var rb = el('span', 'errmsg-retry', L.retryEdit);
+            rb.addEventListener('click', function () { vpost({ type: 'retryFromLast' }); });
+            eb.appendChild(rb);
+          } else {
+            eb.appendChild(el('span', 'errmsg-hint', L.errNoRetryHint));
+          }
           root.appendChild(eb);
         }
       }

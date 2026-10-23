@@ -423,6 +423,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     smMore: "…还有 {n} 条",
     smReopen: "打开子代理监控",
     retryEdit: "↺ 修改后重试",
+    // 余额/配额/鉴权类错误替换重试入口（errorClass.ts 判定，2026-10-23：402 重试只是白撞请求）
+    errNoRetryHint: "余额/配额/鉴权类错误——重发也过不去；请先充值或更换 API key/模型，然后直接说「继续」",
     queuedCount: "· 排队 {n} 条",
     // 工单十六：queuebar 取回
     queuedRetrieveTitle: "取回到编辑框（在编辑框里删改，同 pi 原生语义）",
@@ -831,6 +833,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     smMore: "…{n} more",
     smReopen: "Open subagent monitor",
     retryEdit: "↺ Edit and retry",
+    errNoRetryHint: "Balance/quota/auth error — resending won't help; top up or switch API key/model first, then just say \"continue\"",
     queuedCount: "· {n} queued",
     // 工单十六：queuebar retrieve
     queuedRetrieveTitle: "Restore to editor (edit/delete there, same as pi native)",
