@@ -930,32 +930,6 @@ details.think.compaction-flash>summary {
   width: 220px;
 }
 
-/* 收起态=单行胶囊（2026-10-23 交互拍板）：一细条贴右上，实时可见不压正文（原「收起即
-   消失」既丢监控又只剩一个小按钮，用户实测不合理）。展开走 .subdock 本体；
-   真正隐藏只归「无数据」的 .hidden */
-.subdock.pill {
-  width: auto;
-  max-width: 280px;
-}
-
-.subdock.pill .sd-body {
-  display: none;
-}
-
-.subdock.pill .sd-head {
-  padding: 3px 9px;
-  gap: 5px;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.subdock.pill .sd-head .sm-title {
-  max-width: 110px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sd-head {
   display: flex;
   align-items: center;
