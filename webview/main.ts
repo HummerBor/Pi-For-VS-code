@@ -1952,7 +1952,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '')));
     // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
     var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : '';
-    var taskSnip = (t.task || '').slice(0, 48);
+    var taskSnipBase = t.status === 'failed'
+      // 失败行带原因（B1，2026-10-23）：快照 output 对失败任务取 errorMessage/stderr
+      // （subagentSnapshot 口径），列表行直接见「为什么挂」（如 402 额度），不用点下钻
+      ? (((t.output || '').split('\n')[0] || '').trim() || t.task || '')
+      : (t.task || '');
+    var taskSnip = taskSnipBase.replace(/\s+/g, ' ').slice(0, 48);
     main.appendChild(el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), stTxt ? stTxt + ' · ' + taskSnip : taskSnip));
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）
