@@ -15,34 +15,69 @@ export function setPiClientDebug(fn: (s: string) => void): void {
  *  resourceLoader.reload() 全树扫描（skills/提示模板/AGENTS/扩展 + 工作区），
  *  冷 5~10s / 热 10ms（同窗实测：t59 冷 boot 16s、t11 热 boot 223ms）。
  *  services 绑 cwd（官方语义）且无 dispose（runtime.dispose 只 dispose session，
- *  agent-session-runtime.js:112/302 核过）——进程级按 cwd 共享一份：扫一次，
- *  全页签/全会话替换复用（每个页签一个 PiClient，不共享就每开一页签扫一遍）。
- *  Promise 缓存 = 并发 boot 共享同一次扫描；失败不缓存（用户可能刚装好配置）。 */
-const sharedServices = new Map<string, Promise<any>>();
-function getSharedServices(sdk: any, cwd: string): Promise<any> {
-  const hit = sharedServices.get(cwd);
-  if (hit) return hit;
+ *  agent-session-runtime.js:112/302 核过）。
+ *
+ *  【2026-09-23 曾按 cwd 进程级共享一份；2026-10-23 串台事故后回收，改每 PiClient 一份】
+ *  共享 services = 同 cwd 全部会话共享同一 extensionsResult.runtime，而每次建会话
+ *  bindCore 都把扩展推送口（runtime.sendUserMessage/appendEntry，runner.js 注释
+ *  「all extension APIs reference this」）重绑到新会话——后建会话接管一切扩展推送。
+ *  实测事故：p68 派单 async 子 agent，进度帧/终态回灌全投进后建的空页签 p69（浮窗弹在
+ *  没人看的页签、回灌污染随机会话）。扩展侧无自救通道（ctx.sessionManager 是纯只读 Pick，
+ *  entry_appended 只能由 AgentSession 内部发射）——并发会话必须各自 services 隔离路由。
+ *  Q 刀真收益「冷扫只付一次」由 createServices 的 cwd 串行链保留；U 刀 modelRuntime
+ *  全进程共享保留（模型目录与路由无关）。失败不缓存（用户可能刚装好配置）。 */
+/** U 刀（2026-09-23 真凶结案）+ T 刀（四行归案）：modelRuntime 全进程共享——它只是模型
+ *  目录，选择权在 session 上。create 内部 model-runtime.js:97 会做整段初始化刷新（逐 provider
+ *  可用性/鉴权状态构建），实测在扩展宿主里 2.8~9s 抖动（裸进程77ms，新进程冷缓存放大）。
+ *  pi 官方留了开关 refreshOnCreate:false——跳过它，可用性由后台队列（queueAvailabilityRefresh）
+ *  随后补齐，不挡启动/发消息 */
+let sharedModelRuntimePromise: Promise<any> | null = null;
+function getSharedModelRuntime(sdk: any): Promise<any> {
+  if (!sharedModelRuntimePromise) {
+    const mp: Promise<any> = (async () => {
+      const { join } = require("path");
+      const agentDir = sdk.getAgentDir();
+      const tm = Date.now();
+      const mr = await sdk.ModelRuntime.create({
+        authPath: join(agentDir, "auth.json"),
+        modelsPath: join(agentDir, "models.json"),
+        refreshOnCreate: false,
+      });
+      dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
+      return mr;
+    })();
+    sharedModelRuntimePromise = mp;
+    mp.catch(() => {
+      if (sharedModelRuntimePromise === mp) sharedModelRuntimePromise = null;
+    });
+  }
+  return sharedModelRuntimePromise;
+}
+const prewarmedServices = new Map<string, Promise<any>>();
+function takeServices(sdk: any, cwd: string): Promise<any> {
+  const hit = prewarmedServices.get(cwd);
+  if (hit) {
+    // 收养后出列——每个 services 只服务一个 PiClient（串台红线，见文件头），
+    // 后续客户端走 createServices 吃热扫
+    prewarmedServices.delete(cwd);
+    return hit;
+  }
+  return createServices(sdk, cwd);
+}
+/** services 创建按 cwd 串行：冷扫只付一次（后到者吃热扫 ~10ms）；失败不缓存 */
+const servicesChain = new Map<string, Promise<void>>();
+function createServices(sdk: any, cwd: string): Promise<any> {
+  const prev = servicesChain.get(cwd) ?? Promise.resolve();
+  const p: Promise<any> = prev.then(async () => {
   // 【探针清场 2026-09-23】S/X/Y/Z2/Z3 五把计时探针（bench/io 逐项掋表/位置×读法矩阵/
   // 哨兵）已拆除——判案结论见 交接-启动慢战役.md：慢在服务通道排队过闸，不在内核/文件/位置。
   // 血泪教训：这些探针自己会往同一条服务闸插异步 IO（Z3 每 400ms 三笔、Z2 一轮 24 笔），
   // 污染被测对象；再加探针前先想清楚会不会插队，计时用纯 Date.now 包主链，别自带 IO。
-  const p: Promise<any> = (async () => {
+
     // T 刀（2026-09-23 四行归案）：工厂的 modelRuntime 可注入——把它拆出来单独掋表
     //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
     // 选择权在 session 上）。剩余（ctor+reload+refresh）= services 单跳减本行
-    const { join } = require("path");
-    const agentDir = sdk.getAgentDir();
-    const tm = Date.now();
-    const modelRuntime = await sdk.ModelRuntime.create({
-      authPath: join(agentDir, "auth.json"),
-      modelsPath: join(agentDir, "models.json"),
-      // U 刀（2026-09-23 真凶结案）：create 内部 model-runtime.js:97 会做整段初始化刷新
-      //（逐 provider 可用性/鉴权状态构建），实测在扩展宿主里 2.8~9s 抖动（裸进程77ms，
-      // 新进程冷缓存放大）。pi 官方留了开关 refreshOnCreate:false——跳过它，可用性由
-      // 后台队列（queueAvailabilityRefresh）随后补齐，不挡启动/发消息
-      refreshOnCreate: false,
-    });
-    dbg("[boot] bench mr-create=" + (Date.now() - tm) + "ms");
+    const modelRuntime = await getSharedModelRuntime(sdk);
     // 显示名/分类归位钩子（subagentNames.ts 头注释）：resourceLoaderOptions.extensionFactories
     // 是 SDK 给宿主的内联扩展口（sdk.md「Extensions」）——pi 内容零改动，调用名在工具执行前
     // 归位 pi 注册分类，展示名走台账（2026-09-24 两层分离拍板）
@@ -51,11 +86,8 @@ function getSharedServices(sdk: any, cwd: string): Promise<any> {
       modelRuntime,
       resourceLoaderOptions: { extensionFactories: [makeSubagentNameGuard(sdk, cwd)] },
     });
-  })();
-  sharedServices.set(cwd, p);
-  p.catch(() => {
-    if (sharedServices.get(cwd) === p) sharedServices.delete(cwd);
   });
+  servicesChain.set(cwd, p.then(() => undefined, () => undefined));
   return p;
 }
 /** Q 刀②：扩展激活即后台预热——把这一次全树扫描藏进「开面板之前」；
@@ -82,7 +114,12 @@ export function prewarmPiServices(cwd: string): void {
             });
         }
       } catch { /* chunks 目录形态变化时静默 */ }
-      return getSharedServices(sdk, cwd);
+      const sp = createServices(sdk, cwd);
+      prewarmedServices.set(cwd, sp);
+      sp.catch(() => {
+        if (prewarmedServices.get(cwd) === sp) prewarmedServices.delete(cwd);
+      });
+      return sp;
     })
     .catch(() => {});
 }
@@ -122,6 +159,20 @@ export class PiClient {
 
   private runtime: any = null; // AgentSessionRuntime（会话替换：new/switch/fork/clone/import）
   private session: any = null; // 当前 AgentSession
+  /** 本客户端专属 services（2026-10-23 串台事故回收共享，见文件头 Q 刀注释）：同 cwd 并发
+   *  会话各自一份 services，扩展推送口（runtime.sendUserMessage/appendEntry）才不会被
+   *  后建会话 bindCore 重绑走。会话替换复用同一份（createRuntime 每次替换都调） */
+  private servicesPromise: Promise<any> | null = null;
+  private ensureServices(sdk: any, cwd: string): Promise<any> {
+    if (!this.servicesPromise) {
+      const sp = takeServices(sdk, cwd);
+      this.servicesPromise = sp;
+      sp.catch(() => {
+        if (this.servicesPromise === sp) this.servicesPromise = null; // 失败不缓存，可重试
+      });
+    }
+    return this.servicesPromise;
+  }
   /** pi 真相同步读（工单十五刀6）：RPC 时代镜像+三层对账去猜，直连后 isStreaming 随手可读
    *  （agent-session.d.ts:295）——piCore.busy 的派生源之一 */
   get isStreaming(): boolean {
@@ -188,14 +239,15 @@ export class PiClient {
 
       // 官方 runtime 工厂姿势（sdk.md「Session Management」）：services 绑定 cwd，
       // runtime 负责会话替换（new/switch/fork/clone/import 后 runtime.session 会换新对象）。
-      // Q 刀：createRuntime 回调每次会话替换都会被调，services 走进程级共享缓存（见文件头）
+      // Q 刀：createRuntime 回调每次会话替换都会被调，services 走本客户端 memo（每 PiClient
+      // 一份，2026-10-23 串台事故回收共享——见文件头）
       const createRuntime = async (opts: {
         cwd: string;
         sessionManager: any;
         sessionStartEvent?: any;
       }) => {
         const tS = Date.now();
-        const services = await getSharedServices(sdk, opts.cwd);
+        const services = await this.ensureServices(sdk, opts.cwd);
         this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms)");
         const tE = Date.now();
         const sess = await sdk.createAgentSessionFromServices({
