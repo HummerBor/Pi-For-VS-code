@@ -220,6 +220,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var streaming = false; var busyTimer: any = null; var busyStart = 0; var queueN = 0;
   var compacting = false;
   var lastElapsed: number | null = null;
+  var roundFrozen = ''; // 本轮总用时冻结文本（全收尾才写；新轮清零——一轮一只累计秒表）
   var modeText = 'Auto';
   var pendingImages: any[] = []; var pendingFiles: any[] = [];
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
@@ -472,7 +473,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function renderBusyUi() {
     stopBtn.style.display = streaming ? 'inline-flex' : 'none';
     if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    if (streaming) {
+    // 一轮一只累计秒表（2026-10-23 用户拍板「主会话还有子 agent 在跑就还是 Working…」+
+    // 「直到人机一轮跑完，子 agent 时间也算累计」）：主回合 settled 但后台子 agent 仍在跑
+    // = 主会话还在干活，同一只表从 busyStart 起继续累；全收尾才落白字总用时。
+    // 事故教训：原先 settled 就换 ⏱、chip 再走自己一只表——「⏱ 8s ⚙ builder 7m30s」两只钟
+    // 数值打架，用户三连问「这是啥/上一轮的？/你看了会不会懵逼」
+    var subLiveNow = function () { var r = subRunsOf(id); return !!r && anySubRunning(r); };
+    if (streaming || subLiveNow()) {
+      if (!busyStart) busyStart = Date.now(); // 重放/恢复的孤儿子 agent：从发现起算，不报 1970
+      roundFrozen = ''; // 本轮进行中，冻结值作废
+      statusEl.classList.remove('done');
       statusEl.classList.add('busy');
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
@@ -486,9 +496,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         // ticker 直接读自己视图闭包的 streaming/statusEl——串写在结构上不可能；
         // 自愈保留：streaming 已结束而 timer 未被正常清时自杀停摆。
         // clearInterval 只清自己的 myTimer（不碰 busyTimer，它可能是后一轮的）
-        if (!streaming) {
+        // 自愈条件同主判据：主回合和子 agent 全收尾才算停；停摆即渲冻结值
+        // （subagentUpdate 入口的 refreshBusy 也会接力，两条路都收敛到同一冻结值）
+        if (!streaming && !subLiveNow()) {
           clearInterval(myTimer);
           if (busyTimer === myTimer) busyTimer = null;
+          renderBusyUi();
           return;
         }
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
@@ -502,12 +515,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
         statusEl.classList.add('busy');
         statusEl.textContent = '⏳ ' + L.compacting;
-      } else
-      // 本轮实测耗时（宿主 agent_start→settled，中断也算一轮）：留在状态栏直到下次状态变化；
-      // 同时入记录，切走再切回来能恢复 ⏱ 现场
-      if (lastElapsed != null) {
-        statusEl.textContent = '⏱ ' + fmtDur(lastElapsed);
-        statusEl.title = L.turnDuration;
+      } else {
+        // 全收尾：本轮总用时白字冻结（「完成的话就显示 83s 白色字体就行」）——与走秒同基准
+        // （busyStart 起算，含子 agent 全程），数字不跳变；下一轮 setBusy(true) 清零重来。
+        // busyStart 缺失（纯历史恢复）回退宿主实测耗时，不空窗；切走再切回由 roundFrozen 恢复现场
+        if (!roundFrozen && busyStart) roundFrozen = fmtDur(Date.now() - busyStart);
+        if (!roundFrozen && lastElapsed != null) roundFrozen = fmtDur(lastElapsed);
+        if (roundFrozen) {
+          statusEl.classList.add('done');
+          statusEl.textContent = roundFrozen;
+          statusEl.title = L.turnDuration;
+        }
       }
     }
   }
@@ -518,8 +536,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
       busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
       lastElapsed = null;
-      // 新一轮开始即清上一轮的子 agent 冻结用时（2026-10-23「开始之后还带着 12m04s」）
-      if (activeTabId !== null) { delete subDoneDurByTab[String(activeTabId)]; renderSubChip(); }
+      roundFrozen = ''; // 新一轮开始，上一轮的冻结用时清零（「开始之后还带着 12m04s」事故）
     } else if (elapsedMs != null) {
       // 本轮实测耗时入记录（切走再切回来能恢复 ⏱ 现场）
       lastElapsed = elapsedMs;
@@ -1842,12 +1859,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
   var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
   var subShowAllDone = false; // 完成列表封顶的展开开关（「…展开剩余」点开）
-  // 本轮子 agent 秒表的冻结用时（按页签记，2026-10-23 两次实测纠偏）：完成只显白字「83s」，
-  // 但新轮开始即清（「开始之后还带着 12m04s」）且只认 live 转换——本视图见过该 run 的
-  // running 态才认它的收尾；恢复重放/历史 run 只带收尾快照，不许冒充本轮用时
-  // （「我都没开始就又计时了？上一轮的？」事故就是重放/残留被当成新计时）
-  var subDoneDurByTab: Record<string, string> = {};
-  var subSeenRunningByTab: Record<string, Record<string, boolean>> = {};
+  // （计时口径已归位：一轮一只累计秒表，走秒/冻结都在视图状态行 renderBusyUi，
+  //   chip 不带表——2026-10-23 用户三连纠偏「这是啥/上一轮的？/会不会懵逼」）
 
   function subRunsOf(tab: string | null): Record<string, SubRunRec> | null {
     if (tab === null) return null;
@@ -1889,15 +1902,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rec.snap = snap; rec.final = final;
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
-    // 冻结用时只认 live 转换（见 subDoneDurByTab 注释）：running 态→收尾才记，
-    // 直出收尾的重放帧/补帧一概不认
-    var live = false;
-    for (var si = 0; si < snap.tasks.length; si++) if (snap.tasks[si].status === 'running') { live = true; break; }
-    if (live) {
-      (subSeenRunningByTab[tab] || (subSeenRunningByTab[tab] = {}))[rid] = true;
-    } else if ((subSeenRunningByTab[tab] || {})[rid] && rec.endAt && rec.startAt) {
-      subDoneDurByTab[tab] = fmtElapsed(rec.endAt - rec.startAt);
-    }
   }
   function openSubDetail(runId: string, ti: number) {
     subDetailView = runId + ':' + ti;
@@ -1956,33 +1960,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!chip) return;
     var runs = subRunsOf(activeTabId);
     if (!runs || !Object.keys(runs).length) { chip.style.display = 'none'; return; }
-    var runN = 0, topName = '', topElapsed = '';
+    var runN = 0, topName = '';
     for (var k in runs) {
       var ts = runs[k].snap.tasks;
       for (var j = 0; j < ts.length; j++) {
         if (ts[j].status === 'running') {
           runN++;
-          if (!topName) {
-            topName = ts[j].agent;
-            topElapsed = runs[k].startAt ? fmtElapsed(Date.now() - runs[k].startAt) : '';
-          }
+          if (!topName) topName = ts[j].agent;
         }
       }
     }
+    // 一轮一只钟（2026-10-23 用户「你看了会不会懵逼」+「主会话还有子 agent 在跑就还是
+    // Working…」）：计时只在状态行（Working 走秒 / 全收尾白字冻结），chip 不带第二只表——
+    // 跑着只给名字认人，收尾即隐藏。条数同样不带（「去掉条数交互就正确了」）
+    if (!runN) { chip.style.display = 'none'; return; }
     chip.style.display = 'inline-flex';
-    // 条数全链路去掉（2026-10-23 用户拍板「去掉条数交互就正确了」）：「完成 · 83」的计数
-    // 被反复误读成耗时（用户原话「83 条？？？」）——chip 只留秒表语义：谁在跑 + 用时 / 跑完用时
-    var doneDur = activeTabId !== null ? subDoneDurByTab[String(activeTabId)] : '';
-    if (!runN && !doneDur) { chip.style.display = 'none'; return; } // 没本轮任何秒表就整条不挂（防「这是啥」）
-    if (runN) {
-      chip.className = '';
-      chip.textContent = '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '');
-    } else {
-      // 完成态只留白字用时（2026-10-23 用户拍板「完成的话就显示 83s 白色字体就行」）；
-      // 只认本轮 live 收尾（subDoneDurByTab 注释）——旧轮/重放残留就是「上一轮的？」事故
-      chip.className = 'done';
-      chip.textContent = doneDur;
-    }
+    chip.className = '';
+    chip.textContent = '⚙ ' + topName;
     chip.title = L.smTitle;
   }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
@@ -2283,10 +2277,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (cruns) delete cruns[String(m.id)];
         if (subDetailView && subDetailView.split(':')[0] === String(m.id)) subDetailView = null;
         if (stid === activeTabId) renderSubDock();
+        viewFor(stid).refreshBusy(); // 壳删除也可能翻转「还在跑」判定 → 状态行重算
         return;
       }
       updateSubRun(stid, m.id, m.snapshot, m.final, m.startAt, m.endAt);
       if (stid === activeTabId) { if (subdock && !subCollapsed) dockResetPos(subdock); renderSubDock(); }
+      viewFor(stid).refreshBusy(); // 子 agent 开跑/收尾翻转「主会话还在干活」：Working 走秒/冻结值接力
       return;
     }
     // 下钻响应同款截获（宿主 this.post 带发起时页签，若用户已切页签则不能丢——缓存全局）

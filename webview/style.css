@@ -937,8 +937,8 @@ details.think.compaction-flash>summary {
   opacity: 1;
 }
 
-/* 完成态：白字用时（2026-10-23 用户拍板「白色字体就行」），不再用主题强调色抢眼 */
-#subchip.done {
+/* 全收尾：本轮总用时白字冻结（2026-10-23 用户拍板「白色字体就行」） */
+#status.done {
   color: var(--vscode-foreground, #fff);
 }
 
