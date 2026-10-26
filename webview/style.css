@@ -931,6 +931,35 @@ details.think.compaction-flash>summary {
 #subchip:hover {
   opacity: 1;
 }
+
+/* 气泡复制按钮（2026-10-23「复制不了回答」）：悬停右上角出 ⧉，点击复制整泡全文；
+   文本显式可选中（别让任何父级的 user-select 波及正文） */
+.bubble {
+  position: relative;
+  user-select: text;
+}
+
+.bub-copy {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  opacity: 0;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vscode-descriptionForeground);
+}
+
+.bubble:hover .bub-copy {
+  opacity: .75;
+}
+
+.bub-copy:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .25));
+}
 .subdock {
   position: fixed;
   right: 12px;
