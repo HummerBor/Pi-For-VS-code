@@ -7,8 +7,10 @@
  * 队列变短启发式全是这一层的病）；进程内 isStreaming/队列内容直读，这类 bug 整类消灭。
  *
  * 三条边界（改这里的代码前先读）：
- * 1. vsix 不携带 pi——前置条件与 RPC 时代一致：用户机器必须装有 pi（pi 命令在 PATH）。
- *    pi 包进 devDependencies 仅为类型参考，零运行时依赖铁律不破。
+ * 1. vsix 自带 pi（2026-10-26 拍板，废止「零运行时依赖/用户自装 pi」）：compile 时
+ *    vendor-pi.mjs 把 node_modules 里 pi 的 dist/bundle 拷入 vendor/pi/ 随包分发（~8MB），
+ *    findPiPackageRoot 内置层优先。动机：实际用户不会装 node/npm/pi，「先装 pi」是
+ *    安装门槛不是设计洁癖。pi 包仍只在 devDependencies（源码不 import 它，仅拷产物）。
  * 2. pi 是 ESM-only（"type":"module"），本扩展 tsc 编译为 CommonJS，直接写 import()
  *    会被 tsc 转译成 require() 拉不动——必须走 new Function 保留原生 import()（CJS→ESM
  *    标准桥）。别"优化"掉这个 Function。
@@ -25,7 +27,9 @@ export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 /** 用户没装 pi 或定位失败时的报错（panel 会接住并展示「安装 pi」按钮） */
 export class PiNotFoundError extends Error {
   constructor(detail: string) {
-    super("未找到 pi 包（" + detail + "）。请先安装 pi：npm install -g " + PI_PACKAGE);
+    // 内置 pi 随 vsix 分发后，走到这里 = 插件包损坏（vendor/pi 缺失）而非用户没装 pi；
+    // 「npm install」只是有 node 环境用户的兑底路径，不再是前置条件
+    super("pi 加载失败（" + detail + "）。请重装插件；如已装 node，也可尝试 npm install -g " + PI_PACKAGE);
     this.name = "PiNotFoundError";
   }
 }
@@ -52,7 +56,7 @@ export function loadPiSdk(): Promise<any> {
 
 async function doLoad(): Promise<any> {
   const root = findPiPackageRoot();
-  if (!root) throw new PiNotFoundError("PATH 上没有 pi 命令，本地 node_modules 里也没有");
+  if (!root) throw new PiNotFoundError("内置 vendor 缺失，本地 node_modules 和 PATH 上也没有 pi");
   // M 刀（2026-09-23 启动慢实锤）：优先加载单文件 bundle（dist/bundle/index.js）——
   // 库入口 dist/index.js 是 884 个文件的模块图，冷缓存/高负载下 import 实测 2~16s
   // （scripts/probe-boot-timing.mjs：冷 15.7s / 热 1.2s；bundle 恒 ~0.4s）。终端 pi
@@ -99,6 +103,17 @@ async function doLoad(): Promise<any> {
  * 顺序：本地 node_modules（开发场景）→ PATH 上的 pi 命令反推（发布场景）。
  */
 export function findPiPackageRoot(): string | null {
+  // 0) 插件内置的 pi（vsix 自带，用户免装）：out/pi/piSdk.js 上两级即扩展根目录，
+  //    vendor/pi 是 compile 时 vendor-pi.mjs 从 node_modules 拷入的 bundle（不入 git）。
+  //    内置优先于 PATH：保证插件验证过的版本一定胜出，用户自装的新版 pi 由
+  //    版本升级流程管（插件更新即跟上），避免两个版本行为分裂
+  try {
+    const vendored = join(dirname(__dirname), "..", "vendor", "pi");
+    if (existsSync(join(vendored, "dist", "bundle", "index.js"))) return vendored;
+  } catch {
+    // 定位失败继续走下一层
+  }
+
   // 1) 本地 node_modules（仓库内开发/测试时 pi 在 devDependencies）
   try {
     const pkgJson = require.resolve(join(PI_PACKAGE, "package.json"));

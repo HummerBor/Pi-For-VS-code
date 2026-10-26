@@ -14,8 +14,11 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 
 ## 不可破坏的约定
 
-- **零运行时依赖**：`dependencies` 必须保持为空，工具链只进 devDependencies（含
-  @earendil-works/pi-coding-agent——仅为类型参考，**不进 vsix**，运行时加载用户已装的 pi 包）。
+- **pi 内置随插件分发（2026-10-26 用户拍板，废止原「零运行时依赖」条款）**：compile 时
+  scripts/release/vendor-pi.mjs 把 pi 的 dist/bundle（自包含单文件 bundle，~7.7MB）拷入
+  vendor/pi/ 随 vsix 分发，piSdk.findPiPackageRoot 内置层优先——用户装上插件即用，
+  不需要 node/npm/自装 pi。pi 包仍只在 devDependencies（源码不 import，仅拷产物）；
+  pi 发新版后重新 compile 即跟上（内置版本 = 构建时 node_modules 里的版本）。
 - **插件就是壳（2026-09-14 用户拍板，原话）：能用 pi 原生能力的就用 pi；任何新功能都要
   先查清楚 pi 原本有没有这个能力（公开 API / TUI 行为 / 扩展生态三处都查），而不是自己
   造。工单签发前必过此查；壳自研与 pi 原生重复 = 浪费 + 双份维护 + 行为分裂。自研实现

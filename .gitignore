@@ -1,5 +1,7 @@
 node_modules/
 out/
+# pi 内置 bundle（compile 时 vendor-pi.mjs 从 node_modules 拷入，构建产物不入 git）
+vendor/
 *.vsix
 *.zip
 # HANDOVER.md
