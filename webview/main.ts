@@ -964,28 +964,33 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     cp.title = '复制';
     b.appendChild(cp);
   }
-  sessionArea.addEventListener('click', function (e) {
-    var t = e.target as HTMLElement;
-    if (!t || !t.closest || !t.closest('.bub-copy')) return;
-    var bub = t.closest('.bubble') as HTMLElement | null;
-    if (!bub) return;
-    var clone = bub.cloneNode(true) as HTMLElement;
-    var btn = clone.querySelector('.bub-copy');
-    if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
-    var txt = clone.textContent || '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt);
-      else {
-        var ta = document.createElement('textarea');
-        ta.value = txt;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      }
-    } catch (err) { /* 剪贴板不可用静默 */ }
-    e.stopPropagation();
-  });
+  // 气泡 ⧉ 按钮的事件委托——只绑一次（委托挂在 sessionArea 上，本函数逐视图执行，
+  // 不守卫会重复挂载：N 个视图 = N 个监听器，一次点击复制 N 遍）
+  if (!(sessionArea as any)._bubCopyBound) {
+    (sessionArea as any)._bubCopyBound = true;
+    sessionArea.addEventListener('click', function (e) {
+      var t = e.target as HTMLElement;
+      if (!t || !t.closest || !t.closest('.bub-copy')) return;
+      var bub = t.closest('.bubble') as HTMLElement | null;
+      if (!bub) return;
+      var clone = bub.cloneNode(true) as HTMLElement;
+      var btn = clone.querySelector('.bub-copy');
+      if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+      var txt = clone.textContent || '';
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt);
+        else {
+          var ta = document.createElement('textarea');
+          ta.value = txt;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+      } catch (err) { /* 剪贴板不可用静默 */ }
+      e.stopPropagation();
+    });
+  }
   function renderAll(list) {
     olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
@@ -2107,6 +2112,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   sessionArea.addEventListener('click', function (e) {
     var t = e.target as HTMLElement;
     if (t && t.closest && t.closest('#subchip')) dockSetCollapsed(!subCollapsed);
+  });
+  // 复制兑底（2026-10-23 用户「选中的没办法复制」）：Ctrl+C / 右键复制把选区显式写剪贴板，
+  // 不靠浏览器默认路径；再缓存「最后一次非空选区」——流式重绘（root 重建）会在点菜单之前
+  // 把选区冲掉，拿缓存兑底，复制命中的是你圈的那段而不是空选区
+  var lastSelText = '';
+  document.addEventListener('selectionchange', function () {
+    var s = String(window.getSelection() || '');
+    if (s) lastSelText = s;
+  });
+  document.addEventListener('copy', function (e: ClipboardEvent) {
+    var sel = String(window.getSelection() || '') || lastSelText;
+    if (!sel || !e.clipboardData) return;
+    e.clipboardData.setData('text/plain', sel);
+    e.preventDefault();
   });
   // 头部 ＋ → 开新标签会话（工单十五入口收敛，用户拍板 2026-09-14）：多标签时代
   // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
