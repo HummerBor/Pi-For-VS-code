@@ -1155,10 +1155,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var list = String(raw || '').split(/\s+/).filter(function (u) { return /^file:/i.test(u); });
       if (list.length) uris = list;
     }
-    // 资源管理器拖入的部分 VS Code 版本 dataTransfer.files 为空、只带 text/uri-list——
-    // 循环体一行不进，attachUri 永远发不出去，drop 又被 preventDefault 吞掉：体感
-    // 「拖进输入框没反应」（2026-10 用户实测）。无 File 对象也照走 URI 通道
-    if (uris && (!files || !files.length)) { vpost({ type: 'attachUri', uris: uris }); return; }
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
       // 图片判定：f.type 不可靠——从 VS Code 资源管理器拖入的 File 没有 MIME（type 为空），
@@ -1932,6 +1928,34 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else { body.classList.remove('sm-detail'); renderSubOverview(body, runs); }
     linkify(body);
     updateSubInd();
+    renderSubChip();
+  }
+  /** 主会话状态行的子 agent 摘要（2026-10-23 用户「主会话的状态应该改一下」）：
+   *  常驻一行「⚙ <agent> <用时> · N 运行中」，不问也能看到子 agent 进程；点击开合浮窗。
+   *  无子 agent 数据则隐藏。渲染只碰可见视图的 chip（随页签克隆，切换由 applyTabSubState 补刷） */
+  function renderSubChip() {
+    var chip = sessionArea.querySelector('.session-view:not(.offview) #subchip') as HTMLElement;
+    if (!chip) return;
+    var runs = subRunsOf(activeTabId);
+    if (!runs || !Object.keys(runs).length) { chip.style.display = 'none'; return; }
+    var runN = 0, doneN = 0, topName = '', topElapsed = '';
+    for (var k in runs) {
+      var ts = runs[k].snap.tasks;
+      for (var j = 0; j < ts.length; j++) {
+        if (ts[j].status === 'running') {
+          runN++;
+          if (!topName) {
+            topName = ts[j].agent;
+            topElapsed = runs[k].startAt ? fmtElapsed(Date.now() - runs[k].startAt) : '';
+          }
+        } else doneN++;
+      }
+    }
+    chip.style.display = 'inline-flex';
+    chip.textContent = runN
+      ? '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '') + ' · ' + runN + ' ' + L.smRunningGroup
+      : '⚙ ' + L.smDoneGroup + ' · ' + doneN;
+    chip.title = L.smTitle + '：' + L.smRunningGroup + ' ' + runN + ' · ' + L.smDoneGroup + ' ' + doneN;
   }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
     // 展平：每任务一行（parallel 拆多行，Codex 同款）；运行中在上、收尾在下
@@ -1974,7 +1998,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
     main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '') + (t.status === 'running' && t.usage ? ' · ' + t.usage : '')));
     // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
-    var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : '';
+    var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : L.smDoneGroup;
     var taskSnipBase = t.status === 'failed'
       // 失败行带原因（B1，2026-10-23）：快照 output 对失败任务取 errorMessage/stderr
       // （subagentSnapshot 口径），列表行直接见「为什么挂」（如 402 额度），不用点下钻
@@ -1985,7 +2009,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         ? String(t.items[t.items.length - 1]).replace(/^\s*⮑\s*/, '')
         : (t.task || '');
     var taskSnip = taskSnipBase.replace(/\s+/g, ' ').slice(0, 48);
-    main.appendChild(el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), stTxt ? stTxt + ' · ' + taskSnip : taskSnip));
+    // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
+    // ✓/✗ 图标只作辅助——状态不许靠猜
+    var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''));
+    line2.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? 'run' : t.status === 'failed' ? 'fail' : 'done'), stTxt));
+    if (taskSnip) line2.appendChild(document.createTextNode(' · ' + taskSnip));
+    main.appendChild(line2);
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
     // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
@@ -2043,14 +2072,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 语言/主题头部按钮已移除：功能保留（pickLang/pickTheme），入口收进 ⚙ 设置菜单
   // 子 agent 监控浮窗收起（头部 spinner 顶班）时，点 spinner 重新展开
   subindEl.addEventListener('click', function () { dockSetCollapsed(!subCollapsed); }); // toggle（09-18 用户反馈）
+  // 状态行 chip 点击同开合浮窗（事件委托：chip 随页签克隆，逐视图绑不值）
+  sessionArea.addEventListener('click', function (e) {
+    var t = e.target as HTMLElement;
+    if (t && t.closest && t.closest('#subchip')) dockSetCollapsed(!subCollapsed);
+  });
   // 头部 ＋ → 开新标签会话（工单十五入口收敛，用户拍板 2026-09-14）：多标签时代
   // 「新会话」只有一种语义=开新标签（新持久会话，不中断谁，无 busy 确认）；
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
   newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
-  // 三期：drop 落到活动视图。守卫不能只看 files——资源管理器拖入可能 files 为空、只有
-  // text/uri-list（只认 files 时拖入被 preventDefault 白吞，输入框毫无反应，2026-10 用户实测）
-  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && activeTabId !== null && ((dt.files && dt.files.length) || dt.getData('text/uri-list') || dt.getData('resourceurls'))) viewFor(activeTabId).handleFiles(dt.files || [], dt); });
+  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length && activeTabId !== null) viewFor(activeTabId).handleFiles(dt.files, dt); }); // 三期：drop 落到活动视图
   // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
   // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
   // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
@@ -2090,6 +2122,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       subCollapsed = true;
       if (subdock) subdock.classList.add('hidden');
       updateSubInd();
+      renderSubChip();
     }
   }
   /** 页签切换（工单24 架构归位二期）：整个下区视图换可见性 O(1)。每个控件的实时状态都已在

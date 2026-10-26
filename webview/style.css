@@ -903,6 +903,34 @@ details.think.compaction-flash>summary {
 }
 
 /* ── 子 agent 监控：浮动窗（codex 风格，运行中右下角悬浮）+ 消息流内最终卡片 ── */
+/* 状态徽标（2026-10-23 状态显性化）：✓/✗ 图标只作辅助，状态靠彩色文字认 */
+.sm-st {
+  font-weight: bold;
+}
+
+.sm-st.run {
+  color: var(--vscode-charts-blue, #4a9eff);
+}
+
+.sm-st.done {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.sm-st.fail {
+  color: var(--vscode-errorForeground, #f66);
+}
+
+/* 状态行子 agent 摘要 chip：常驻可点，点击开合浮窗 */
+#subchip {
+  cursor: pointer;
+  color: var(--vscode-charts-blue, #4a9eff);
+  opacity: .85;
+  margin-left: 10px;
+}
+
+#subchip:hover {
+  opacity: 1;
+}
 .subdock {
   position: fixed;
   right: 12px;
