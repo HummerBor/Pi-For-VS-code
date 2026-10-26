@@ -648,7 +648,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   // 增量渲染（照 pi TUI 的思路：只往已有节点追加，不整气泡重绘；文本块结束时才做一次 markdown 渲染，settled 再全量纠偏）
   function liveEnsure() {
-    if (!liveDiv) { liveDiv = el('div', 'bubble assistant'); addCopyBtn(liveDiv); root.appendChild(liveDiv); }
+    if (!liveDiv) { liveDiv = el('div', 'bubble assistant'); root.appendChild(liveDiv); }
     if (!liveMsg) liveMsg = { content: [] };
     if (!liveParts) liveParts = {};
   }
@@ -957,40 +957,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     d.appendChild(body);
     return d;
   }
-  /** 气泡复制按钮（2026-10-23 用户「我复制不了你的回答」）：webview 无右键菜单、选中也不便——
-   *  悬停出 ⧉，点击把该气泡全文写剪贴板（克隆后摘按钮，不把 ⧉ 复制进去） */
-  function addCopyBtn(b: HTMLElement) {
-    var cp = el('span', 'bub-copy', '⧉');
-    cp.title = '复制';
-    b.appendChild(cp);
-  }
-  // 气泡 ⧉ 按钮的事件委托——只绑一次（委托挂在 sessionArea 上，本函数逐视图执行，
-  // 不守卫会重复挂载：N 个视图 = N 个监听器，一次点击复制 N 遍）
-  if (!(sessionArea as any)._bubCopyBound) {
-    (sessionArea as any)._bubCopyBound = true;
-    sessionArea.addEventListener('click', function (e) {
-      var t = e.target as HTMLElement;
-      if (!t || !t.closest || !t.closest('.bub-copy')) return;
-      var bub = t.closest('.bubble') as HTMLElement | null;
-      if (!bub) return;
-      var clone = bub.cloneNode(true) as HTMLElement;
-      var btn = clone.querySelector('.bub-copy');
-      if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
-      var txt = clone.textContent || '';
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt);
-        else {
-          var ta = document.createElement('textarea');
-          ta.value = txt;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-        }
-      } catch (err) { /* 剪贴板不可用静默 */ }
-      e.stopPropagation();
-    });
-  }
   function renderAll(list) {
     olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
@@ -1049,9 +1015,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         addUser(ut, uimgs.length, ui, ufiles, uimgs);
       }
       else if (m.role === 'assistant') {
-        var b = el('div', 'bubble assistant'); addCopyBtn(b);
-        // 空泡判定不能数 childNodes（复制按钮常驻就是 1 个子节点）——只认真内容
-        var flushB = function () { if (b.querySelector(':scope > *:not(.bub-copy)')) { root.appendChild(b); b = el('div', 'bubble assistant'); addCopyBtn(b); } };
+        var b = el('div', 'bubble assistant');
+        var flushB = function () { if (b.childNodes.length) { root.appendChild(b); b = el('div', 'bubble assistant'); } };
         if (Array.isArray(m.content)) {
           for (var j = 0; j < m.content.length; j++) {
             var c = m.content[j];
@@ -1077,7 +1042,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (m.stopReason === 'error' && m.errorMessage) {
           var eb = el('div', 'bubble assistant errmsg');
           eb.textContent = '✘ ' + String(m.errorMessage).slice(0, 300);
-          addCopyBtn(eb); // textContent 会清子节点——按钮必须后加（顺序教训，别再提前插）
           eb.appendChild(document.createElement('br'));
           // 入口分流（2026-10-23 用户拍板，402 实测事故）：余额/配额/鉴权类错误改消息也没用，
           // 挂「修改后重试」只会引导用户白撞一次请求——换指引文案；判定口径在 errorClass.ts
