@@ -1174,6 +1174,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var list = String(raw || '').split(/\s+/).filter(function (u) { return /^file:/i.test(u); });
       if (list.length) uris = list;
     }
+    // 资源管理器拖入的部分 VS Code 版本 dataTransfer.files 为空、只带 text/uri-list——
+    // 循环体一行不进，attachUri 永远发不出去，drop 又被 preventDefault 吞掉：体感
+    // 「拖进输入框没反应」（2026-10 用户实测）。无 File 对象也照走 URI 通道
+    if (uris && (!files || !files.length)) { vpost({ type: 'attachUri', uris: uris }); return; }
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
       // 图片判定：f.type 不可靠——从 VS Code 资源管理器拖入的 File 没有 MIME（type 为空），
