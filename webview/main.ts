@@ -1839,6 +1839,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var subRunsByTab: Record<string, Record<string, SubRunRec>> = {};
   var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
   var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
+  var subShowAllDone = false; // 完成列表封顶的展开开关（「…还有 N 条」点开）
 
   function subRunsOf(tab: string | null): Record<string, SubRunRec> | null {
     if (tab === null) return null;
@@ -1952,9 +1953,22 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
     }
     chip.style.display = 'inline-flex';
-    chip.textContent = runN
-      ? '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '') + ' · ' + runN + ' ' + L.smRunningGroup
-      : '⚙ ' + L.smDoneGroup + ' · ' + doneN;
+    if (runN) {
+      chip.className = '';
+      chip.textContent = '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '') + ' · ' + runN + ' ' + L.smRunningGroup;
+    } else {
+      // 完成态只留白字用时（2026-10-23 用户拍板「完成的话就显示 83s 白色字体就行」）：
+      // 取最近收尾 run 的 endAt-startAt 冻结秒表（与运行中秒表同一口径）；时间数据缺失
+      // （旧载荷/无 startAt）回退旧计数显示，不空窗
+      var lastRec: SubRunRec | null = null;
+      for (var k2 in runs) {
+        var r2 = runs[k2];
+        if (r2.endAt && r2.startAt && (!lastRec || r2.endAt > (lastRec.endAt || 0))) lastRec = r2;
+      }
+      var dur = lastRec && lastRec.endAt && lastRec.startAt ? fmtElapsed(lastRec.endAt - lastRec.startAt) : '';
+      chip.className = dur ? 'done' : '';
+      chip.textContent = dur || ('⚙ ' + L.smDoneGroup + ' · ' + doneN);
+    }
     chip.title = L.smTitle + '：' + L.smRunningGroup + ' ' + runN + ' · ' + L.smDoneGroup + ' ' + doneN;
   }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
@@ -1978,14 +1992,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       body.appendChild(el('div', 'sm-empty', L.smNoRuns));
       return;
     }
+    // 收尾列表封顶（2026-10-23「很漏」：83 条完成行全量铺开就是噪音）：默认只露最新 8 条，
+    // 「…还有 N 条」点开才全量；运行中行不封顶（活的都要看得见）
+    var hiddenN = 0;
+    if (!subShowAllDone && doneRows.length > 8) {
+      hiddenN = doneRows.length - 8;
+      doneRows = doneRows.slice(0, 8);
+    }
     var groups = [runningRows, doneRows];
-    var titles = [L.smRunningGroup + ' · ' + runningRows.length, L.smDoneGroup + ' · ' + doneRows.length];
+    var titles = [L.smRunningGroup + ' · ' + runningRows.length, L.smDoneGroup + ' · ' + (doneRows.length + hiddenN)];
     for (var g = 0; g < 2; g++) {
       if (!groups[g].length) continue;
       body.appendChild(el('div', 'sm-group-title', titles[g]));
       for (var ri = 0; ri < groups[g].length; ri++) {
         var r = groups[g][ri];
         body.appendChild(renderSubRow(r));
+      }
+      if (g === 1 && hiddenN > 0) {
+        var more = el('div', 'sm-more-row', L.smMore.replace('{n}', String(hiddenN)));
+        more.addEventListener('click', function () { subShowAllDone = true; renderSubDock(); });
+        body.appendChild(more);
       }
     }
   }
@@ -1994,11 +2020,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var rowEl = el('div', 'sm-row ' + t.status);
     rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     var main = el('div', 'sm-row-main');
-    // 名字行带进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
-    // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
-    main.appendChild(el('div', 'sm-name', t.agent + (t.step ? ' #' + t.step : '') + (t.status === 'running' && t.usage ? ' · ' + t.usage : '')));
-    // 第二行：状态 · 任务摘要（Codex 同款可区分度——全是 worker 时靠任务认行；摘要截 48 字）
+    // 第一行：agent 名 + 状态徽标（2026-10-23 列表重设计：状态从第二行提进名字行成徽标，
+    // 第二行整行留给任务摘要——原来「完成 · 【派单令：…】」挤一行、换行乱、还漏 prompt 原文）
     var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : L.smDoneGroup;
+    // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
+    // ✓/✗ 图标只作辅助——状态不许靠猜
+    var line1 = el('div', 'sm-name');
+    line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
+    line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? 'run' : t.status === 'failed' ? 'fail' : 'done'), stTxt));
+    // 进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
+    // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
+    if (t.status === 'running' && t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
+    main.appendChild(line1);
+    // 第二行：任务摘要单行省略（全是 worker 时靠任务认行；全文 hover title / 点行下钻）
     var taskSnipBase = t.status === 'failed'
       // 失败行带原因（B1，2026-10-23）：快照 output 对失败任务取 errorMessage/stderr
       // （subagentSnapshot 口径），列表行直接见「为什么挂」（如 402 额度），不用点下钻
@@ -2008,12 +2042,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       : (t.status === 'running' && t.items && t.items.length)
         ? String(t.items[t.items.length - 1]).replace(/^\s*⮑\s*/, '')
         : (t.task || '');
-    var taskSnip = taskSnipBase.replace(/\s+/g, ' ').slice(0, 48);
-    // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
-    // ✓/✗ 图标只作辅助——状态不许靠猜
-    var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''));
-    line2.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? 'run' : t.status === 'failed' ? 'fail' : 'done'), stTxt));
-    if (taskSnip) line2.appendChild(document.createTextNode(' · ' + taskSnip));
+    // 摘要去 markdown 记号（2026-10-23「很漏」：**只测不修** 这类原文星号直接漏在列表上）
+    var taskSnip = taskSnipBase.replace(/\s+/g, ' ').replace(/[*_`#]/g, '').slice(0, 48);
+    var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), taskSnip);
+    line2.title = taskSnipBase;
     main.appendChild(line2);
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
@@ -2096,7 +2128,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 原中断式 newSession 只剩 ⚡菜单/slash 命令（当前标签内操作）
   newChatEl.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
-  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && dt.files && dt.files.length && activeTabId !== null) viewFor(activeTabId).handleFiles(dt.files, dt); }); // 三期：drop 落到活动视图
+  // 三期：drop 落到活动视图。守卫不能只看 files——资源管理器拖入可能 files 为空、只有
+  // text/uri-list（只认 files 时拖入被 preventDefault 白吞，输入框毫无反应，2026-10 用户实测）
+  window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && activeTabId !== null && ((dt.files && dt.files.length) || dt.getData('text/uri-list') || dt.getData('resourceurls'))) viewFor(activeTabId).handleFiles(dt.files || [], dt); });
   // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
   // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
   // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
