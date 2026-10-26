@@ -8,7 +8,7 @@
  * 由 npm run compile 调用（2026-10-26 拍板：pi 内置随插件分发，「零运行时依赖」废止），
  * 保证 vsix 里的 pi 版本 = 构建时 node_modules 里的版本，发新版 pi 时重新 compile 即跟上。
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -34,20 +34,41 @@ const dst = join(repoRoot, "vendor", "pi");
 mkdirSync(join(dst, "dist"), { recursive: true });
 cpSync(srcBundle, join(dst, "dist", "bundle"), { recursive: true });
 
-// bundle 的唯一硬外部依赖：@earendil-works/chord（telemetry context，静态 import）。
-// 拷进 vendor/pi/node_modules/ 让 chunk 的向上解析正好命中（2026-10-26 冒烟实锤
-// 缺它就崩：Cannot find package '@earendil-works/chord'）。其余 require
-// （supports-color/bufferutil/utf-8-validate 等）都是 try/catch 懒加载可选依赖，不拷。
-// pi 发新版若新增硬依赖，冒烟（loadVendorSmoke）会报错暴露，届时再补清单
-const chordSrc = join(pkgRoot, "node_modules", "@earendil-works", "chord");
-if (!existsSync(join(chordSrc, "package.json"))) {
-  console.error("[vendor-pi] 找不到 bundle 硬依赖 @earendil-works/chord: " + chordSrc);
-  process.exit(1);
+// bundle 的硬外部依赖（2026-10-26 实锤：0.85 需要 @earendil-works/chord，1.4 不再引用）
+// 随 pi 版本变，不写死清单：扫 bundle 里的 @earendil-works/* 静态引用，有引用才拷，
+// 拷不到就报错拦截。其余 require（supports-color/bufferutil 等）都是 try/catch
+// 懒加载可选依赖，不拷。冒烟（下方）是最终兑底，缺依赖 import 当场崩
+const bundleFiles = readdirSync(join(dst, "dist", "bundle"), { recursive: true });
+const externals = new Set();
+for (const f of bundleFiles) {
+  if (!f.endsWith(".js")) continue;
+  const code = readFileSync(join(dst, "dist", "bundle", String(f)), "utf8");
+  // 只认真实 import/require 语句的模块名——Symbol.for("pkg:...") 这类字符串字面量
+  // 不是依赖（首版正则误吞过，报 "找不到 @earendil-works/pi-coding-agent:theme"）
+  for (const m of code.matchAll(
+    /(?:from\s*|import\s*|require\s*\(\s*)["'](@earendil-works\/[a-z0-9-]+)["']/g
+  )) {
+    externals.add(m[1]);
+  }
 }
-cpSync(chordSrc, join(dst, "node_modules", "@earendil-works", "chord"), {
-  recursive: true,
-  filter: (src) => !/[\\/]src([\\/]|$)/.test(src), // 只拷 dist，src/ 源码不需要
-});
+for (const dep of externals) {
+  const depSrc = join(pkgRoot, "node_modules", dep);
+  const depTop = join(repoRoot, "node_modules", dep); // npm 可能提升到顶层
+  const src = existsSync(join(depSrc, "package.json"))
+    ? depSrc
+    : existsSync(join(depTop, "package.json"))
+      ? depTop
+      : null;
+  if (!src) {
+    console.error("[vendor-pi] 找不到 bundle 硬依赖 " + dep + "（两处 node_modules 都没有）");
+    process.exit(1);
+  }
+  cpSync(src, join(dst, "node_modules", dep), {
+    recursive: true,
+    filter: (s) => !/[\\/]src([\\/]|$)/.test(s), // 只拷产物，src/ 源码不需要
+  });
+  console.log("[vendor-pi] 拷入硬依赖 " + dep);
+}
 
 // package.json 只保留加载/版本所需字段（别拷整个文件：pi 包的 scripts/exports 无关且误导）
 const srcPkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
