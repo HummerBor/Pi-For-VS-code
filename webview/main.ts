@@ -518,6 +518,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
       busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
       lastElapsed = null;
+      // 新一轮开始即清上一轮的子 agent 冻结用时（2026-10-23「开始之后还带着 12m04s」）
+      if (activeTabId !== null) { delete subDoneDurByTab[String(activeTabId)]; renderSubChip(); }
     } else if (elapsedMs != null) {
       // 本轮实测耗时入记录（切走再切回来能恢复 ⏱ 现场）
       lastElapsed = elapsedMs;
@@ -1839,7 +1841,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var subRunsByTab: Record<string, Record<string, SubRunRec>> = {};
   var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
   var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
-  var subShowAllDone = false; // 完成列表封顶的展开开关（「…还有 N 条」点开）
+  var subShowAllDone = false; // 完成列表封顶的展开开关（「…展开剩余」点开）
+  // 本轮子 agent 秒表的冻结用时（按页签记，2026-10-23 两次实测纠偏）：完成只显白字「83s」，
+  // 但新轮开始即清（「开始之后还带着 12m04s」）且只认 live 转换——本视图见过该 run 的
+  // running 态才认它的收尾；恢复重放/历史 run 只带收尾快照，不许冒充本轮用时
+  // （「我都没开始就又计时了？上一轮的？」事故就是重放/残留被当成新计时）
+  var subDoneDurByTab: Record<string, string> = {};
+  var subSeenRunningByTab: Record<string, Record<string, boolean>> = {};
 
   function subRunsOf(tab: string | null): Record<string, SubRunRec> | null {
     if (tab === null) return null;
@@ -1881,6 +1889,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rec.snap = snap; rec.final = final;
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
+    // 冻结用时只认 live 转换（见 subDoneDurByTab 注释）：running 态→收尾才记，
+    // 直出收尾的重放帧/补帧一概不认
+    var live = false;
+    for (var si = 0; si < snap.tasks.length; si++) if (snap.tasks[si].status === 'running') { live = true; break; }
+    if (live) {
+      (subSeenRunningByTab[tab] || (subSeenRunningByTab[tab] = {}))[rid] = true;
+    } else if ((subSeenRunningByTab[tab] || {})[rid] && rec.endAt && rec.startAt) {
+      subDoneDurByTab[tab] = fmtElapsed(rec.endAt - rec.startAt);
+    }
   }
   function openSubDetail(runId: string, ti: number) {
     subDetailView = runId + ':' + ti;
@@ -1955,21 +1972,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     chip.style.display = 'inline-flex';
     // 条数全链路去掉（2026-10-23 用户拍板「去掉条数交互就正确了」）：「完成 · 83」的计数
     // 被反复误读成耗时（用户原话「83 条？？？」）——chip 只留秒表语义：谁在跑 + 用时 / 跑完用时
+    var doneDur = activeTabId !== null ? subDoneDurByTab[String(activeTabId)] : '';
+    if (!runN && !doneDur) { chip.style.display = 'none'; return; } // 没本轮任何秒表就整条不挂（防「这是啥」）
     if (runN) {
       chip.className = '';
       chip.textContent = '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '');
     } else {
-      // 完成态只留白字用时（2026-10-23 用户拍板「完成的话就显示 83s 白色字体就行」）：
-      // 取最近收尾 run 的 endAt-startAt 冻结秒表（与运行中秒表同一口径）；时间数据缺失
-      // （旧载荷/无 startAt）回退状态文字，不空窗
-      var lastRec: SubRunRec | null = null;
-      for (var k2 in runs) {
-        var r2 = runs[k2];
-        if (r2.endAt && r2.startAt && (!lastRec || r2.endAt > (lastRec.endAt || 0))) lastRec = r2;
-      }
-      var dur = lastRec && lastRec.endAt && lastRec.startAt ? fmtElapsed(lastRec.endAt - lastRec.startAt) : '';
-      chip.className = dur ? 'done' : '';
-      chip.textContent = dur || ('⚙ ' + L.smDoneGroup);
+      // 完成态只留白字用时（2026-10-23 用户拍板「完成的话就显示 83s 白色字体就行」）；
+      // 只认本轮 live 收尾（subDoneDurByTab 注释）——旧轮/重放残留就是「上一轮的？」事故
+      chip.className = 'done';
+      chip.textContent = doneDur;
     }
     chip.title = L.smTitle;
   }
