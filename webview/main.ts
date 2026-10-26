@@ -1939,7 +1939,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!chip) return;
     var runs = subRunsOf(activeTabId);
     if (!runs || !Object.keys(runs).length) { chip.style.display = 'none'; return; }
-    var runN = 0, doneN = 0, topName = '', topElapsed = '';
+    var runN = 0, topName = '', topElapsed = '';
     for (var k in runs) {
       var ts = runs[k].snap.tasks;
       for (var j = 0; j < ts.length; j++) {
@@ -1949,17 +1949,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
             topName = ts[j].agent;
             topElapsed = runs[k].startAt ? fmtElapsed(Date.now() - runs[k].startAt) : '';
           }
-        } else doneN++;
+        }
       }
     }
     chip.style.display = 'inline-flex';
+    // 条数全链路去掉（2026-10-23 用户拍板「去掉条数交互就正确了」）：「完成 · 83」的计数
+    // 被反复误读成耗时（用户原话「83 条？？？」）——chip 只留秒表语义：谁在跑 + 用时 / 跑完用时
     if (runN) {
       chip.className = '';
-      chip.textContent = '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '') + ' · ' + runN + ' ' + L.smRunningGroup;
+      chip.textContent = '⚙ ' + topName + (topElapsed ? ' ' + topElapsed : '');
     } else {
       // 完成态只留白字用时（2026-10-23 用户拍板「完成的话就显示 83s 白色字体就行」）：
       // 取最近收尾 run 的 endAt-startAt 冻结秒表（与运行中秒表同一口径）；时间数据缺失
-      // （旧载荷/无 startAt）回退旧计数显示，不空窗
+      // （旧载荷/无 startAt）回退状态文字，不空窗
       var lastRec: SubRunRec | null = null;
       for (var k2 in runs) {
         var r2 = runs[k2];
@@ -1967,9 +1969,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       }
       var dur = lastRec && lastRec.endAt && lastRec.startAt ? fmtElapsed(lastRec.endAt - lastRec.startAt) : '';
       chip.className = dur ? 'done' : '';
-      chip.textContent = dur || ('⚙ ' + L.smDoneGroup + ' · ' + doneN);
+      chip.textContent = dur || ('⚙ ' + L.smDoneGroup);
     }
-    chip.title = L.smTitle + '：' + L.smRunningGroup + ' ' + runN + ' · ' + L.smDoneGroup + ' ' + doneN;
+    chip.title = L.smTitle;
   }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
     // 展平：每任务一行（parallel 拆多行，Codex 同款）；运行中在上、收尾在下
@@ -2000,7 +2002,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       doneRows = doneRows.slice(0, 8);
     }
     var groups = [runningRows, doneRows];
-    var titles = [L.smRunningGroup + ' · ' + runningRows.length, L.smDoneGroup + ' · ' + (doneRows.length + hiddenN)];
+    // 分组标题不带条数（同上「去掉条数」拍板：计数只会被误读，全量看「展开剩余」）
+    var titles = [L.smRunningGroup, L.smDoneGroup];
     for (var g = 0; g < 2; g++) {
       if (!groups[g].length) continue;
       body.appendChild(el('div', 'sm-group-title', titles[g]));
@@ -2009,7 +2012,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         body.appendChild(renderSubRow(r));
       }
       if (g === 1 && hiddenN > 0) {
-        var more = el('div', 'sm-more-row', L.smMore.replace('{n}', String(hiddenN)));
+        var more = el('div', 'sm-more-row', L.smExpand);
         more.addEventListener('click', function () { subShowAllDone = true; renderSubDock(); });
         body.appendChild(more);
       }

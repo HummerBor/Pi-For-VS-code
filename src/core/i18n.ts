@@ -421,6 +421,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     smDayAgo: "{n} 天前",
     smCollapse: "收起",
     smMore: "…还有 {n} 条",
+    smExpand: "…展开剩余",
     smReopen: "打开子代理监控",
     retryEdit: "↺ 修改后重试",
     // 余额/配额/鉴权类错误替换重试入口（errorClass.ts 判定，2026-10-23：402 重试只是白撞请求）
@@ -831,6 +832,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     smDayAgo: "{n}d ago",
     smCollapse: "Collapse",
     smMore: "…{n} more",
+    smExpand: "…Show remaining",
     smReopen: "Open subagent monitor",
     retryEdit: "↺ Edit and retry",
     errNoRetryHint: "Balance/quota/auth error — resending won't help; top up or switch API key/model first, then just say \"continue\"",
