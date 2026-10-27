@@ -9,7 +9,17 @@
  * 由 npm run compile 调用（2026-10-26 拍板：pi 内置随插件分发，「零运行时依赖」废止），
  * 保证 vsix 里的 pi 版本 = 构建时 node_modules 里的版本，发新版 pi 时重新 compile 即跟上。
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -63,6 +73,13 @@ for (const f of bundleFiles) {
   for (const dep of dynamicExternals) {
     if (code.includes(dep)) dynamicFound.add(dep);
   }
+  // jiti（2026-10-27 事故：内置 pi 后 ~/.pi/agent/extensions 下所有扩展全灭）：
+  // bundled-node 构建走 jiti-static-loader chunk，里面是 `requireN("jiti").createJiti`
+  // 硬依赖（无 try/catch），上面的正则只认 @earendil-works/* 扫不到它。缺了 jiti
+  // = pi 加载不了任何用户 TS 扩展（subagent/modes/rewrite-guard 全灭），不崩不报错，
+  // 工具静默消失（「Tool subagent not found」）。非 bundled 构建 jiti 内联在
+  // jiti-loader chunk 里、不需要外部包——扫到 require("jiti") 才拷，保持版本自适应
+  if (/require\d*\(\s*["']jiti["']\s*\)/.test(code)) externals.add("jiti");
 }
 for (const dep of dynamicFound) externals.add(dep);
 for (const dep of externals) {
@@ -115,6 +132,34 @@ try {
     process.exit(1);
   }
   console.log("[vendor-pi] 冒烟通过：SDK 入口齐全");
+  // 扩展加载链路校验（2026-10-27 事故教训：jiti 缺失时 SDK 冒烟照绿、装上才瞎）：
+  // 用 vendor 自己的 jiti-static-loader + VIRTUAL_MODULES 真实编译并 import 一个
+  // 最小 TS 扩展工厂——等价 pi 加载 ~/.pi/agent/extensions 的路径，缺 jiti 当场爆
+  const chunkNames = readdirSync(join(dst, "dist", "bundle", "chunks")).map(String);
+  const jitiStatic = chunkNames.find((f) => /^jiti-static-loader-.*\.js$/.test(f));
+  const virtualModulesChunk = chunkNames.find((f) => /^virtual-modules-.*\.js$/.test(f));
+  if (jitiStatic && virtualModulesChunk) {
+    try {
+      const chunksUrl = pathToFileURL(join(dst, "dist", "bundle", "chunks")).href + "/";
+      const jitiMod = await smoke(chunksUrl + jitiStatic);
+      const vmMod = await smoke(chunksUrl + virtualModulesChunk);
+      const tmp = mkdtempSync(join(tmpdir(), "vendor-pi-ext-smoke-"));
+      const probe = join(tmp, "probe.ts");
+      writeFileSync(probe, "export default function (pi: any) { pi; }\n");
+      const jiti = jitiMod.createJiti(chunksUrl + jitiStatic, {
+        moduleCache: false,
+        virtualModules: vmMod.VIRTUAL_MODULES,
+        tryNative: false,
+      });
+      const factory = await jiti.import(pathToFileURL(probe).href, { default: true });
+      rmSync(tmp, { recursive: true, force: true });
+      if (typeof factory !== "function") throw new Error("探针扩展未导出工厂函数");
+      console.log("[vendor-pi] 冒烟通过：用户扩展加载链路（jiti + virtualModules）可用");
+    } catch (err) {
+      console.error("[vendor-pi] 冒烟失败（扩展加载链路）：" + String(err?.message ?? err));
+      process.exit(1);
+    }
+  }
   // photon 单独校验：bundle 的 SDK 入口不触发它（loadPhoton 懒加载），
   // 但 import 时会同步编译 wasm——photon_rs_bg.wasm 没拷到/坏掉在这里当场爆
   if (dynamicFound.has("@silvia-odwyer/photon-node")) {
