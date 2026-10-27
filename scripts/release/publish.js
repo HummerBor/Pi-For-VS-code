@@ -122,16 +122,41 @@ function gitCommit() {
   console.log("[32m[ship] ✓ 已提交[0m");
 }
 
-// ── 2. 推送 + 发布（原逻辑） ───────────────────────────────────
+// ── 2. 推送 + 发布（网络重试版） ──────────────────────────────
+// 2026-10-27 弱网事故：push/publish 裸调一次失败即整条发版流程夭折——publish
+// 连挂 4 次 ECONNRESET，第 5 次才成，全靠手动补跑救回；补跑时还踩了
+// `vsce publish <vsix文件>` 的坑：位置参数是版本号不是文件，报 "Invalid version"
+// 空耗 5 轮。故：两步各带 5 次重试（10s 间隔）；失败输出命中「版本已存在」
+// 按成功收口（服务器可能已收下、响应在弱网里丢了，重发只会 409，不是真失败）。
+function sleepSync(ms) {
+  // 同步阻塞即可：脚本顺序执行，不依赖事件循环（禁止改异步——会打乱步骤顺序）
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 function run(step, cmd, args) {
-  console.log("\x1b[36m[ship] " + step + ": " + cmd + " " + args.join(" ") + "\x1b[0m");
-  var r = spawnSync(cmd, args, { stdio: "inherit", shell: true });
-  if (r.status !== 0) {
-    console.error("\x1b[1;31m[ship] ✗ " + step + " 失败（退出码 " + r.status + "）——后续步骤已跳过！\x1b[0m");
-    console.error("\x1b[1;31m[ship]   提交仍保留在本地；修复后手动补跑: git push && npx @vscode/vsce publish\x1b[0m");
-    process.exit(r.status || 1);
+  var attempts = 5;
+  for (var i = 1; i <= attempts; i++) {
+    console.log("\x1b[36m[ship] " + step + "（第 " + i + "/" + attempts + " 次）: " + cmd + " " + args.join(" ") + "\x1b[0m");
+    // 不用 stdio:inherit：要拿到输出才能识别「版本已存在」这类幂等成功
+    var r = spawnSync(cmd, args, { cwd: cwd, shell: true, encoding: "utf-8" });
+    var out = (r.stdout || "") + (r.stderr || "");
+    if (r.stdout) process.stdout.write(r.stdout);
+    if (r.stderr) process.stderr.write(r.stderr);
+    if (r.status === 0) {
+      console.log("\x1b[32m[ship] ✓ " + step + " 完成" + (i > 1 ? "（第 " + i + " 次成功）" : "") + "\x1b[0m");
+      return;
+    }
+    if (/already been published|already exists|conflict|\b409\b/i.test(out)) {
+      console.log("\x1b[33m[ship] ⚠ " + step + " 返回「版本已存在」——视为成功（幂等收口）\x1b[0m");
+      return;
+    }
+    if (i < attempts) {
+      console.log("\x1b[33m[ship] " + step + " 失败（退出码 " + r.status + "），10 秒后重试…\x1b[0m");
+      sleepSync(10000);
+    }
   }
-  console.log("\x1b[32m[ship] ✓ " + step + " 完成\x1b[0m");
+  console.error("\x1b[1;31m[ship] ✗ " + step + " 重试 " + attempts + " 次仍失败——后续步骤已跳过！\x1b[0m");
+  console.error("\x1b[1;31m[ship]   提交仍保留在本地；修复后手动补跑: git push && npx @vscode/vsce publish --packagePath <name>-<version>.vsix\x1b[0m");
+  process.exit(1);
 }
 
 // 流程编排
@@ -139,7 +164,20 @@ try {
   runShip();
   gitCommit();
   run("推送到远程", "git", ["push"]);
-  run("发布到市场", "npx", ["@vscode/vsce", "publish"]);
+  // 发布 release 步刚打的现成 vsix——「验证过的包」和「发出去的包」必须是同一个物，
+  // 也让发布不再依赖二次打包。注意 vsce publish 的位置参数是版本号，现成包必须走
+  // --packagePath；文件名传相对路径（shell:true 下绝对路径含空格「pi test」会被拆碎）。
+  // 文件缺失（手动单跑本脚本）时回退 vsce 整包发布会重新打包。
+  var pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
+  var vsixName = pkg.name + "-" + pkg.version + ".vsix";
+  var publishArgs = ["@vscode/vsce", "publish"];
+  if (fs.existsSync(path.join(cwd, vsixName))) {
+    publishArgs.push("--packagePath", vsixName);
+    console.log("\x1b[36m[ship] 发布现成 vsix: " + vsixName + "\x1b[0m");
+  } else {
+    console.log("\x1b[33m[ship] ⚠ 未找到 " + vsixName + "，回退 vsce 整包发布（会重新打包）\x1b[0m");
+  }
+  run("发布到市场", "npx", publishArgs);
   console.log("\x1b[1;32m[ship] 发版完成：远程已更新 + 市场已发布\x1b[0m");
 } catch (e) {
   console.error("\x1b[1;31m[ship] 发版异常：" + e.message + "\x1b[0m");
