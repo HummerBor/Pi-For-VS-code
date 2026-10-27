@@ -1,8 +1,9 @@
 /**
  * 把 pi 的运行时 bundle 拷进 vendor/pi/（随 vsix 分发，用户免装 pi/node）。
  *
- * 拷贝内容只有 dist/bundle/（单文件 bundle，自包含，仅依赖 node 内置模块）+ package.json
- * （提供 "type":"module" 和版本号，piSdk 加载/报错要用）。不拷 dist 库入口（884 文件
+ * 拷贝内容：dist/bundle/（单文件 bundle，仅依赖 node 内置模块 + 下方扫出的硬依赖）
+ * + 硬依赖（含动态 import 的隐性硬依赖，见扫描处注释）+ package.json（提供
+ * "type":"module" 和版本号，piSdk 加载/报错要用）。不拷 dist 库入口（884 文件
  * 模块图）——piSdk 加载顺序里 bundle 优先，旧版包回退才用库入口，内置包永远有 bundle。
  *
  * 由 npm run compile 调用（2026-10-26 拍板：pi 内置随插件分发，「零运行时依赖」废止），
@@ -38,8 +39,17 @@ cpSync(srcBundle, join(dst, "dist", "bundle"), { recursive: true });
 // 随 pi 版本变，不写死清单：扫 bundle 里的 @earendil-works/* 静态引用，有引用才拷，
 // 拷不到就报错拦截。其余 require（supports-color/bufferutil 等）都是 try/catch
 // 懒加载可选依赖，不拷。冒烟（下方）是最终兑底，缺依赖 import 当场崩
+// 动态 import 的隐性硬依赖（2026-10-27 事故，市场 0.1.51 全量读图挂）：
+// @silvia-odwyer/photon-node 是 pi 1.4 图片 resize/转 PNG 的 Photon WASM 引擎，
+// bundle 里是 `await import("pkg")` 包在 try/catch 里——下面的静态正则扫不到它，
+// 缺了不崩不报错，loadPhoton() 返回 null，所有贴图静默变成
+// "[Image omitted: could not be resized below the inline image size limit.]"。
+// 仅在 bundle 真引用时拷（pi 换掉图片引擎后自动不拷，保持版本自适应）
+const dynamicExternals = ["@silvia-odwyer/photon-node"];
+
 const bundleFiles = readdirSync(join(dst, "dist", "bundle"), { recursive: true });
 const externals = new Set();
+const dynamicFound = new Set();
 for (const f of bundleFiles) {
   if (!f.endsWith(".js")) continue;
   const code = readFileSync(join(dst, "dist", "bundle", String(f)), "utf8");
@@ -50,7 +60,11 @@ for (const f of bundleFiles) {
   )) {
     externals.add(m[1]);
   }
+  for (const dep of dynamicExternals) {
+    if (code.includes(dep)) dynamicFound.add(dep);
+  }
 }
+for (const dep of dynamicFound) externals.add(dep);
 for (const dep of externals) {
   const depSrc = join(pkgRoot, "node_modules", dep);
   const depTop = join(repoRoot, "node_modules", dep); // npm 可能提升到顶层
@@ -101,6 +115,20 @@ try {
     process.exit(1);
   }
   console.log("[vendor-pi] 冒烟通过：SDK 入口齐全");
+  // photon 单独校验：bundle 的 SDK 入口不触发它（loadPhoton 懒加载），
+  // 但 import 时会同步编译 wasm——photon_rs_bg.wasm 没拷到/坏掉在这里当场爆
+  if (dynamicFound.has("@silvia-odwyer/photon-node")) {
+    try {
+      const photon = await smoke(
+        pathToFileURL(join(dst, "node_modules", "@silvia-odwyer", "photon-node", "photon_rs.js")).href
+      );
+      if (photon.PhotonImage === undefined) throw new Error("photon 包缺 PhotonImage 导出");
+      console.log("[vendor-pi] 冒烟通过：photon WASM 可编译");
+    } catch (err) {
+      console.error("[vendor-pi] 冒烟失败（photon）：" + String(err?.message ?? err));
+      process.exit(1);
+    }
+  }
 } catch (err) {
   console.error("[vendor-pi] 冒烟失败：" + String(err?.message ?? err));
   process.exit(1);
