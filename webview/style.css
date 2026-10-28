@@ -925,6 +925,28 @@ details.think.compaction-flash>summary {
   color: var(--vscode-errorForeground, #f66);
 }
 
+/* 失联降级（2026-10-27 幽灵条目）：running 超 30 分钟无新帧——黄标警示 + 行内 ✕ 可清 */
+.sm-st.stale {
+  color: var(--vscode-editorWarning-foreground, #cc0);
+}
+
+.sm-del {
+  flex: none;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 4px;
+  color: var(--vscode-charts-blue, #4a9eff);
+}
+
+.sm-row:hover .sm-del {
+  opacity: .8;
+}
+
+.sm-del:hover {
+  color: var(--vscode-errorForeground, #f66);
+}
+
 /* 状态行子 agent 摘要 chip：常驻可点，点击开合浮窗 */
 #subchip {
   cursor: pointer;

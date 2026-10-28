@@ -182,13 +182,28 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var sentRect = sent.getBoundingClientRect();
     if (sentRect.top >= rootRect.top) return false; // sentinel 仍在视口内 → 不钉
     var flowTop = sentRect.top - rootRect.top + root.scrollTop; // sentinel 在滚动内容坐标系里的偏移
-    var below = root.scrollHeight - (flowTop + (b._fullH || b.offsetHeight || 0));
+    // 量当前实际流内高，不用 _fullH（2026-10-27 追加四同批修正）：钉住折叠后 scrollHeight 里
+    // 只剩折后 3 行高，若再拿全高 _fullH 去减会把 below 少算 (_fullH-折后高) 一大截，判据失准。
+    // offsetHeight 在原位态=全高、钉住态=折后高，两种状态都对；_fullH 只留给 chip 的超行阈值
+    var below = root.scrollHeight - (flowTop + b.offsetHeight);
     return below >= root.clientHeight; // 折叠后 sentinel 仍在视口上方（见追加三注释）
   }
   // 钉住 = sticky-q（position:sticky）+ pinned（line-clamp + chip）同进同退，避免出现
   // 「钉住但不折」把大气泡糊在视口顶的状态；短内容直接不钉，保持正常滚动
   function applySticky(b: any) {
     var want = stickyWants(b, b._sent);
+    // 追加四（闪烁修正二，用户实测 2026-10-27：单条超长消息占满视口，气泡高频「折叠↔展开」
+    // 整体闪）：钉住态的第二条自激回路——钉住折叠后**下方内容收缩**（工具完成即收盒 ~320px、
+    // prow 占位清理、同名成组隐藏），scrollHeight 被压到 scrollTop+clientHeight 以下，浏览器
+    // 把 scrollTop 向上一钳 → sentinel 被动「越界回顶」→ IO 判越界 → 摘钉展开（全高回涨）→
+    // scroll() 拉底 → below 过阈再钉 → 折叠……工具每完成一个循环一轮 = 气泡不停缩放闪烁。
+    // 追加三的 below≥视口判据只护住「钉住瞬间折叠」方向，管不着这条「钉后下方收缩」方向。
+    // 修法：钉住态 sentinel 越界若发生在贴底位置，判为钳位假事件忽略——真正的用户回翻必然
+    // 把 scrollTop 拖离底部（atBottom 不成立），照常摘钉回原位看全文（原 UX 不变）。
+    // 容差 48 与 scroll 判跟同口径
+    if (!want && b.classList.contains('pinned')) {
+      if (root.scrollHeight - root.scrollTop - root.clientHeight <= 48) return;
+    }
     b.classList.toggle('sticky-q', want);
     b.classList.toggle('pinned', want);
     updateStickyChip(b);
@@ -478,7 +493,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // = 主会话还在干活，同一只表从 busyStart 起继续累；全收尾才落白字总用时。
     // 事故教训：原先 settled 就换 ⏱、chip 再走自己一只表——「⏱ 8s ⚙ builder 7m30s」两只钟
     // 数值打架，用户三连问「这是啥/上一轮的？/你看了会不会懵逼」
-    var subLiveNow = function () { var r = subRunsOf(id); return !!r && anySubRunning(r); };
+    var subLiveNow = function () { var r = subRunsOf(id); return !!r && anySubLive(r); };
     if (streaming || subLiveNow()) {
       if (!busyStart) busyStart = Date.now(); // 重放/恢复的孤儿子 agent：从发现起算，不报 1970
       roundFrozen = ''; // 本轮进行中，冻结值作废
@@ -1858,7 +1873,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return d;
   }
   /** ── 概览 + 下钻渲染（工单 A，Codex 同款交互）──────────────────── */
-  interface SubRunRec { snap: SubagentSnapshot; final: boolean; startAt?: number; endAt?: number }
+  interface SubRunRec { snap: SubagentSnapshot; final: boolean; startAt?: number; endAt?: number; lastFrameAt?: number }
   var subRunsByTab: Record<string, Record<string, SubRunRec>> = {};
   var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
   var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
@@ -1872,6 +1887,28 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function anySubRunning(runs: Record<string, SubRunRec>): boolean {
     for (var k in runs) {
+      var tasks = runs[k].snap.tasks;
+      for (var i = 0; i < tasks.length; i++) if (tasks[i].status === 'running') return true;
+    }
+    return false;
+  }
+  /** 失联降级（2026-10-27 幽灵条目修复，用户实测截图：底层进程零残留，面板「已开启」
+   *  条目 13h20m 仍「处理中」跳字，底部 Working 被连坐钉死，重启 VS Code 才清）：
+   *  「处理中」= 最后一帧快照的 status，终态帧只要没送达 webview（扩展 appendEntry 是
+   *  静默 catch / 宿主重启 / 事件链断环）记录就永驻已开启组。running 行超过 30 分钟
+   *  没有任何新帧 → 判「疑似失联」：停表、不转图标、不再算「还在跑」。阈值依据：扩展
+   *  每回合结束必推一帧（message_end → emitAsyncProgress），长工具调用可能静默更久，
+   *  误报无害——只降级显示不删数据，下一帧到达即自愈回「处理中」 */
+  var SUB_STALE_MS = 30 * 60 * 1000;
+  function runStale(rec: SubRunRec): boolean {
+    var last = rec.lastFrameAt || rec.startAt || 0;
+    return !!last && Date.now() - last > SUB_STALE_MS;
+  }
+  /** 「真在跑」口径（Working 计时/头部 spinner/chip 走这只）：幽灵不算活。
+   *  概览秒表重绘循环仍走 anySubRunning（raw），保证 running→stale 翻转帧被画出来 */
+  function anySubLive(runs: Record<string, SubRunRec>): boolean {
+    for (var k in runs) {
+      if (runStale(runs[k])) continue;
       var tasks = runs[k].snap.tasks;
       for (var i = 0; i < tasks.length; i++) if (tasks[i].status === 'running') return true;
     }
@@ -1904,6 +1941,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var runs = subRunsByTab[tab] || (subRunsByTab[tab] = {});
     var rec = runs[rid] || (runs[rid] = { snap: snap, final: final });
     rec.snap = snap; rec.final = final;
+    rec.lastFrameAt = Date.now(); // 每帧刷新「最后活动」——失联判定基准（幽灵条目修复，2026-10-27）
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
   }
@@ -1927,7 +1965,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
     if (subCollapsed) d.classList.add('hidden');
     else requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 触发从图标处缩放切出
-    subRunning = anySubRunning(runs);
+    subRunning = anySubLive(runs);
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
     head.innerHTML = '';
@@ -1966,6 +2004,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!runs || !Object.keys(runs).length) { chip.style.display = 'none'; return; }
     var runN = 0, topName = '';
     for (var k in runs) {
+      if (runStale(runs[k])) continue; // 失联幽灵不占 chip：不显示名字、不钉 Working
       var ts = runs[k].snap.tasks;
       for (var j = 0; j < ts.length; j++) {
         if (ts[j].status === 'running') {
@@ -2030,17 +2069,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   function renderSubRow(row: any): HTMLElement {
     var t = row.t;
-    var rowEl = el('div', 'sm-row ' + t.status);
-    rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    // 失联降级展示（2026-10-27）：running 但 30 分钟无新帧 → 徽标翻「疑似失联」、
+    // 停表（不再 now-startAt 无休止跳字，改收尾行同款相对时间）、图标停转、悬停出 ✕ 可清
+    var stale = t.status === 'running' && runStale(row.rec);
+    var rowEl = el('div', 'sm-row ' + t.status + (stale ? ' stale' : ''));
+    rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' && !stale ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     var main = el('div', 'sm-row-main');
     // 第一行：agent 名 + 状态徽标（2026-10-23 列表重设计：状态从第二行提进名字行成徽标，
     // 第二行整行留给任务摘要——原来「完成 · 【派单令：…】」挤一行、换行乱、还漏 prompt 原文）
-    var stTxt = t.status === 'running' ? L.smProcessing : t.status === 'failed' ? L.smFailedSt : L.smDoneGroup;
+    var stTxt = t.status === 'running' ? (stale ? L.smStale : L.smProcessing) : t.status === 'failed' ? L.smFailedSt : L.smDoneGroup;
     // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
     // ✓/✗ 图标只作辅助——状态不许靠猜
     var line1 = el('div', 'sm-name');
     line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
-    line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? 'run' : t.status === 'failed' ? 'fail' : 'done'), stTxt));
+    line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? (stale ? 'stale' : 'run') : t.status === 'failed' ? 'fail' : 'done'), stTxt));
     // 进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
     // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
     if (t.status === 'running' && t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
@@ -2064,9 +2106,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
     // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
     var time = t.status === 'running'
-      ? (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : '')
+      ? (stale
+        ? ((row.rec.lastFrameAt || row.rec.startAt) ? fmtRel(row.rec.lastFrameAt || row.rec.startAt) : '') // 失联停表：最后活动相对时间
+        : (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : ''))
       : ((row.rec.endAt || row.rec.startAt) ? fmtRel(row.rec.endAt || row.rec.startAt) : '');
     if (time) rowEl.appendChild(el('span', 'sm-time', time));
+    // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
+    // stopPropagation：别点穿成下钻
+    if (stale) {
+      var delBtn = el('span', 'sm-del', '✕'); delBtn.title = L.smRemove;
+      delBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var runs = subRunsOf(activeTabId);
+        if (runs) delete runs[row.runId];
+        if (subDetailView && subDetailView.split(':')[0] === row.runId) subDetailView = null;
+        renderSubDock();
+        if (activeTabId !== null) viewFor(activeTabId).refreshBusy(); // 删除可能翻转「还在跑」→ 状态行重算
+      });
+      rowEl.appendChild(delBtn);
+    }
     rowEl.addEventListener('click', function () { openSubDetail(row.runId, row.ti); });
     return rowEl;
   }
@@ -2081,10 +2139,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     var t = full.tasks[ti];
     if (!t) { body.appendChild(el('div', 'sm-empty', L.smNoRuns)); return; }
+    // 失联降级同概览口径（看概览 rec 的 lastFrameAt，Full 快照本身无时间戳）
+    var orecs = subRunsOf(activeTabId);
+    var dstale = t.status === 'running' && !!(orecs && orecs[runId] && runStale(orecs[runId]));
     var hd = el('div', 'sm-task ' + t.status);
     var line1 = el('div', 'sm-line');
-    line1.appendChild(elIco('sm-ico' + (t.status === 'running' ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    line1.appendChild(elIco('sm-ico' + (t.status === 'running' && !dstale ? ' spin' : ''), SM_ICONS[t.status] || '·'));
     line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
+    if (dstale) line1.appendChild(el('span', 'sm-st stale', L.smStale));
     if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
     hd.appendChild(line1);
     if (t.task) { var tk = el('div', 'sm-task-desc', t.task); tk.title = t.task; hd.appendChild(tk); }
