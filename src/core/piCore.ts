@@ -1083,6 +1083,19 @@ export class PiCore {
       this.post({ type: "notice", text: this.L.extSendBlocked });
       return;
     }
+    // 工单32接管对齐（lazy 交棒的另一半，2026-10-29 卡死修复）：外部增量进过内存后
+    // leaf 已过期——发送前必须重载对齐，否则从过期 leaf append = 会话树分叉。原急重载
+    // 方案废除（大会话 force reload 数秒、每静默窗一轮 → 宿主钉死），改为接管时一次付费
+    if (client.followDeltaLength() > 0) {
+      const st0 = await client.getState();
+      if (st0?.sessionFile) {
+        this.post({ type: "status", text: this.L.extTakingOver });
+        await client.switchSession(st0.sessionFile, true); // force 绕过短路，startFollow 清 delta
+        const d0 = await client.getMessages();
+        this.post({ type: "render", messages: d0?.messages ?? [] });
+        await this.applyModelMemory();
+      }
+    }
     const images = opts?.images;
     const codeInfo = opts?.codeInfo;
     // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
@@ -1384,31 +1397,17 @@ export class PiCore {
     this.post({ type: "externalState", locked: false });
   }
 
-  /** 工单32：交棒——外部静默后重载对齐（同文件重进，磁盘真相入内存、delta 清零），
-   *  随后补模型记忆 + 全量重绘 + 解锁。每 tick 幂等重发，这里加锁防重入 */
-  private async onExternalRelease(): Promise<void> {
+  /** 工单32交棒（2026-10-29 卡死修复改 lazy）：外部静默 → 只解锁，delta 继续叠加显示；
+   *  重载对齐推迟到用户真发消息（sendPromptCore 接管对齐）。原急重载在大会话上 = 每
+   *  静默窗一次全量重解析（数秒）→ 宿主钉死（用户实测整窗未响应）。extReleasing 语义
+   *  = 本轮交棒已解锁的闩（onExternalState 变化时复位） */
+  private onExternalRelease(): void {
     if (this.extReleasing) return;
     const client = this.client;
     if (!client || client.followDeltaLength() === 0) return;
     this.extReleasing = true;
-    try {
-      const st = await client.getState();
-      if (!st?.sessionFile) { this.extReleasing = false; return; }
-      await client.switchSession(st.sessionFile, true); // force 绕过短路，startFollow 清 delta
-      const d = await client.getMessages();
-      this.post({ type: "render", messages: d?.messages ?? [] });
-      await this.applyModelMemory(); // 此刻外部已静默，写安全（仍新鲜则自行缓写）
-      await this.refreshState();
-      // 返修P2-1：不无条件解锁——交棒 await 期间外部可能已恢复写入（上锁），发真相而非假解锁
-      this.post({ type: "externalState", locked: client.isFollowActive() });
-      this.extReleasing = false;
-      this.dbg("external release: reloaded " + st.sessionFile);
-    } catch (err) {
-      // 失败：保持锁定（内存 leaf 过期，解锁会让消息分叉）；extReleasing 不复位=不进
-      // 500ms 重试风暴，下次 externalState 变化复位。用户 /reload 可自救（新 client 接线复位）
-      this.dbg("external release FAIL: " + String(err));
-      this.post({ type: "notice", text: this.L.extReleaseFail });
-    }
+    this.post({ type: "externalState", locked: false });
+    this.dbg("external release: lazy unlock (delta=" + client.followDeltaLength() + ", 对齐推迟到接管时)");
   }
   /** 记忆键的工作区维度（与 getSessionForWs 同口径：去尾反斜杠 + 小写）。事故教训（2026-09-22
    *  用户实测）：旧键 piChat.lastModel.<tabKey> 只按页签维度存，而 globalState 机器级共享、

@@ -1456,6 +1456,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 工单32：最近一次 renderAll 的消息列表——外部增量在它上面 concat 后再重绘
    *  （renderAll 是唯一权威渲染器，不抽单消息渲染器——工具配对/成组逻辑重写风险大于收益） */
   var renderedList: SessionMessage[] | null = null;
+  /** 外部增量合批节流（2026-10-29 卡死修复）：每 500ms 一批就整页 renderAll 在大会话上
+   *  = DOM 重建 2 次/秒钉死 webview（用户实测整窗未响应）——改 ≥2s 一拍，且只在活动
+   *  页签 + 贴底跟随时重建；后台页签/上翻阅读中只记账（dirty），show(ON)/滚回底部时补 */
+  var extAppendTimer: number | null = null;
+  var extDirty = false;
+  function scheduleExtRender() {
+    if (extAppendTimer) return;
+    extAppendTimer = setTimeout(function () { extAppendTimer = null; flushExtRender(); }, 2000);
+  }
+  function flushExtRender() {
+    extDirty = false;
+    if (!renderedList) return;
+    if (id !== activeTabId || !followingEnd) { extDirty = true; return; } // 后台/上翻：记账不重建
+    renderAll(renderedList);
+  }
   /** 工单32：外部活跃锁真相（宿主 externalState 驱动；webview 重建后由 postUiState 重发恢复） */
   var extLocked = false;
   function setExtLock(on: boolean) {
@@ -1571,12 +1586,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
-    else if (m.type === 'externalAppend') { // 工单32：外部增量上屏——复用 renderAll，滚动位置保住（上翻不打断）
+    else if (m.type === 'externalAppend') { // 合批上屏（2026-10-29 卡死修复，节流见 scheduleExtRender）
       if (!renderedList) return; // 未建树：等 uiState 快照（其 messages 已含 delta 叠加）
-      var extWasFol = followingEnd; var extKeepTop = root.scrollTop;
       renderedList = renderedList.concat(m.messages || []);
-      renderAll(renderedList);
-      if (!extWasFol) { suppressScroll = true; root.scrollTop = extKeepTop; followingEnd = false; } // 防中间态滚动事件把跟随标志翻真
+      extDirty = true;
+      if (id === activeTabId && followingEnd) scheduleExtRender(); // 否则由 show/滚回底部补
     }
     else if (m.type === 'externalState') setExtLock(!!m.locked); // 工单32：锁真相（徽标+输入禁发）
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
@@ -1640,12 +1654,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     root.addEventListener('scroll', function () {
       if (suppressScroll) { suppressScroll = false; return; }
       followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
+      if (followingEnd && extDirty) flushExtRender(); // 上翻回底部 → 补建挂起的外部增量
     }, { passive: true });
     bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
       refreshBusy: renderBusyUi, // 白 Working 兑底：切回页签按本页签真相重渲状态行（激活时调）
-      show: function (on: boolean) { view.classList.toggle('offview', !on); },
+      show: function (on: boolean) { view.classList.toggle('offview', !on); if (on && extDirty) flushExtRender(); }, // 切回页签补建挂起的外部增量
       isFollowing: function () { return followingEnd; },
       forceScrollToBottom: function () { suppressScroll = true; root.scrollTop = root.scrollHeight; },
       isBuilt: function () { return built; },
@@ -1653,6 +1668,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         if (liveRTimer) { clearTimeout(liveRTimer); liveRTimer = null; }
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+        if (extAppendTimer) { clearTimeout(extAppendTimer); extAppendTimer = null; }
         if (view.parentNode) view.parentNode.removeChild(view);
       }
     };

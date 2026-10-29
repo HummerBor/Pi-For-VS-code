@@ -294,6 +294,9 @@ export class PiClient {
   private followDelta: any[] = [];
   private followTimer: ReturnType<typeof setInterval> | null = null;
   private followLastOwnWriteAt = 0;
+  /** 最近一次本地会话事件时间：工具执行间隔 isStreaming 可能为假，run 的尾部写入
+   *  （工具结果落盘等）靠这个窗口归本地，防误判外部（2026-10-29 卡死修复同批） */
+  private followLastLocalEventAt = 0;
   private followActive = false;
   static readonly FOLLOW_TICK_MS = 500;
   static readonly FOLLOW_QUIET_MS = 10_000; // mtime 静默阈值（派单 N=10s，启发式兑底）
@@ -347,7 +350,10 @@ export class PiClient {
       if (this.followDelta.length > 0) { this.events.emit("externalRelease", file); return; }
       this.followOffset = st.size;
     } else if (st.size > this.followOffset) {
-      const own = !!this.session?.isStreaming || now - this.followLastOwnWriteAt < 1500;
+      const own =
+        !!this.session?.isStreaming ||
+        now - this.followLastOwnWriteAt < 1500 ||
+        now - this.followLastLocalEventAt < 3000; // run 事件静默 3s 内的尾部写入（工具结果等）仍归本地
       if (own) {
         this.followOffset = st.size; // 本地写入（流式/prompt/记忆补回）→ 跳过
       } else {
@@ -418,6 +424,7 @@ export class PiClient {
     this.session = this.runtime.session;
     this.startFollow(this.session?.sessionFile); // 工单32：所有会话挂载点（boot/切/fork）单点启动跟随
     this.unsubscribe = this.session.subscribe((e: any) => {
+      this.followLastLocalEventAt = Date.now(); // 本地事件流在跑 = 增长大概率是自己的 run
       this.events.emit("event", e);
     });
   }
