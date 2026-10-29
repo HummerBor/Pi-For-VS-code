@@ -20,6 +20,7 @@
  * 2. **应答复用**（内存 TTL 10s）——「每次点击都重扫」的直接治理，见 listNative 头注释。
  */
 import { loadPiSdk } from "../pi/piSdk";
+import * as vscode from "vscode";
 
 export interface SessionInfo {
   file: string;
@@ -57,6 +58,14 @@ export function invalidateListMemo(): void {
   memo.clear();
 }
 
+/** 工单32 刀1：会话库目录透传——piChat.sessionDir 配了就扫该目录（pi --session-dir 同源），
+ *  空/未配回落默认库（undefined）。**memo key 必须带它**（原 key 只有 cwd，切配置后会
+ *  吃到旧库缓存）；panel 的 onDidChangeConfiguration 另有 invalidate 兑底 */
+export function configuredSessionDir(): string | undefined {
+  const d = vscode.workspace.getConfiguration("piChat").get<string>("sessionDir", "").trim();
+  return d || undefined;
+}
+
 /** pi 原生列表调用 + 在途合并 + 应答复用。scope 两级：cwd=项目内（pi list）、
  *  不传=全量（listAll）。进度回调透传 pi 的 onProgress，**第三参 partialSessions 必须
  *  接住**（2026-10-19 22s 定案）：pi 1.3.0 起 onProgress(loaded, total, partial) 在第一个
@@ -86,7 +95,8 @@ export function listNative(
   cwd?: string,
   onProgress?: NativeProgress
 ): Promise<PiSessionProjection[]> {
-  const key = cwd ? "cwd:" + cwd : "all";
+  const sessionDir = configuredSessionDir(); // 工单32：memo key 带 sessionDir，切配置不吐旧库
+  const key = (cwd ? "cwd:" + cwd : "all") + "|dir:" + (sessionDir ?? "");
   const hit = memo.get(key);
   if (hit && Date.now() - hit.at < LIST_MEMO_TTL_MS) return Promise.resolve(hit.result);
   const running = inFlight.get(key);
@@ -107,8 +117,8 @@ export function listNative(
         for (const fn of subs) fn(loaded, total, proj);
       };
       const entries = (cwd
-        ? await sdk.SessionManager.list(cwd, undefined, progress)
-        : await sdk.SessionManager.listAll(progress)) as PiSessionEntry[];
+        ? await sdk.SessionManager.list(cwd, sessionDir, progress)
+        : await sdk.SessionManager.listAll(sessionDir, progress)) as PiSessionEntry[];
       const result: PiSessionProjection[] = entries.map(project);
       memo.set(key, { at: Date.now(), result });
       return result;
@@ -156,7 +166,7 @@ export function toSessionInfos(
 
 /** 立即回上一次查询结果（不等 pi）：展示层秒出用。没有就是没有，调用方自己出占位 */
 export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null {
-  const hit = memo.get(cwd ? "cwd:" + cwd : "all");
+  const hit = memo.get((cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? ""));
   if (!hit) return null;
   return toSessionInfos(hit.result, cwd, limit);
 }

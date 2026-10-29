@@ -550,6 +550,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration("piChat.backgroundImage") || e.affectsConfiguration("piChat.backgroundOpacity")) {
         this.applyHtml();
       }
+      // 工单32 刀1：切会话库目录 → memo 失效 + 列表重扫（memo key 已带 sessionDir，
+      // 这里是兑底——TTL 窗口内的旧库应答也不许漏出去）
+      if (e.affectsConfiguration("piChat.sessionDir")) {
+        invalidateListMemo();
+        notifySessionsChanged();
+      }
     });
     view.onDidDispose(() => bgWatcher.dispose());
     // webview 若仍被销毁重建（极端情况）：从活着的 pi 进程重绘当前会话，不用重选
