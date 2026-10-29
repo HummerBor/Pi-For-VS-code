@@ -53,8 +53,10 @@ await vscode.commands.executeCommand("piChat.externalWriting", { file, name, wri
   实时渲染外部写入 + 页头「运行中」徽标 + 输入被挡（提示「该会话正由外部进程运行中」）。
 - `writing: false`：**交棒**——pi-vscode 重载对齐文件、解锁输入，用户可直接在页面
   继续对话（比如「让他改改稿子」）。
-- **信号是精确主路径**；漏发也不致命（pi-vscode 有 mtime 静默 N 秒的启发式兜底自动解锁），
-  但会慢一拍，且长思考期间可能误判——所以有管家的写者（ops-panel 就是）**必须发**。
+- **信号是精确主路径，`writing:false` 请放 `finally` 保证发出**。漏发的真实后果（工单32
+  实测定案，修正原「mtime 静默自动解锁」的笼统说法）：**已登记（发过 writing:true）的会话
+  靠 30 分钟 TTL 过期才自动解锁**——进程被 -9 杀时 finally 跑不了，就要等这个；
+  **未登记的外部写者**才走 mtime 静默 N 秒启发式。别指望兜底：TTL 要等 30 分钟。
 - **重跑 = 再来一轮 true/false**（同一会话复用也一样）。
 
 ### 2.3 调用方时序（完整一轮 llm 步）
