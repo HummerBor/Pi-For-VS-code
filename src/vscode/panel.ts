@@ -819,8 +819,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // 刀3：编辑器面板的标签题即面板标题（编辑器标签栏显示的字）——只刷自己实例的活动标签。
     // 不等 titleDirty：面板创建题与 meta 初值可能分歧（初值就是「新会话」，等变化永远等
     // 不到 → 标签一直挂 "pi"，2026-10-20 用户实测）；serializer 恢复的旧题也靠这里归正
-    if (this.editorPanel && tabId === this.activeTabId && (titleDirty || this.editorPanel.title !== meta.title)) {
-      this.editorPanel.title = meta.title;
+    if (this.editorPanel && tabId === this.activeTabId) {
+      // sessionName 是 pi 生成的整句话（如「交接终版落盘（e51fc5c），工作树干净…」），
+      // 直接当标签题会占满整条标签栏（2026-10-27 用户实测）——编辑器标签只取前 16 字 + …；
+      // meta.title 保持全文（会话内标题、持久化仍用它）
+      const chars = Array.from(meta.title);
+      const et = chars.length > 16 ? chars.slice(0, 16).join("") + "…" : meta.title;
+      if (titleDirty || this.editorPanel.title !== et) this.editorPanel.title = et;
     }
     // 标题变了才落盘：busy/unread 高频变化不碰 globalState
     if (titleDirty) this.saveTabBar();
