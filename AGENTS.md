@@ -40,8 +40,10 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   工作区一起清掉、无从追查——任何 media 清理/瘦身一律不许碰它，它不进 vsix（白名单不含它）
   不等于可以从仓库删。已知债务：逐像素 rect 描摹导致 3.4MB，如需瘦身可按 16×16 网格重绘
   （pi-icon.png 网格中心即纯色原像素），但文件本身永远保留。
-- **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（无 @ts-nocheck）。改它保持 ES5 var
-  风格，别引入 let/const 大重写；真类型问题用最小断言解决。
+- **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（无 @ts-nocheck）；真类型问题用
+  最小断言解决。语法风格不设限（2026-10-29 用户拍板放宽，原「保持 ES5 var」限制废止）：
+  let/const/箭头函数随便用；存量 var 不必刻意回避，也别为迁移而迁移——大批量风格迁移
+  单独成笔，别混进功能提交（防 diff 噪音淹没有效改动）。
 - **模板纪律**：index.html 只放结构 + 占位符（`{{key}}` 运行时变量 / `{{t:key}}` i18n）。CSS/JS 主体
   绝不写进模板，样式注入在 src/webview-html.ts 的 `headAssets`。
 - **CSP**：nonce 由 getHtml 随机生成，script 标签与 CSP 头必须配对；JS 注入须过 `</script` 转义。

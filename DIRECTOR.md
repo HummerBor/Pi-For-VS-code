@@ -25,7 +25,7 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-09-21 验收循环（六）：工单31 图片缩略图+点击放大全结（7142690 单笔五文件，用户实测通过；归档 9.18）。**工单区已空**，下一单待签（候选见归档「八、后续排队」）。
+> 最后更新：2026-10-29 签发工单32（外部会话通用接入：openSession/externalWriting 两命令 + 实时跟随 + 交棒，用户拍板「通用接入方法」）；同日用户拍板放宽 webview/main.ts ES5 var 限制（AGENTS.md 已改）。前情：2026-09-21 验收循环（六）工单31 图片缩略图+点击放大全结（7142690，用户实测通过；归档 9.18）。
 > 前情：09-20 验收循环（五）：工单30 拆除验收通过结单（grep 零命中/compile 绿/逐 hunk 归属干净/原生 APPEND_SYSTEM.md 未误伤，纯拆除无实测项）；工单27 回收全链路闭环。
 
 ## 施工工单（待施工）
@@ -36,7 +36,44 @@
 > 做新单前若与旧单边界相关先查归档，勿凭记忆执行旧单条目。
 > **工单号一律阿拉伯数字**（工单23 起，用户拍板 2026-09-15；存量编号不改）
 
-> **当前无待施工工单**（工单31 已结迁归档.md）。下一单从归档「八、后续排队」选题签发。
+### 工单32：外部会话通用接入——openSession/externalWriting 两命令 + 外部写入实时跟随 + 交棒信号
+
+> **来源**：ops-panel 需求《需求-pi-vscode-实时会话查看.md》（用户 2026-10-29 转来，已读并逐条核实）。用户拍板三点：①「以后这种外部接入的需求会很多，得考虑一种通用接入的方法」；②「可以再给它一个明确的交棒信号」；③本单进 DIRECTOR.md + 给 ops-panel 出交接文档（《交接-ops-panel-外部会话接入.md》，同目录）。
+> **通用性口径（本单的设计轴）**：**数据面走文件观测**——任何外部写者（ops-panel 的 `pi -p`、终端 pi、CI）往会话 jsonl 追加，插件零接入即可跟随；**控制面走两条命令**——有管家的写者（ops-panel 管着子进程、准知道什么时候写完）额外发信号，精确交棒不误判；没管家的写者走 mtime 静默启发式兑底。勿为单个调用方做定制。
+>
+> **pi 三处查留证（总监 2026-10-29 实测，grep 可复验，施工方勿重查）**：
+> - ①公开 API：`SessionManager.open`（dist/core/session-manager.d.ts:378，实现 session-manager.js:1326）**本身只读不写**（读文件 + flushed=true，无 append）；`listAll(sessionDir,…)` 有重载（d.ts:413-414）、`list(cwd, sessionDir, …)`（d.ts:409）——P1-2 是透传不是造轮子；runtime `switchSession`（agent-session-runtime.js:128）= open + 重建 runtime。
+> - **「打开即双写」实锤，但真凶不在 open 在插件打开链路（P1-1 升 P0 定案）**：(a) createAgentSession 对已有会话若分支缺 thinking entry → appendThinkingLevelChange（dist bundle 内，经 `_appendEntry`→`_persist`）；(b) 打开后必跑 `reapplyModelMemory`（panel.ts:613/1232/1256）→ `setModel`（agent-session.js:2008，**无条件** appendModelChange，无同值检查）→ `_persist`（session-manager.js:794-815，已存在文件 flushed=true 直接 appendFileSync）；`setThinkingLevel` 仅等级真变才 append（agent-session.js:2123-2125，有 isChanging 守卫）。→ 外部活跃期打开 = 打开瞬间双写，只读态必须连打开链路的写点一起堵。
+> - ②pi 本体/TUI：dist 全树 grep `fs.watch|createFileSystemWatcher|watchFile` 仅 footer-data-provider.js:303/327 的 git head/reftable——**pi 不 watch 会话文件，负结论**：实时跟随无原生能力可搬，是壳职责。
+> - ③扩展生态：未检索（施工方若发现现成能力按「插件就是壳」回收并回报，负结论也回报）。
+>
+> **现状缺口（行号实证）**：
+> - 对外命令只有 `piChat.openInEditor`（extension.ts:69，无参=新会话）；`openOrFocusSession`（panel.ts:294）是 static 内部方法，外部调不到；findHolder + pendingSessionFile 双开守卫（panel.ts:299-316）现成可复用。
+> - 打开会话 = switchSession + getMessages 一次性快照（piCore.ts:1569-1584 openSessionFile；panel.ts:605-613 同款），全 src 零会话文件 watcher——外部写入停在打开那一刻（验收 A 缺口）。
+> - `sessionCache.listNative`（sessionCache.ts:110-111）`list(cwd, undefined)` / `listAll(progress)` sessionDir 恒 undefined=默认库；而 piCore.ts:352-353 起 pi 时把 `piChat.sessionDir` 传 `--session-dir` → 配了自定义目录 = 新会话写配置目录、列表扫默认库，永不可见（验收 D 缺口）。
+> - 列表刷新 = 事件 + debounce 2s（sessionsView.ts:34-37）+ memo 3s（sessionCache.ts:53），无文件系统事件源 → 外部新建会话不会自己上列表（验收 C 缺口）。
+>
+> **施工三刀，每刀独立提交，编译验证点逐刀过**：
+>
+> **刀1（小，独立可验）：两条命令 + sessionDir 透传**
+> 1. extension.ts 注册 `piChat.openSession`：入参 `{file?, name?}`（file 优先；name 兜底扫 listSessions 的 name 字段——SessionInfo.name 来自 session_info 条目，`--name` 会写它），走 openOrFocusSession，**返回 `{ok, reason}`**（未找到 `{ok:false, reason:"not-found"}`；已开则 focus + ok:true）。`openInEditor` 原样保留。
+> 2. 注册 `piChat.externalWriting`：入参 `{file?, name?, writing: boolean}`，维护外部持有登记表（按规范化路径 key；name 场景怎么解析成 file 施工定，写进回报）。
+> 3. sessionCache.listNative 透传 `piChat.sessionDir`（空回落 undefined=默认库）；**memo key 带 sessionDir**；panel onDidChangeConfiguration 补 `invalidateListMemo()`（现有 handler 在 panel.ts:549，别漏）。
+> - **验证点**：`npm run compile` 全绿；REPL executeCommand 验 openSession 四态（file 在/不在 × name 命中/未命中）返回值 + externalWriting 登记/查询。
+>
+> **刀2（主体，动 core/panel/webview/protocol 四层）：实时跟随 + 只读态 + 交棒**
+> 1. 数据面：打开的会话文件增量读（上次 offset 续读，**JSONL 按 \n 分帧铁律**，半行攒到下帧），新协议消息追加上屏（protocol.ts 三处同步）。fs.watch 或轮询 mtime+size 自选；注意 fs.watch 文件级在 inode 变换后失效（pi 自己 footer-data-provider.js:288 注释的坑）、`_rewriteFile` 会换 inode，必须有兜底。**只读新增行，不重载整页**；上翻历史不打断（停底部才自动跟随，与工单17 滚动语义一致）。
+> 2. 只读态：外部活跃 = externalWriting 登记命中 **或** 文件 mtime 近 N 秒（启发式兜底，N 默认 10s，施工实测后定写回报）。活跃期：webview 输入禁发 + 明确提示 + 页头「运行中」徽标（P2，**纯增量，不改既有会话页 UI 形态**）；**同时堵打开链路写点**——活跃期打开不跑 reapplyModelMemory 的 setModel/setThinkingLevel（延迟到交棒后补）。
+> 3. 交棒：`writing:false` 或 mtime 静默 N 秒 → 重载对齐（switchSession 重进，复用现有恢复链路）→ 解锁输入，此后用户发消息=正常接管。
+> - **验证点**：compile 全绿 + **冒烟必须真跑**：终端起 `pi -p --name t1 "<长任务 prompt>"`，运行中 openSession 打开 → 页面随外部写入增长、上翻不打断；活跃期页面发消息被挡有提示；外部结束后解锁能对话（验收 A/B）。
+>
+> **刀3（小-中）：会话目录 watcher**
+> - 外部新建会话 ≤2s 上列表（验收 C/D 一起验）。watch 目录还是轮询施工定，同样注意 inode。
+> - **验证点**：compile 全绿；外部新建 ≤2s 出现在列表；配 piChat.sessionDir 后列表只见该目录。
+>
+> **边界（不许顺手改）**：不动 openInEditor 语义、steering 自愈、4s pendingPrompt 兜底、还原边界（工单七/裁决11）；不改会话 jsonl 格式、pi 包与 vendor 零改动；会话页 UI 形态不变（徽标+只读提示是唯一新增）；webview/main.ts 风格限制已放宽（AGENTS.md 2026-10-29）但存量 var 不顺手迁移；每刀独立提交。
+>
+> **验收**：需求验收表 A/B/C/D 四行（E 是 ops-panel 侧回归，交接文档保证）+ compile 全绿 + 各刀验证点。**ops-panel 侧配套改动不在本单**，按《交接-ops-panel-外部会话接入.md》由那边执行。回报写 BUILDER.md（直令留痕 ✅活14）。
 
 > 工单十五遗留认知（全录见 归档.md 9.10，2026-09-14 用户实测结单）：mode.json 是
 > pi 磁盘全局态，mode 按页签隔离是假需求，勿再立项。
