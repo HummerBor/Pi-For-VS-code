@@ -496,6 +496,7 @@ export class PiCore {
   dispose(): void {
     this.client?.dispose();
     this.client = undefined;
+    if (this.extMemTimer) { clearTimeout(this.extMemTimer); this.extMemTimer = null; } // 返修P3：防有界泄漏
   }
 
   /** 读取当前项目对应的“上次会话”——每标签一份（工单十五刀3）：
@@ -1398,7 +1399,8 @@ export class PiCore {
       this.post({ type: "render", messages: d?.messages ?? [] });
       await this.applyModelMemory(); // 此刻外部已静默，写安全（仍新鲜则自行缓写）
       await this.refreshState();
-      this.post({ type: "externalState", locked: false });
+      // 返修P2-1：不无条件解锁——交棒 await 期间外部可能已恢复写入（上锁），发真相而非假解锁
+      this.post({ type: "externalState", locked: client.isFollowActive() });
       this.extReleasing = false;
       this.dbg("external release: reloaded " + st.sessionFile);
     } catch (err) {

@@ -143,8 +143,10 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "piChat.externalWriting",
       async (args?: { file?: string; name?: string; writing?: boolean }) => {
-        const writing = args?.writing === true;
-        const name = typeof args?.name === "string" ? args.name.trim() : "";
+        // 返修P4：writing 必填 boolean——漏传当 false 会静默误清登记还回 {ok:true}
+        if (typeof args?.writing !== "boolean") return { ok: false, reason: "bad-args" };
+        const writing = args.writing;
+        const name = typeof args.name === "string" ? args.name.trim() : "";
         const file = await resolveSessionFile(args);
         if (name) setExternalWritingName(name, writing);
         if (file) setExternalWriting(file, writing);

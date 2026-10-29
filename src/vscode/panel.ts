@@ -1617,6 +1617,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  /compact 直接压不二次确认——用户实测：敲完命令再弹框属于繁琐 */
   private async compactSession(withNote = false): Promise<void> {
     const client = this.core.ensureClient();
+    // 工单32返修P1：外部活跃期禁压缩（compact 会 append/重写正被外部写入的文件=双写分叉，
+    // 与 setModel 同类）。必须在下方 status 上屏**之前**——否则门禁抛错被 catch 静默吞掉
+    // （通知靠 compaction_end 事件，门禁路径不发该事件）→ 状态标签永卡「压缩中」
+    if (client.isFollowActive()) {
+      this.post({ type: "notice", text: this.L.extRunningNotice });
+      return;
+    }
     let inst: string | undefined;
     if (withNote) {
       inst = await vscode.window.showInputBox({ prompt: this.L.compactPrompt });

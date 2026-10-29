@@ -48,7 +48,9 @@ export function isExternalWriting(file: string | null | undefined, name?: string
   return false;
 }
 
-/** 测试钩子：清空登记表（生产路径不调用） */
+/** 测试钩子：清空登记表（生产路径不调用）。path/name 两键都清——只清一半会跨用例残留
+ *  污染（返修P3：探针⑤实证 reset 后 name 键仍命中） */
 export function _resetExternalWritingForTest(): void {
   holders.clear();
+  holderNames.clear();
 }

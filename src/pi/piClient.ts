@@ -359,8 +359,9 @@ export class PiClient {
       isExternalWriting(file, this.session?.sessionName) ||
       (this.followDelta.length > 0 && now - st.mtimeMs < PiClient.FOLLOW_QUIET_MS);
     if (active !== this.followActive) this.emitFollowState(active);
-    // 交棒：外部不活跃且本地空闲 → 重发请求（每 tick 幂等重发，piCore 侧加锁；成功重载
-    // 清 delta 后条件自然停——失败也能下个 tick 重试，不会卡死在一次性标志上）
+    // 交棒：外部不活跃且本地空闲 → 重发请求（每 tick 幂等重发，piCore 侧 extReleasing 加锁；
+    // 成功重载清 delta 后条件自然停；**失败不会重试**——extReleasing 不复位防 500ms 风暴，
+    // 下次 externalState 变化或 /reload 新 client 接线才复位，与 piCore onExternalRelease 一致）
     if (!active && this.followDelta.length > 0 && !this.session?.isStreaming) {
       this.events.emit("externalRelease", file);
     }
@@ -676,6 +677,7 @@ export class PiClient {
    *  包一层 .result 保持 RPC 响应形状 */
   compact(customInstructions?: string): Promise<any> {
     return this.ready().then(async () => {
+      if (this.followActive) throw new Error("session is being written by an external process"); // 工单32返修P1：压缩写当前文件（面板入口已在 compactSession 提前拦，此为纵深防御）
       const r = await this.session.compact(customInstructions);
       return { result: PiClient.snapshot(r) };
     });
