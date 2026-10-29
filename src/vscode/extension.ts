@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { ChatPanelProvider } from "./panel";
-import { registerSessionsView, setSessionsView } from "./sessionsView";
-import { listSessions } from "./sessionCache";
+import { registerSessionsView, setSessionsView, notifySessionsChangedNow } from "./sessionsView";
+import { listSessions, invalidateListMemo } from "./sessionCache";
 import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
@@ -73,6 +75,39 @@ export function activate(ctx: vscode.ExtensionContext): void {
   ChatPanelProvider.setFactories({ openEditorTab });
   // 刀4：左侧活动栏会话列表（原生 TreeView，点击打开/聚焦会话）
   setSessionsView(registerSessionsView(ctx));
+  // ── 工单32 刀3：会话目录 watcher（验收 C/D）──
+  // 外部进程（ops-panel pi -p 等）新建/删除会话文件 → ≤2s 上列表。轮询文件名指纹
+  // （不用 mtime——NTFS 同 tick 粒度坑，见技能 §6）每 500ms 一拍；变更 → invalidateListMemo
+  // + 立即重扫（notifySessionsChangedNow 不吃 refresh 的 2s debounce——验收 ≤2s 预算）。
+  // 覆盖面：piChat.sessionDir 配置目录 + 默认库根（recursive readdir 扫全部项目子目录）；
+  // PI_AGENT_DIR 自定义 agent 目录不在此列（记 REPORT 遗留）。append 到已有会话不触发
+  // （列表 mtime 列的实时性不在验收面；打开态会话的追加由刀2 跟随器管）
+  const watchRoots = (): string[] => {
+    const roots: string[] = [];
+    try {
+      const cfg = vscode.workspace.getConfiguration("piChat").get<string>("sessionDir", "").trim();
+      if (cfg) roots.push(cfg);
+    } catch { /* 配置读失败只看默认库 */ }
+    roots.push(path.join(os.homedir(), ".pi", "agent", "sessions"));
+    return roots;
+  };
+  const fpOf = (root: string): string => {
+    try {
+      const names = (fs.readdirSync as any)(root, { recursive: true, encoding: "utf8" }) as string[];
+      return names.join("|");
+    } catch {
+      try { return fs.readdirSync(root).join("|"); } catch { return ""; } // 目录不存在（尚无会话）
+    }
+  };
+  let lastFp = watchRoots().map(fpOf).join("§"); // 起步打底：首拍不触发（防启动即重扫）
+  const fpTimer = setInterval(() => {
+    const fp = watchRoots().map(fpOf).join("§");
+    if (fp === lastFp) return;
+    lastFp = fp;
+    invalidateListMemo(); // 新建/删除必须绕过 TTL 窗口（3s 内的旧库应答不许再吐）
+    notifySessionsChangedNow();
+  }, 500);
+  ctx.subscriptions.push({ dispose: () => clearInterval(fpTimer) });
   // 刀3 重启恢复：VS Code 序列化编辑器面板时捕获 webview state（panelInfo 存的
   // tabKey），窗口重开时逐面板回调 resolveWebviewPanel——按原 tabKey 重建实例 →
   // 会话记忆同键恢复原会话（state 缺失 = 面板没握手过 = 新会话语义）

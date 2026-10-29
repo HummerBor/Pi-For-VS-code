@@ -37,6 +37,13 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     this.refreshTimer = setTimeout(() => void this.sendItems(), 2000);
   }
 
+  /** 工单32刀3：立即刷新（不吃 2s debounce）——外部新建会话 ≤2s 上列表的验收预算
+   *  经不起 debounce；sendItems 自带在途合并（sessionCache inFlight），连发不会重扫多次 */
+  refreshNow(): void {
+    if (this.refreshTimer) { clearTimeout(this.refreshTimer); this.refreshTimer = undefined; }
+    void this.sendItems();
+  }
+
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
@@ -158,6 +165,10 @@ export function setSessionsView(v: SessionsViewProvider): void {
 }
 export function notifySessionsChanged(): void {
   sessionsViewRef?.refresh();
+}
+/** 工单32刀3：外部新建/删除会话的立即刷新入口（watcher 调，≤2s 验收口径） */
+export function notifySessionsChangedNow(): void {
+  sessionsViewRef?.refreshNow();
 }
 /** 主题/语言广播（panel 切换后调用——三块同色的最后一环，2026-10-19 广播修复同批） */
 export function notifySessionsTheme(name: string): void {
