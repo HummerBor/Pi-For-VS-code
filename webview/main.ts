@@ -992,6 +992,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return d;
   }
   function renderAll(list) {
+    renderedList = list || []; // 工单32：留底供外部增量 concat 重绘
     olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
     liveReset();
@@ -1452,6 +1453,30 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
    *  防止 renderAll 的 liveReset 抹掉先到的重定基状态 */
   var renderPending: SessionMessage[] | null = null;
   var liveSyncPending: SessionMessage | null = null;
+  /** 工单32：最近一次 renderAll 的消息列表——外部增量在它上面 concat 后再重绘
+   *  （renderAll 是唯一权威渲染器，不抽单消息渲染器——工具配对/成组逻辑重写风险大于收益） */
+  var renderedList: SessionMessage[] | null = null;
+  /** 工单32：外部活跃锁真相（宿主 externalState 驱动；webview 重建后由 postUiState 重发恢复） */
+  var extLocked = false;
+  function setExtLock(on: boolean) {
+    extLocked = on;
+    var sl = q('#statusline');
+    if (on) {
+      input.disabled = true;
+      (sendBtn as HTMLButtonElement).disabled = true; // q() 返回 HTMLElement，最小断言（AGENTS.md 口径）
+      if (sl && !sl.querySelector('.ext-badge')) {
+        var bd = document.createElement('span');
+        bd.className = 'ext-badge'; bd.textContent = L.extRunning; bd.title = L.extRunningTip;
+        sl.appendChild(bd);
+      }
+    } else {
+      input.disabled = false;
+      (sendBtn as HTMLButtonElement).disabled = false;
+      var b2 = sl ? sl.querySelector('.ext-badge') : null;
+      if (b2 && b2.parentNode) b2.parentNode.removeChild(b2);
+      renderBusyUi(); // 按钮状态交还常规忙碌逻辑（解锁≠一定空闲）
+    }
+  }
   var renderTimer: number | null = null;
   function scheduleRender() {
     // 三期④：换镜舞蹈退役（原「先换回发起页签再重绘」——闭包天然绑定，无需换）
@@ -1546,6 +1571,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'externalAppend') { // 工单32：外部增量上屏——复用 renderAll，滚动位置保住（上翻不打断）
+      if (!renderedList) return; // 未建树：等 uiState 快照（其 messages 已含 delta 叠加）
+      var extWasFol = followingEnd; var extKeepTop = root.scrollTop;
+      renderedList = renderedList.concat(m.messages || []);
+      renderAll(renderedList);
+      if (!extWasFol) { suppressScroll = true; root.scrollTop = extKeepTop; followingEnd = false; } // 防中间态滚动事件把跟随标志翻真
+    }
+    else if (m.type === 'externalState') setExtLock(!!m.locked); // 工单32：锁真相（徽标+输入禁发）
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();

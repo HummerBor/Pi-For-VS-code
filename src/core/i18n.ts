@@ -273,6 +273,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sSessionDirDetail: "默认为 ~/.pi/agent/sessions（piChat.sessionDir）",
     sSessionDirPrompt: "自定义会话存储目录（留空用默认）",
     sSessionDirSet: "会话目录已更新（重启 pi 后生效）",
+    extRunning: "运行中",
+    extRunningTip: "外部进程正在写入本会话（只读跟随，写完可接管对话）",
+    extRunningNotice: "该会话正由外部进程运行中，已进入只读跟随，写完自动解锁",
+    extSendBlocked: "外部进程写入中，暂不能发送（写完自动解锁）",
+    extReleaseFail: "交棒重载失败：内容可能落后磁盘，可用 /reload 自救",
     sOpenCfgDir: "$(gear) 打开 pi 配置目录 (~/.pi/agent)",
     sEditSettings: "$(json) 编辑 pi settings.json",
 
@@ -694,6 +699,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     sSessionDirDetail: "Defaults to ~/.pi/agent/sessions (piChat.sessionDir)",
     sSessionDirPrompt: "Custom session directory (leave empty for default)",
     sSessionDirSet: "Session directory updated (restart pi to apply)",
+    extRunning: "Running",
+    extRunningTip: "An external process is writing this session (read-only follow; take over when done)",
+    extRunningNotice: "This session is being written by an external process — read-only follow engaged, unlocks automatically",
+    extSendBlocked: "External process is writing — sending paused (unlocks automatically)",
+    extReleaseFail: "Handoff reload failed: content may lag the disk — try /reload",
     sOpenCfgDir: "$(gear) Open pi config directory (~/.pi/agent)",
     sEditSettings: "$(json) Edit pi settings.json",
 

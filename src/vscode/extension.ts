@@ -6,7 +6,7 @@ import { listSessions } from "./sessionCache";
 import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
-import { setExternalWriting } from "../core/externalWriting";
+import { setExternalWriting, setExternalWritingName } from "../core/externalWriting";
 
 /** 工单32 刀1：openSession/externalWriting 两命令的入参 file/name 解析（file 优先；
  *  name 兜底扫列表 name 字段——`--name` 写进 session_info 的那个名）。解析不出返回 null。
@@ -102,14 +102,18 @@ export function activate(ctx: vscode.ExtensionContext): void {
       }
     ),
     // 工单32 刀1：外部写者登记（控制面信号）。writing:true=外部开始写，false=交棒。
-    // 登记表在 core/externalWriting.ts（纯逻辑叶），刀2 的只读判定/交棒查它
+    // 登记表在 core/externalWriting.ts（纯逻辑叶），刀2 的只读判定/交棒查它。
+    // name 无条件登记（文件未建/未进 memo 时 file 解析不到，信号不能丢——刀2 实测缺口补修）；
+    // file 能解析到则双写双清，piClient 判活跃时 path/name 任一命中即真
     vscode.commands.registerCommand(
       "piChat.externalWriting",
       async (args?: { file?: string; name?: string; writing?: boolean }) => {
+        const writing = args?.writing === true;
+        const name = typeof args?.name === "string" ? args.name.trim() : "";
         const file = await resolveSessionFile(args);
-        if (!file) return { ok: false };
-        setExternalWriting(file, args?.writing === true);
-        return { ok: true };
+        if (name) setExternalWritingName(name, writing);
+        if (file) setExternalWriting(file, writing);
+        return { ok: !!(name || file) };
       }
     ),
     // retainContextWhenHidden：切走时保活 webview，回来不重建、不丢会话。

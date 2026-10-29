@@ -1803,3 +1803,24 @@ details.think.compaction-flash>summary {
   border-left: 2px solid var(--vscode-charts-purple, #b180d7);
   padding-left: 6px;
 }
+/* ── 工单32刀2：外部写入「运行中」徽标（状态行尾，随页签克隆）+ 锁定态输入 ── */
+.ext-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: middle;
+  color: #e09542;
+  background: rgba(224, 149, 66, 0.14);
+  border: 1px solid rgba(224, 149, 66, 0.4);
+  animation: ext-badge-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ext-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+#input:disabled {
+  opacity: 0.6;
+}
