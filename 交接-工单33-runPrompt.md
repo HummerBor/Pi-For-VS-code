@@ -28,11 +28,15 @@
    无人值守 = 装机后人工点一次注册（一生一次，之后全静默）。**令牌只在首次注册瞬间
    发出一次，重调 authorizeClient 绝不静默重发杖**（重注册=弹窗明示「吊旧杖换新杖」）；
    令牌 90 天过期，到期首次调用弹窗续权。
-1. `piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`
+1. `piChat.runPrompt({ name, prompt, timeoutMs?, tools?, noTools? })` → `Promise<{ ok, reason?, error? }>`
    - 按 `name` 创建/复用**无头会话**（不占页签、进列表、openSession 点开即挂 live）；
    - **settle 时 resolve**（agent_settled / 错误结束 → `{ok:false, error}`）；
    - `timeoutMs` 到点自动 abort → `{ok:false, reason:"timeout"}`；
-   - 同名在跑再提交 → `{ok:false, reason:"busy"}`。
+   - 同名在跑再提交 → `{ok:false, reason:"busy"}`；
+   - **`tools`/`noTools` 透传** pi CreateAgentSessionOptions（实证：dist/core/sdk.d.ts:29-45，
+     `tools` 白名单、`noTools:"all"` 全关；tools/index 有 createReadOnlyTools）——
+     **注入防线（用户拍板）**：含爬取原文的步骤只读工具集（read/grep/ls，禁 bash/写），
+     写操作步骤不得含爬取原文（契约 v2 §六四层防线：能力裁剪=硬/结构隔离=软/审校人闸/审计）。
 2. `piChat.abortSession({ name })` → `{ok}`（abort 语义）。
 3. ops-panel 侧按契约 v2 §三（不在本仓）。
 
@@ -66,10 +70,12 @@ follow-probe 裸跑姿势：`PiClient.prototype` 调用 + 假对象）+ 授权�
 5. 独立测试段（di-duck-dispatch）抓过 P1（compact 绕锁）——新活照走「施工→独立
    测试→返修」流水线，任务书五段自包含（该技能在 .pi/skills/di-duck-dispatch/）。
 
-## 四、验收（契约 v2 §四 A-F，收单对照）
+## 四、验收（契约 v2 §四 A-G，收单对照）
 
 A 垂类点开始 runPrompt 跑完 resolve、B 运行中打开即 0 延迟实时流、C 跑完页面续聊、
-D 超时/停止 abort 生效、E 未装 pi-vscode 提示不崩（ops-panel 侧）、F 多垂类并发互扰。
+D 超时/停止 abort 生效、E 未装 pi-vscode 提示不崩（ops-panel 侧）、F 多垂类并发互扰、
+G 未注册/令牌错调用拒收零副作用。注入防线探针：tools 白名单透传生效、只读步工具集
+不含 bash/write。
 
 ## 五、口令（本仓惯例）
 
