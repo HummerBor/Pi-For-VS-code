@@ -26,11 +26,17 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 > 4. 无逃生门/无免弹窗配置（2026-10-29 用户拍板删）：静默发杖在「命令层无调用方身份」的模型下可被冒名领取，不留这个口子；无人值守场景 = 装机后人工点一次注册。
 > 5. 安全口径（诚实）：防误用/防未授权调用，不承诺防同宿主恶意代码（VS Code 扩展信任域固有上限）。
 
-1. **`piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`**
+1. **`piChat.runPrompt({ name, prompt, timeoutMs?, tools?, noTools?, model?, onEvent?, clientToken })` → `Promise<{ ok, reason?, error?, text? }>`**
    - 按 `name` 创建或复用会话 → 发 prompt → **agent settle（跑完）时 resolve**；
    - `error`：run 以错误结束时的原因文本；`reason:"timeout"`：`timeoutMs` 到点自动
      abort 并 resolve（不算崩）；`reason:"busy"`：该会话在忙（同名重复提交）时拒收；
    - 会话无头创建（不占页签），列表可见；用户点开（openSession）即挂上实时渲染。
+   - **v2.1 增补（2026-10-30 用户裁决，三处空白补齐）**：`model?` 步骤显式模型
+     （"provider/modelId" 或 modelId，不传吃 pi 设置默认，替代旧 `--model`）；`onEvent(evt)`
+     同步回调把 pi 事件流（tool_call/message_update/…）原样回调给调用方（驱动六阶段点亮，
+     同宿主 executeCommand 参数直达，函数可传；回调抛错不影响 run）；`text?` = run 正常
+     结束时本轮最终助手文本（**只读步产出 = 文本**，ops-panel 负责落 output 文件——只读
+     工具集禁 write 后产出无处落盘，见 §六）。
 2. **`piChat.abortSession({ name })` → `Promise<{ ok }>`**：停当前 run（abort 语义 =
    取消回合 + 杀工具子进程）。
 3. **`piChat.openSession({ file?, name? })` → `{ ok, reason? }`**（已有，保留）：查看详情。
@@ -43,8 +49,9 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 ## 三、ops-panel 侧改动
 
 1. **llm 步不再 spawn `pi -p`**：改为
-   `const r = await vscode.commands.executeCommand("piChat.runPrompt", { name, prompt, timeoutMs, clientToken, tools, noTools })`
-   ——步骤的完成/失败就看 `r.ok / r.error`（替代子进程退出码）。`tools`（工具白名单）/
+   `const r = await vscode.commands.executeCommand("piChat.runPrompt", { name, prompt, timeoutMs, clientToken, tools, noTools, model, onEvent })`
+   ——步骤的完成/失败就看 `r.ok / r.error`（替代子进程退出码）；只读步产出取 `r.text` 落
+   output 文件。`tools`（工具白名单）/
    `noTools`（"all"全关 / "builtin"只关内置）**按步骤性质传**，见 §六 注入防线。
    **首次使用先注册**：`piChat.authorizeClient({ extensionId: "local.wechat-ops-panel" })`→ 弹窗同意 → 存好 `clientToken`，之后所有调用携带（一生一次，静默）。
 2. **会话命名沿用**：`name = ops-<垂类>-<日期>-<时间戳>`（与原 `--name` 同值，继续做定位键）。
@@ -93,6 +100,11 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 4. **审计**：prompt/产出全量落会话文件（审计红线），事后可追。
 
 ## 七、契约变更记录
+
+**v2.1（2026-10-30）**：runPrompt 增可选 `model`/`onEvent`，返回值增 `text`——三处空白
+由用户裁决按建议定案：A 六阶段点亮需要事件流（选 onEvent 回调而非会话文件 tail，
+实时性保真、不动契约骨架）；B 步骤显式模型旧 `--model` 需要落地口；C 注入防线禁 write
+后只读步产出需要文本回程。均为只增不改，三命令骨架不变。
 
 **v1（废弃，2026-10-29）**：文件跟随 + `externalWriting` 信号 + ops-panel spawn 子进程。
 废弃原因：**双写者模型复杂度失控**（外部写者判定在「自己写/别人写」边界反复误判——
