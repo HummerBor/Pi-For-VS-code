@@ -24,6 +24,12 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   造。工单签发前必过此查；壳自研与 pi 原生重复 = 浪费 + 双份维护 + 行为分裂。自研实现
   一旦发现 pi 有原生能力或失去存在前提，随工单清点回收（先例：会话列表换
   SessionManager.listAll，工单十三）
+- **subagent harness 内置随插件分发（2026-10-30 用户拍板「内置到 pi-vscode，别新开一个
+  项目就说找不到子 agent」）**：subagent 扩展源码归属 harness/subagent/（.vscodeignore
+  黑名单制自动进包），激活时 ensureSubagentHarness 按 harness.json 的 version 门（只升
+  不降、不覆写本地修改）同步到 <agentDir>/extensions/subagent，pi 原生扩展机制照常
+  加载。改 harness 必须 bump version，否则已安装副本不会更新。落盘红线同样适用：
+  harness 派子进程永不传 --no-session（runsLedger 台账 + 每单独立 --session-dir）。
 - **进程内直连架构（2026-09-09 用户拍板）**：piClient 不再 spawn `pi --mode rpc`，改为经
   src/piSdk.ts 定位并 import 用户已装的 pi 包（前置条件不变：机器上必须有 pi）。RPC 版整树
   保留在分支 `rpc-subprocess`。改 piClient 前先读其头注释的「RPC 语义保留对照」——
@@ -87,12 +93,18 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 ## 结构
 
 ```
-src/            宿主侧（extension.ts 入口 / panel.ts VS Code adapter / piCore.ts 核心控制器 /
-                hostCapabilities.ts 宿主能力接口 / piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
-                protocol.ts 消息协议 / patchRevert.ts edit patch 逆向还原（工单七）/
-                toolDetail.ts 共享摘要 / subagentSnapshot.ts 子 agent 监控快照 /
-                subagentNames.ts 子 agent 显示名台账/归位算法 / subagentNameGuard.ts 派发分类归位钩子 /
-                sessionScan.ts 会话列表同步快扫（R′刀）/ i18n.ts / webview-html.ts 装配）
+src/            宿主侧四层归位（5180d8c 纯移动）：
+                core/   piCore.ts 核心控制器 / hostCapabilities.ts 宿主能力接口 /
+                        protocol.ts 消息协议 / i18n.ts
+                pi/     piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
+                        ensureSubagentHarness.ts 内置 subagent 扩展同步
+                domain/ subagentSnapshot.ts 子 agent 监控快照 / subagentNames.ts 显示名台账/归位 /
+                        subagentNameGuard.ts 派发分类归位钩子 / toolDetail.ts 共享摘要 /
+                        patchRevert.ts edit patch 逆向还原（工单七）/ errorClass.ts
+                vscode/ extension.ts 入口 / panel.ts VS Code adapter / webview-html.ts 装配 /
+                        sessionsView.ts / sessionCache.ts / piSetup.ts / fileFinder.ts / changes.ts
+harness/        subagent 扩展源码归属（内置随插件分发，约定见上）：
+                harness/subagent/{index.ts, agents.ts, runsLedger.ts, harness.json}
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）
 out/            tsc 产物（不进 git，进 vsix）
