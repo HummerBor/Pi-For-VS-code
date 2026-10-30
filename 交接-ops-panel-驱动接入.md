@@ -20,10 +20,11 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 
 > **0. 授权层（所有命令的前置，2026-10-29 用户拍板「只有注册过的插件才能接入」）**：
 > VS Code 命令默认谁都能调（executeCommand 不带调用方身份）——控制面**零信任默认**：
-> 1. 客户端一次性注册：`piChat.authorizeClient({ extensionId })` → 原生确认框（列明能力：发 prompt/中止/打开会话）→ 同意则入信任表（globalState 持久）并返回 `{ ok:true, clientToken }`（随机令牌，每客户端一杖）；拒绝 → `{ok:false}`。
-> 2. 以下全部命令一律携带 `{ clientToken }`，表/令牌不匹配 → `{ ok:false, reason:"unauthorized" }`。
-> 3. 逃生门：设置 `piChat.trustedClients: string[]` 预授权（免弹窗）；撤销 = 删条目。
-> 4. 安全口径（诚实）：防误用/防未授权调用，不承诺防同宿主恶意代码（VS Code 扩展信任域固有上限）。
+> 1. 客户端首次调用即注册：`piChat.authorizeClient({ extensionId })` → 原生确认框（用 getExtension 取**真实扩展信息**展示 + 列明能力：发 prompt/中止/打开会话）→ 同意则入信任表（globalState 持久）并返回 `{ ok:true, clientToken }`（随机令牌，**能力裁剪**——只覆盖其用到的命令）；拒绝 → `{ok:false}`。**一生一次**，之后全部静默。
+> 2. 所有命令携带 `{ clientToken }`，表/令牌不匹配 → `{ ok:false, reason:"unauthorized" }`。
+> 3. 撤销：`piChat.revokeClient({ extensionId })`（弹窗确认后清表）；授权动作必发 VS Code 通知留痕。
+> 4. 无逃生门/无免弹窗配置（2026-10-29 用户拍板删）：静默发杖在「命令层无调用方身份」的模型下可被冒名领取，不留这个口子；无人值守场景 = 装机后人工点一次注册。
+> 5. 安全口径（诚实）：防误用/防未授权调用，不承诺防同宿主恶意代码（VS Code 扩展信任域固有上限）。
 
 1. **`piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`**
    - 按 `name` 创建或复用会话 → 发 prompt → **agent settle（跑完）时 resolve**；
@@ -44,7 +45,7 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 1. **llm 步不再 spawn `pi -p`**：改为
    `const r = await vscode.commands.executeCommand("piChat.runPrompt", { name, prompt, timeoutMs, clientToken })`
    ——步骤的完成/失败就看 `r.ok / r.error`（替代子进程退出码）。
-   **首次使用先注册**：`piChat.authorizeClient({ extensionId: "local.wechat-ops-panel" })`→ 弹窗同意 → 存好 `clientToken`，之后所有调用携带。
+   **首次使用先注册**：`piChat.authorizeClient({ extensionId: "local.wechat-ops-panel" })`→ 弹窗同意 → 存好 `clientToken`，之后所有调用携带（一生一次，静默）。
 2. **会话命名沿用**：`name = ops-<垂类>-<日期>-<时间戳>`（与原 `--name` 同值，继续做定位键）。
 3. **「🔎 查看详情」→ `piChat.openSession({ name })`**（无 run 禁用语义不变）。
 4. **停止/超时** → `piChat.abortSession({ name })`（替代 `child.kill`）；`runPrompt` 传

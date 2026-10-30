@@ -20,11 +20,12 @@
 
 **目标**（细节以契约 v2 §二为准）：
 
-0. **授权层（前置）**：`piChat.authorizeClient({extensionId})`——原生确认框（列明能力）→
-   同意入信任表（globalState）+发随机 clientToken；runPrompt/abortSession/openSession
-   全部携令牌校验，不匹配 → `{ok:false, reason:"unauthorized"}`；设置
-   `piChat.trustedClients` 预授权逃生门。注意：`authorizeClient` 本身不带令牌
-   （鸡生蛋问题），靠确认框把关；弹窗文案写清对方 extensionId 与能力清单。
+0. **授权层（前置）**：`piChat.authorizeClient({extensionId})`——弹窗（取 getExtension
+   真实扩展信息+能力清单）→ 同意入信任表（globalState 持久）+发随机 clientToken
+   （能力裁剪）；runPrompt/abortSession/openSession 全部携令牌校验，不匹配 →
+   `{ok:false, reason:"unauthorized"}`；`piChat.revokeClient` 撤销（弹窗确认）；授权
+   必发通知留痕。**无逃生门/无免弹窗配置（用户拍板删）**：静默发杖可被冒名领取；
+   无人值守 = 装机后人工点一次注册（一生一次，之后全静默）。
 1. `piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`
    - 按 `name` 创建/复用**无头会话**（不占页签、进列表、openSession 点开即挂 live）；
    - **settle 时 resolve**（agent_settled / 错误结束 → `{ok:false, error}`）；
