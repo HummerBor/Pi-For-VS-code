@@ -40,21 +40,50 @@
 2. `piChat.abortSession({ name })` → `{ok}`（abort 语义）。
 3. ops-panel 侧按契约 v2 §三（不在本仓）。
 
-**实现线索**（省摸底时间）：
-- 复用现有链路：`sendPromptCore`（piCore.ts，prompt 全套语义）、busy/settled 事件
-  （piCore onPiEvent）、`PiCore` 的 post 闸门（GATE_PASS_TYPES）。settle resolve =
-  在 prompt 发出后挂一个「等 settled」的 Promise 桥。
-- 无头会话：每会话一个 PiCore（cores Map，panel.ts ensureCore）——无头即「有 core
-  无 webview」；打开（openSession/openOrFocusSession）时挂上已有 core 即可出 live。
-  注意 panel 的 openOrFocusSession→openEditorTab 链（pendingSessionFile 握手）与
-  claimSession 双开守卫别破坏。
-- name→会话定位已有：extension.ts resolveSessionFile（listSessions 的 name 字段）。
-- 会话落盘审计红线：任何路径禁 `--no-session`（piClient 有焊死拒绝）。
+**实现线索**（省摸底时间，坐标已实证过，勿重查）：
+
+**骨架：四处改动点**
+1. `src/vscode/extension.ts` activate() 的 `ctx.subscriptions.push(...)`（openSession 注册
+   同一段，~行 88-115）：注册 authorizeClient / revokeClient / runPrompt / abortSession。
+2. 新模块 `src/vscode/clientAuth.ts`（授权层）：信任表存 `ctx.globalState`（key 建议
+   `piChat.clientGrants`：Map<extensionId, {token, caps, grantedAt}>）；token =
+   `crypto.randomBytes(32).toString("base64url")`；过期 90 天；弹窗用
+   `vscode.window.showWarningMessage(msg, {modal:true}, 按钮)`，msg 里用
+   `vscode.extensions.getExtension(id)` 取**真实** displayName/publisher 展示。
+3. 新模块 `src/vscode/headlessRuns.ts`（无头会话登记）：Map<name, {core, resolver,
+   timeoutTimer}>；runPrompt 在这里建/取 core、发起 send、挂 settle 桥。
+4. `src/pi/piClient.ts`：工具裁剪透传——`start()/init()` 里 `sdk.createAgentSessionFromServices`
+   已透传 `tools/excludeTools/noTools`（dist bundle 实证）；给 PiClient 加一个启动前设置的
+   工具策略字段，init 调用处带上即可。
+
+**关键不变式（错一条就翻车）**
+- **单写者**：一个会话文件同一时刻只有一个 PiCore/PiClient。**打开已跑着的无头会话 =
+  给既有 core 挂视图（adopt），绝不能新建 core 再 switchSession**——那就是双写者，
+  上周的事故本源。adopt 需要：piCore 的 post 桥可重绑（现在是构造器闭包
+  `new PiCore(caps, ui, (msg) => this.pipeFromCore(msg, tabId), version)`，panel.ts:275
+  ——改成 setPost/代理）；panel 的 claimSession/findHolder 双开守卫（panel.ts:299+）
+  与 adopt 路径对齐，别破坏。
+- **settle 桥**：现成先例 `core.onRunStart/onRunSettled`（panel.ts:285-287 赋值处）——
+  同款加 `core.onRunEnd`（onPiEvent 的 agent_settled 分支触发，protocol.ts:699），
+  headlessRuns 的 resolver 挂它上面；timeoutTimer 到点调 `client.abort()`（piClient.abort
+  已有）后 resolve timeout。
+- **同名拒收**：headlessRuns 里 name 在跑 → `{ok:false, reason:"busy"}`；跑完释放登记
+  （或保留会话本体，只释放 run 状态）。
+- **会话落盘**：无头会话照常走 SessionManager（审计红线，piClient 有 `--no-session`
+  焊死拒绝）；列表天然可见（sessionCache 扫文件，不用另做）。
+- 授权校验放在命令入口第一行（reject 早于任何副作用）；runPrompt 的 prompt/结果
+  天然落会话文件，通知只记「谁何时跑了什么」不记令牌。
 
 **验证点**：compile 全绿 + 全套 `npm run test:*` 回归 + runPrompt 三态探针
 （settle resolve / busy 拒收 / timeout 自动 abort，放 scripts/probe/，参照被删的
 follow-probe 裸跑姿势：`PiClient.prototype` 调用 + 假对象）+ 授权探针（未注册/令牌错
-拒收零副作用）。
+拒收零副作用、重调不静默重发、过期拒收）+ 注入防线探针（tools 白名单透传生效、
+只读步工具集不含 bash/write）。
+
+**施工纪律**（本仓硬约定）：机械批量改动用脚本+「恰好命中 1 次」校验（edit 多行锚点
+被 CRLF 卡，已实锤）；每刀独立提交；`npm run compile` 逐刀过；改 protocol 只增不改；
+webview 新代码语法不限但存量 var 不迁移；测试段别自己测自己（独立测试另派，di-duck
+技能）。
 
 ## 三、本周学费（都付过账，别再付）
 
