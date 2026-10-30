@@ -631,6 +631,9 @@ export class PiCore {
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
       // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行。
       // subagentUpdate 走闸门直发（GATE_PASS_TYPES），不会被丢
+      // 台账推送（段 3）：全局台账与 busy 无关（它是状态真值不是帧流）——全新页签
+      // 无会话文件也要看得见历史（「新开项目就找不到子 agent」治本）
+      this.pushLedger();
       if (!this.busy) void this.replaySubagentHistory();
     } catch {
       // ignore

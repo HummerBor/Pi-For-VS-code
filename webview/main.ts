@@ -1838,7 +1838,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var subSeenByTab: Record<string, boolean> = {};
   function updateSubInd() {
     // 图标跟页签走：该页签出过 subagent 就常驻（判据独立于 runs 增删，收起/清行都不掉按钮）
-    var show = !!subdock && activeTabId !== null && !!subSeenByTab[activeTabId];
+    // 台账历史也点亮入口（段 3）：跨会话可见——任何页签有历史就看得见列表
+    var show = !!subdock && activeTabId !== null && (!!subSeenByTab[activeTabId] || subLedgerRows.length > 0);
     subindEl.style.display = show ? 'inline-flex' : 'none';
     // 编辑器实例页头默认整行隐藏（CSS）；子 agent 运行中才露出仅含 subind 的页头行
     document.body.classList.toggle('subind-live', show);
@@ -1887,6 +1888,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** ── 概览 + 下钻渲染（工单 A，Codex 同款交互）──────────────────── */
   interface SubRunRec { snap: SubagentSnapshot; final: boolean; startAt?: number; endAt?: number; lastFrameAt?: number }
   var subRunsByTab: Record<string, Record<string, SubRunRec>> = {};
+  /** 台账行（段 3 刀 2）：宿主 subagentLedger 推送的全局历史/在册状态（跨会话/跨重启），
+   *  与页签 runs（浮窗直播）双源并存——活行走 runs，台账补历史/死因/回传未达 */
+  var subLedgerRows: any[] = [];
   var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
   var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
   var subShowAllDone = false; // 完成列表封顶的展开开关（「…展开剩余」点开）
@@ -1968,7 +1972,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 无内容不挂空壳（2026-10-23）：原实现先 unhide 再判空——壳 closed 删行后的 runs 空窗里
     // 浮窗空壳先弹、按钮却没露（show 当时判 runs 空），「有浮窗没按钮」怪象的根源。判空前置，
     // 空壳直接隐藏；按钮显隐走 subSeenByTab，不受影响
-    if (!runs || !Object.keys(runs).length) {
+    if ((!runs || !Object.keys(runs).length) && !subLedgerRows.length) {
       subRunning = false;
       d.classList.add('hidden');
       updateSubInd();
@@ -1977,7 +1981,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
     if (subCollapsed) d.classList.add('hidden');
     else requestAnimationFrame(function () { d.classList.remove('hidden'); }); // 触发从图标处缩放切出
-    subRunning = anySubLive(runs);
+    subRunning = runs ? anySubLive(runs) : false;
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
     head.innerHTML = '';
@@ -2034,6 +2038,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     chip.textContent = '⚙ ' + topName;
     chip.title = L.smTitle;
   }
+  /** 台账历史行（段 3 刀 2）：完整活动流在子会话文件里，此处仅状态徽标/任务摘要/相对
+   *  时间（无下钻——点开会话文件的「展开回看」是刀 3）。死亡行直显死因，不许靠猜 */
+  function renderLedgerRow(r: any): HTMLElement {
+    var st = r.status === 'running' ? 'running' : r.status === 'completed' ? 'done' : 'failed';
+    var rowEl = el('div', 'sm-row ' + st);
+    rowEl.appendChild(elIco('sm-ico', SM_ICONS[st] || '·'));
+    var main = el('div', 'sm-row-main');
+    var line1 = el('div', 'sm-name');
+    line1.appendChild(el('span', 'sm-agent', String(r.handle) + ' · ' + String(r.agent || '')));
+    var stTxt = r.status === 'running' ? L.smProcessing : r.status === 'completed' ? L.smDoneGroup : String(r.deathReason || L.smFailedSt);
+    line1.appendChild(el('span', 'sm-st ' + (st === 'running' ? 'run' : st === 'failed' ? 'fail' : 'done'), stTxt));
+    main.appendChild(line1);
+    var snip = String(r.task || '').replace(/\s+/g, ' ').slice(0, 48);
+    main.appendChild(el('div', 'sm-status' + (st === 'failed' ? ' fail' : ''), snip));
+    rowEl.appendChild(main);
+    var time = (r.endedAt || r.startedAt) ? fmtRel(r.endedAt || r.startedAt) : '';
+    if (time) rowEl.appendChild(el('span', 'sm-time', time));
+    if (r.reported === false) rowEl.title = String(r.handle) + '（' + L.smUnreported + '）';
+    return rowEl;
+  }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
     // 展平：每任务一行（parallel 拆多行，Codex 同款）；运行中在上、收尾在下
     var runningRows: any[] = []; var doneRows: any[] = [];
@@ -2051,7 +2075,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     };
     runningRows.sort(byNewest);
     doneRows.sort(byNewest);
-    if (runningRows.length === 0 && doneRows.length === 0) {
+    if (runningRows.length === 0 && doneRows.length === 0 && !subLedgerRows.length) {
       body.appendChild(el('div', 'sm-empty', L.smNoRuns));
       return;
     }
@@ -2077,6 +2101,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         more.addEventListener('click', function () { subShowAllDone = true; renderSubDock(); });
         body.appendChild(more);
       }
+    }
+    // 台账历史组（段 3 刀 2）：跨会话/跨重启可见——handle 已在活表的不重复显
+    //（活行走 runs 快照带活动流，台账行补历史/死因/回传未达）；默认最新 8 条防刷屏
+    var hist: any[] = [];
+    for (var li = 0; li < subLedgerRows.length; li++) {
+      var lr = subLedgerRows[li];
+      if (runs && runs[String(lr.handle)]) continue;
+      hist.push(lr);
+    }
+    if (hist.length) {
+      body.appendChild(el('div', 'sm-group-title', L.smLedgerGroup));
+      for (var hi = 0; hi < hist.length && hi < 8; hi++) body.appendChild(renderLedgerRow(hist[hi]));
     }
   }
   function renderSubRow(row: any): HTMLElement {
@@ -2367,6 +2403,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (m.type === 'subagentDetail') {
       subDetailCache[m.id] = m.snapshot;
       if (subDetailView && subDetailView.split(':')[0] === String(m.id)) renderSubDock();
+      return;
+    }
+    // 台账行（段 3 刀 2）：全局推送无页签归属——覆盖缓存并重绘当前浮窗
+    if (m.type === 'subagentLedger') {
+      subLedgerRows = (m as any).rows || [];
+      renderSubDock();
       return;
     }
     // 鸭子换图是页面级（图源与页签无关），不过路由
