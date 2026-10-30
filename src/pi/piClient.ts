@@ -155,6 +155,30 @@ export function prewarmPiServices(cwd: string): void {
  *   getSteeringMessages() 都是同步真读。panel 的对账代码暂留（变成永真保险），
  *   状态机收敛另立工单处理。
  */
+/** 工具策略（工单33 注入防线·能力裁剪硬防线，契约 v2 §六）：启动前设置，init 时透传
+ *  pi CreateAgentSessionFromServicesOptions（dist/core/sdk.d.ts 实证：tools 白名单语义、
+ *  noTools:"all" 全关、excludeTools 后置否决）。含爬取原文的步骤只传只读工具集
+ *  （read/grep/ls 级，禁 bash/write/edit）——投毒页面的注入指令写不了文件跑不了命令 */
+export interface ToolPolicy {
+  /** 工具白名单（名称/模式，`*` 通配）；缺省 = pi 默认工具集 */
+  tools?: string[];
+  /** 后置否决清单（tools 之后再排除） */
+  excludeTools?: string[];
+  /** "all" 全关 / "builtin" 只关内置（read/bash/edit/write） */
+  noTools?: "all" | "builtin";
+}
+
+/** 策略 → 会话创建参数（纯函数，探针可裸跑）：只带上显式设置的字段，
+ *  不让 undefined 键污染 SDK 的「缺省=默认工具集」语义 */
+export function toolPolicyFields(p: ToolPolicy | null | undefined): ToolPolicy {
+  if (!p) return {};
+  return {
+    ...(p.tools ? { tools: p.tools } : {}),
+    ...(p.excludeTools ? { excludeTools: p.excludeTools } : {}),
+    ...(p.noTools ? { noTools: p.noTools } : {}),
+  };
+}
+
 export class PiClient {
   /** pi 推送的事件流（agent_start / message_update / tool_execution_* / queue_update 等） */
   readonly events = new EventEmitter();
@@ -192,6 +216,12 @@ export class PiClient {
   onDebug: ((msg: string) => void) | null = null;
   private initPromise: Promise<void> | null = null;
   private startOpts: { cwd: string; extraArgs: string[]; proxyUrl?: string; openPath?: string } | null = null;
+  /** 工具策略（工单33）：start() 前经 setToolPolicy 设置，init 的
+   *  createAgentSessionFromServices 带上——runPrompt 的 tools/noTools 透传落点 */
+  private toolPolicy: ToolPolicy | null = null;
+  setToolPolicy(p: ToolPolicy | null): void {
+    this.toolPolicy = p;
+  }
   /** 扩展 UI 对话框的挂起请求：id → resolver（panel respondUi 回来时配对） */
   private uiPending = new Map<string, { method: string; resolve: (v: any) => void; timer?: NodeJS.Timeout }>();
   private uiSeq = 1;
@@ -262,6 +292,8 @@ export class PiClient {
           services,
           sessionManager: opts.sessionManager,
           sessionStartEvent: opts.sessionStartEvent,
+          // 工单33 注入防线：工具策略透传（tools 白名单/excludeTools 否决/noTools 全关）
+          ...toolPolicyFields(this.toolPolicy),
         });
         this.onDebug?.("[boot] session +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tE) + "ms)");
         return {
