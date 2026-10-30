@@ -74,3 +74,52 @@
 - 发版若 publish 撞 ECONNRESET：`HTTPS_PROXY=http://127.0.0.1:10801 npx @vscode/vsce publish`
   （0.1.0 发版教训，归档「七」账目）
 
+
+## 五、工单33 让位交接（2026-10-30 直令留痕 ✅活14）
+
+**背景**：用户发「开工」接手工单33 新增段（交接-工单33-runPrompt.md 口径），开工 25 分钟内
+发现**并行会话同场施工**（文件 mtime 16:20-16:23 实时写盘 + ddbaad5/9b9693f/039ee7b 连提交，
+撞车面=同一批文件），用户拍板「你让位吧先」——本会话停手，剩余段归并行会话。全程按裁决 9
+逐 hunk 归属暂存，零互扫（对方提交排除了我的 hunks，我提交只带自己的 2 个文件）。
+
+**已入库（本会话唯一一刀。⚠️ 刀号勿混：本刀「刀1=工具策略」与并行会话「刀1=授权层」
+是两套编号）**：
+- `5006bb2` 工具策略透传：piClient.ts 加 `ToolPolicy`/`toolPolicyFields()`（纯函数）/
+  `setToolPolicy()`，init 的 createAgentSessionFromServices 展开 tools/excludeTools/noTools
+  ——runPrompt tools/noTools 的落点（契约 §六能力裁剪硬防线）。
+- 验证凭据：compile 全绿；`scripts/probe/tools-probe.mjs` 12/12（白名单裁剪
+  active=[read,grep,ls] / noTools:"all" 全关 / createReadOnlyTools=[read,grep,find,ls]，
+  四工具全不在 bash/write/edit/powerShell）；全套回归 detail 27/27、subagent 46、
+  migration、linkify 22、errclass、html 全过；test:revert 预存红（diff 包被 npm 提升到
+  顶层，用例 require pi 树内嵌套路径失效——工单32 已挂账，与本刀无关）。
+
+**交接注记（摸底到函数级，接任直接用勿重查；行号按 a28746a 基线，piCore/panel 未再动）**：
+1. settle 桥先例：piCore.ts `onRunStart/onRunSettled` 字段（:229-230）、panel.ts ensureCore
+   赋值（:282-283）；`agent_settled` 分支 piCore.ts:2152——注意 onRunSettled 仅
+   runChangedFiles 非空调用，新 `onRunEnd` 须**无条件**触发并带 error 归因
+   （default 错误分支收 error/errorMessage/reason 记入 runError，agent_start 清空）。
+2. adopt 不新建 core（单写者铁律）：piCore 构造器 `this.rawPost = post` + 闸门包装
+   `this.post`（:254-259）——加 `setPost` 换 rawPost 即重绑（panel.ts:275 构造闭包是现役
+   post 桥）；panel 三处对齐：openOrFocusSession(:293)、findHolder(:315)、
+   buildCaps.isSessionHeld(:368)；webviewReady 的 pendingSessionFile 分支（:598-631）
+   采纳路径**绝不能 switchSession**——那就是双写者（上周事故本源）。
+3. 无头 core 记忆劫持坑：refreshState 的 `setSessionForWs`（piCore.ts:1712 附近）按工作区
+   写「上次会话」记忆——无头 core 必须跳过，否则 t1 恢复链会盯上无头会话文件，而
+   isSessionHeld 看不到无头持有（headlessRuns 不在 panel.cores）→ 双写；tabKey 别留默认
+   "t1"（applyModelMemory 按 tabKey 读记忆会串台），建议 `headless:<name>`，adopt 时改
+   tabId 并置 headless=false。
+4. 命名/复用：`piClient.setSessionName` 已有（→ session.setSessionName）；名字→文件解析
+   走会话列表 SessionInfo.name；switchSession 同目标短路返回 {cancelled:false}——比对只
+   能比 session.sessionFile，不能比 boot 的 openPath（piClient.switchSession 注释的坑）。
+   创建新会话走 SessionManager.create（freshTab 语义同款），复用走 openPath→open 直挂。
+5. SDK 证据（勿重查）：tools/excludeTools/noTools 在 agent-session-services.d.ts:53-55；
+   断言用 `session.getActiveToolNames()`；createReadOnlyTools(cwd)=[read,grep,find,ls]。
+   runPrompt 返回形状以**契约 v2.1** 为准（增 model/onEvent、返回 text——039ee7b 裁决回写）。
+6. 探针姿势（scripts/probe/，follow-probe 假对象裸跑风）：
+   `PiCore.prototype.onPiEvent.call(fake, {type:"agent_settled"})` 打 settle 桥；
+   假 core 工厂打 runPrompt 三态（settle resolve / busy 拒收 / timeout 自动 abort）；
+   授权探针打 clientAuth 的 deps 注入面（未注册/令牌错拒收零副作用、重调不静默重发、
+   过期续权）。
+7. 不变式四条（错一条翻车）：单写者 adopt 不新建 / settle 桥 / 同名拒收 / 会话落盘审计
+   红线（--no-session 焊死在 piClient）。验证 gate：compile 全绿 + 全套 test:* 回归 +
+   三探针 + 拆除零残留 grep。
