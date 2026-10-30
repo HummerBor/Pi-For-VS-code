@@ -125,13 +125,7 @@ export class PiCore {
    *  notice/交互应答/subagentUpdate 直发）。不逐事件 case 打补丁——漏一类就是新事故 */
   private gateOpen = false;
   private gateQueue: HostToWebview[] = [];
-  /** 工单32：外部交棒处理中（防 500ms tick 重入；失败不复位=不进重试风暴，
-   *  下次 externalState 变化才复位——新 client 接线时也复位） */
-  private extReleasing = false;
-  /** 工单32：模型记忆缓写定时器（外部活跃/开档可疑时 applyModelMemory 挂起，静默后补） */
-  private extMemTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 外部锁提示冷却（60s 内最多一条 notice）：锁反复喂活时曾刷屏（2026-10-29，根因已修，此处保险） */
-  private extNoticeAt = 0;
+
   /** postUiState 单飞：窗口期再入只标重跑（用最新真相重拉），避免重叠快照互冲 */
   private uiStateRunning = false;
   private uiStateRerun = false;
@@ -378,13 +372,6 @@ export class PiCore {
     client.onError = (err) => this.ui.startError(err);
     client.onDebug = (s: string) => this.dbg(s); // N 刀：init 分段计时经此落盘
     client.events.on("event", (e: PiEvent) => void this.onPiEvent(e));
-    // 工单32：外部写者跟随三事件（piClient 发、这里转协议消息/执行交棒）；接线时复位失败锁
-    this.extReleasing = false;
-    client.events.on("externalAppend", (msgs: any[]) => {
-      this.post({ type: "externalAppend", messages: msgs });
-    });
-    client.events.on("externalState", (active: boolean) => this.onExternalState(active));
-    client.events.on("externalRelease", () => void this.onExternalRelease());
 
     this.post({ type: "status", text: this.L.startingPi });
     // 公司网络下模型接口需要走代理：pi 子进程不会继承 shell 里的代理变量，
@@ -498,7 +485,6 @@ export class PiCore {
   dispose(): void {
     this.client?.dispose();
     this.client = undefined;
-    if (this.extMemTimer) { clearTimeout(this.extMemTimer); this.extMemTimer = null; } // 返修P3：防有界泄漏
   }
 
   /** 读取当前项目对应的“上次会话”——每标签一份（工单十五刀3）：
@@ -654,9 +640,6 @@ export class PiCore {
     const dropped = this.gateQueue;
     this.gateQueue = [];
     this.gateOpen = false;
-    // 工单32：快照后补发锁真相——webview 重建/后台页签首帧靠这条恢复徽标与输入锁
-    // （externalAppend 走 GATE_PASS 直发，其叠加内容已含在上面 uiState 的 delta 快照里）
-    this.post({ type: "externalState", locked: this.client?.isFollowActive() === true });
     if (dropped.length) {
       this.dbg(
         `gate drop: window=${Date.now() - gateT0}ms dropped=${dropped.length}` +
@@ -1079,25 +1062,6 @@ export class PiCore {
     opts?: { images?: { data: string; mimeType: string }[]; fileCount?: number; codeInfo?: string }
   ): Promise<void> {
     const client = this.ensureClient();
-    // 工单32：外部活跃期禁发（webview 输入已锁，这里是宿主侧防线——排队 drain 等
-    // 程序化路径也拦）。双写 = 两个写者从同一 leaf 各自 append，会话树分叉
-    if (client.isFollowActive()) {
-      this.post({ type: "notice", text: this.L.extSendBlocked });
-      return;
-    }
-    // 工单32接管对齐（lazy 交棒的另一半，2026-10-29 卡死修复）：外部增量进过内存后
-    // leaf 已过期——发送前必须重载对齐，否则从过期 leaf append = 会话树分叉。原急重载
-    // 方案废除（大会话 force reload 数秒、每静默窗一轮 → 宿主钉死），改为接管时一次付费
-    if (client.followDeltaLength() > 0) {
-      const st0 = await client.getState();
-      if (st0?.sessionFile) {
-        this.post({ type: "status", text: this.L.extTakingOver });
-        await client.switchSession(st0.sessionFile, true); // force 绕过短路，startFollow 清 delta
-        const d0 = await client.getMessages();
-        this.post({ type: "render", messages: d0?.messages ?? [] });
-        await this.applyModelMemory();
-      }
-    }
     const images = opts?.images;
     const codeInfo = opts?.codeInfo;
     // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
@@ -1350,13 +1314,6 @@ export class PiCore {
    *  切历史/新建/重载四条链路统一走这里；原先与 switchSession 并行的补回是竞态（谁后到谁赢）。
    *  panel 切历史链路用 reapplyModelMemory */
   private async applyModelMemory(): Promise<void> {
-    // 工单32：外部活跃/开档可疑（mtime 近 N 秒）→ 缓写。setModel 无条件 append 一条进
-    // 会话文件（三处查实锤 agent-session.js:2008），外部活跃期打开即双写——写点堵在这里
-    if (this.client?.isFollowActive() || this.client?.isExternalMtimeFresh()) {
-      this.deferModelMemory();
-      return;
-    }
-    if (this.extMemTimer) { clearTimeout(this.extMemTimer); this.extMemTimer = null; } // 正常路径落地，撤缓写
     const lastModel = this.lastModelFor();
     const lastThinking = this.lastThinkingFor();
     if (!lastModel && !lastThinking) return;
@@ -1368,50 +1325,6 @@ export class PiCore {
     }
   }
 
-  /** 工单32：缓写的模型记忆——>QUIET(10s) 静默窗后重试；仍活跃/仍新鲜就继续挂
-   *  （自愈循环，单定时器 11s 一拍，不会堆积） */
-  private deferModelMemory(): void {
-    if (!this.lastModelFor() && !this.lastThinkingFor()) return; // 没记忆可补，不用挂
-    if (this.extMemTimer) return;
-    this.extMemTimer = setTimeout(() => {
-      this.extMemTimer = null;
-      if (this.client?.isFollowActive() || this.client?.isExternalMtimeFresh()) {
-        this.deferModelMemory();
-        return;
-      }
-      void this.applyModelMemory();
-    }, 11000);
-  }
-
-  /** 工单32：外部活跃状态变化。锁上→通知+提示；解锁→delta>0 时推迟到交棒重载完成
-   *  （先解锁会让用户消息打在过期 leaf 上分叉，tick 随后就发 release，无空窗） */
-  private onExternalState(active: boolean): void {
-    this.extReleasing = false; // 状态变化 = 新一轮交棒周期，失败锁复位
-    if (active) {
-      this.post({ type: "externalState", locked: true });
-      const now = Date.now();
-      if (now - this.extNoticeAt > 60000) { this.extNoticeAt = now; this.post({ type: "notice", text: this.L.extRunningNotice }); }
-      return;
-    }
-    if (this.client && this.client.followDeltaLength() > 0) {
-      this.dbg("external quiet: awaiting release reload (delta=" + this.client.followDeltaLength() + ")");
-      return;
-    }
-    this.post({ type: "externalState", locked: false });
-  }
-
-  /** 工单32交棒（2026-10-29 卡死修复改 lazy）：外部静默 → 只解锁，delta 继续叠加显示；
-   *  重载对齐推迟到用户真发消息（sendPromptCore 接管对齐）。原急重载在大会话上 = 每
-   *  静默窗一次全量重解析（数秒）→ 宿主钉死（用户实测整窗未响应）。extReleasing 语义
-   *  = 本轮交棒已解锁的闩（onExternalState 变化时复位） */
-  private onExternalRelease(): void {
-    if (this.extReleasing) return;
-    const client = this.client;
-    if (!client || client.followDeltaLength() === 0) return;
-    this.extReleasing = true;
-    this.post({ type: "externalState", locked: false });
-    this.dbg("external release: lazy unlock (delta=" + client.followDeltaLength() + ", 对齐推迟到接管时)");
-  }
   /** 记忆键的工作区维度（与 getSessionForWs 同口径：去尾反斜杠 + 小写）。事故教训（2026-09-22
    *  用户实测）：旧键 piChat.lastModel.<tabKey> 只按页签维度存，而 globalState 机器级共享、
    *  tabId 每个窗口都从 t1 起算——A 窗口切的模型成了 B 窗口的「记忆」，跨窗口/跨项目必串；
@@ -2299,10 +2212,6 @@ const GATE_PASS_TYPES = new Set<string>([
   "queue",
   "compacting",
   "subagentUpdate",
-  // 工单32：外部跟随消息。append 走闸直发（丢失由 uiState 的 delta 快照兕底）；
-  // state 闸后必重发（postUiState 里），故两者都不排队——排队会压在快照后造成叠加/晚锁
-  "externalAppend",
-  "externalState",
 ]);
 
 /** 从消息 content 里抽纯文本（核心与 adapter 共用；adapter 的会话预览读取也用它） */

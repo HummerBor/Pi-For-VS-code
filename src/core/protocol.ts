@@ -572,9 +572,7 @@ export type HostToWebview =
   | ChangesListMsg
   | TabsMsg
   | LiveSyncMsg
-  | UiStateMsg
-  | ExternalAppendMsg
-  | ExternalStateMsg;
+  | UiStateMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 
@@ -741,17 +739,3 @@ export type PiEvent =
   | PiAgentSettledEvent
   | PiCompactionStartEvent
   | PiCompactionEndEvent;
-
-/** 工单32 刀2（只增不改，追加文末）：外部写者增量上屏——宿主读到会话文件的外部追加
- *  行（已过 \n 分帧），渲染端复用 renderAll 叠加（滚动位置保住，上翻不打断） */
-export interface ExternalAppendMsg {
-  type: "externalAppend";
-  messages: SessionMessage[];
-}
-
-/** 工单32 刀2：外部活跃锁真相。locked:true=外部写入中（输入锁+「运行中」徽标）；
- *  false=交棒完成可接管。postUiState 闸后必重发（webview 重建恢复用） */
-export interface ExternalStateMsg {
-  type: "externalState";
-  locked: boolean;
-}

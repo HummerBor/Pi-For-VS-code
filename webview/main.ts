@@ -191,6 +191,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 钉住 = sticky-q（position:sticky）+ pinned（line-clamp + chip）同进同退，避免出现
   // 「钉住但不折」把大气泡糊在视口顶的状态；短内容直接不钉，保持正常滚动
   function applySticky(b: any) {
+    // 守卫基线取本次调用开始时的布局——必须在类切换**之前**取：钉住瞬间的自身折叠也算
+    // 收缩量，否则「钉住→折叠→钳位回顶」一次就把守卫骗开，追加三的振荡原样回归
+    var st0 = root.scrollTop; var sh0 = root.scrollHeight;
     var want = stickyWants(b, b._sent);
     // 追加四（闪烁修正二，用户实测 2026-10-27：单条超长消息占满视口，气泡高频「折叠↔展开」
     // 整体闪）：钉住态的第二条自激回路——钉住折叠后**下方内容收缩**（工具完成即收盒 ~320px、
@@ -198,12 +201,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 把 scrollTop 向上一钳 → sentinel 被动「越界回顶」→ IO 判越界 → 摘钉展开（全高回涨）→
     // scroll() 拉底 → below 过阈再钉 → 折叠……工具每完成一个循环一轮 = 气泡不停缩放闪烁。
     // 追加三的 below≥视口判据只护住「钉住瞬间折叠」方向，管不着这条「钉后下方收缩」方向。
-    // 修法：钉住态 sentinel 越界若发生在贴底位置，判为钳位假事件忽略——真正的用户回翻必然
-    // 把 scrollTop 拖离底部（atBottom 不成立），照常摘钉回原位看全文（原 UX 不变）。
-    // 容差 48 与 scroll 判跟同口径
+    //
+    // 追加五（振荡修正三，用户实测 2026-10-30：往下滚时钉住气泡仍高频「展开↔折叠」）：
+    // 追加四的「距底 ≤48」判据时序敏感——钳位的 scroll 事件与流式增长跨帧交错，IO 回调读到
+    // 的是「钳位后又长了一截、跟随还没拉底」的瞬间距底值（>48）→ 守卫失效 → 摘钉展开 →
+    // 再钉 → 再钳，每条流式消息/每个工具收盒循环一轮。改判「scrollTop 回落能否被 scrollHeight
+    // 收缩解释」：钳位回落量 ≤ 收缩量（+48 容差）→ 假事件忽略；真用户回翻必然超出收缩量，
+    // 照常摘钉回原位看全文。恒等式：回落−收缩 ≈ 用户主动上翻量（钳位≈收缩、跟随拉底≈增长
+    // 两两相消），只看布局因果，不受回调/滚动事件帧间时序影响。距离判据被收缩判据覆盖废止
+    //（钳位必伴随收缩，反之不成立——无收缩的回落只可能是用户滚的）。
     if (!want && b.classList.contains('pinned')) {
-      if (root.scrollHeight - root.scrollTop - root.clientHeight <= 48) return;
+      var dScroll = b._pinSt - st0; // 正值 = 视口上移（钳位或用户上翻）
+      var dShrink = b._pinSh - sh0; // 正值 = 内容变矮（收盒/占位清理/成组隐藏/自身折叠）
+      if (dScroll > 0 && dScroll <= dShrink + 48) return; // 回落可被收缩解释 → 钳位假事件，忽略
     }
+    b._pinSt = st0; b._pinSh = sh0; // 基线前移（被忽略的路径不前移，继续与钉住时刻比）
     b.classList.toggle('sticky-q', want);
     b.classList.toggle('pinned', want);
     updateStickyChip(b);
@@ -992,7 +1004,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return d;
   }
   function renderAll(list) {
-    renderedList = list || []; // 工单32：留底供外部增量 concat 重绘
     olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
     liveReset();
@@ -1453,45 +1464,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
    *  防止 renderAll 的 liveReset 抹掉先到的重定基状态 */
   var renderPending: SessionMessage[] | null = null;
   var liveSyncPending: SessionMessage | null = null;
-  /** 工单32：最近一次 renderAll 的消息列表——外部增量在它上面 concat 后再重绘
-   *  （renderAll 是唯一权威渲染器，不抽单消息渲染器——工具配对/成组逻辑重写风险大于收益） */
-  var renderedList: SessionMessage[] | null = null;
-  /** 外部增量合批节流（2026-10-29 卡死修复）：每 500ms 一批就整页 renderAll 在大会话上
-   *  = DOM 重建 2 次/秒钉死 webview（用户实测整窗未响应）——改 ≥2s 一拍，且只在活动
-   *  页签 + 贴底跟随时重建；后台页签/上翻阅读中只记账（dirty），show(ON)/滚回底部时补 */
-  var extAppendTimer: number | null = null;
-  var extDirty = false;
-  function scheduleExtRender() {
-    if (extAppendTimer) return;
-    extAppendTimer = setTimeout(function () { extAppendTimer = null; flushExtRender(); }, 2000);
-  }
-  function flushExtRender() {
-    extDirty = false;
-    if (!renderedList) return;
-    if (id !== activeTabId || !followingEnd) { extDirty = true; return; } // 后台/上翻：记账不重建
-    renderAll(renderedList);
-  }
-  /** 工单32：外部活跃锁真相（宿主 externalState 驱动；webview 重建后由 postUiState 重发恢复） */
-  var extLocked = false;
-  function setExtLock(on: boolean) {
-    extLocked = on;
-    var sl = q('#statusline');
-    if (on) {
-      input.disabled = true;
-      (sendBtn as HTMLButtonElement).disabled = true; // q() 返回 HTMLElement，最小断言（AGENTS.md 口径）
-      if (sl && !sl.querySelector('.ext-badge')) {
-        var bd = document.createElement('span');
-        bd.className = 'ext-badge'; bd.textContent = L.extRunning; bd.title = L.extRunningTip;
-        sl.appendChild(bd);
-      }
-    } else {
-      input.disabled = false;
-      (sendBtn as HTMLButtonElement).disabled = false;
-      var b2 = sl ? sl.querySelector('.ext-badge') : null;
-      if (b2 && b2.parentNode) b2.parentNode.removeChild(b2);
-      renderBusyUi(); // 按钮状态交还常规忙碌逻辑（解锁≠一定空闲）
-    }
-  }
   var renderTimer: number | null = null;
   function scheduleRender() {
     // 三期④：换镜舞蹈退役（原「先换回发起页签再重绘」——闭包天然绑定，无需换）
@@ -1586,13 +1558,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
-    else if (m.type === 'externalAppend') { // 合批上屏（2026-10-29 卡死修复，节流见 scheduleExtRender）
-      if (!renderedList) return; // 未建树：等 uiState 快照（其 messages 已含 delta 叠加）
-      renderedList = renderedList.concat(m.messages || []);
-      extDirty = true;
-      if (id === activeTabId && followingEnd) scheduleExtRender(); // 否则由 show/滚回底部补
-    }
-    else if (m.type === 'externalState') setExtLock(!!m.locked); // 工单32：锁真相（徽标+输入禁发）
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
@@ -1654,13 +1619,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     root.addEventListener('scroll', function () {
       if (suppressScroll) { suppressScroll = false; return; }
       followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
-      if (followingEnd && extDirty) flushExtRender(); // 上翻回底部 → 补建挂起的外部增量
     }, { passive: true });
     bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
       refreshBusy: renderBusyUi, // 白 Working 兑底：切回页签按本页签真相重渲状态行（激活时调）
-      show: function (on: boolean) { view.classList.toggle('offview', !on); if (on && extDirty) flushExtRender(); }, // 切回页签补建挂起的外部增量
+      show: function (on: boolean) { view.classList.toggle('offview', !on); },
       isFollowing: function () { return followingEnd; },
       forceScrollToBottom: function () { suppressScroll = true; root.scrollTop = root.scrollHeight; },
       isBuilt: function () { return built; },
@@ -1668,7 +1632,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         if (liveRTimer) { clearTimeout(liveRTimer); liveRTimer = null; }
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
-        if (extAppendTimer) { clearTimeout(extAppendTimer); extAppendTimer = null; }
         if (view.parentNode) view.parentNode.removeChild(view);
       }
     };

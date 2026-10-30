@@ -3,7 +3,6 @@ import * as fs from "fs";
 import { join } from "path";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "../core/protocol";
 import { loadPiSdk } from "./piSdk";
-import { isExternalWriting, isFollowRequested } from "../core/externalWriting";
 import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
@@ -281,197 +280,11 @@ export class PiClient {
     }
   }
 
-  /** ── 工单32 刀2：外部写者实时跟随（数据面）──
-   *  打开的会话文件被外部进程（ops-panel 的 pi -p / 终端 pi）追加时：增量读新行 →
-   *  externalAppend 事件上屏（piCore 转协议消息）；外部活跃期锁输入（externalState 事件）；
-   *  静默交棒由 externalRelease 事件驱动（piCore 执行 switchSession(force) 重载对齐）。
-   *  本地写入识别：isStreaming 或 markOwnWrite 1.5s 窗口内的增长 = 自己写的，rebase 跳过
-   *  （否则本地流式追加会被当外部渲染双份 + 误锁输入）。
-   *  已知取舍（进 REPORT）：未知写者与本地写入并发的启发式竞态窗口 ≤1 tick；
-   *  registry（ops-panel 信号）路径无此窗口。 */
-  private followFile: string | null = null;
-  private followOffset = 0;
-  private followDelta: any[] = [];
-  private followTimer: ReturnType<typeof setInterval> | null = null;
-  private followLastOwnWriteAt = 0;
-  /** 最近一次本地会话事件时间：工具执行间隔/收尾迟到写入（subagent 终帧等）靠这个
-   *  窗口归本地，防误判外部（窗口 = FOLLOW_QUIET_MS，2026-10-29 误锁修复同批） */
-  private followLastLocalEventAt = 0;
-  /** 武装制（2026-10-29 结构修正）：跟随机制只服务被点名的会话——externalWriting 信号
-   *  或 openSession 打开才武装；普通列表点开的会话不碰任何外部写者判定（原功能隔离） */
-  private followArmed = false;
-  private followActive = false;
-  static readonly FOLLOW_TICK_MS = 500;
-  static readonly FOLLOW_QUIET_MS = 10_000; // mtime 静默阈值（派单 N=10s，启发式兑底）
-
-  /** 会话挂载单点（bindSession 内调）：boot/切会话/fork 全部经此启动跟随，防漏 */
-  private startFollow(file: string | null | undefined): void {
-    this.stopFollow();
-    if (!file) return;
-    this.followFile = file;
-    this.followOffset = 0; // 文件不存在（新会话首条消息前）时=0，出现后首笔按本地写窗口归位
-    this.followDelta = [];
-    this.followLastOwnWriteAt = 0;
-    this.followArmed = false; // 新挂载默认未武装，等 externalWriting 信号或 followRequest 点名
-    // 开闸即同步判（不能等 tick）：piCore 打开会话后马上跑 applyModelMemory（写点），
-    // 等 500ms tick 就晚了——registry 命中必须在 switchSession resolve 前把 externalState(true)
-    // 发出去。mtime 可疑不在此判（delta=0 时自己的刚写也 fresh）——堵写点走 piCore
-    // deferModelMemory（applyModelMemory 侧），这里只认精确信号
-    this.emitFollowState(isExternalWriting(file, this.session?.sessionName));
-    this.followTimer = setInterval(() => this.followTick(), PiClient.FOLLOW_TICK_MS);
-  }
-
-  private stopFollow(): void {
-    if (this.followTimer) { clearInterval(this.followTimer); this.followTimer = null; }
-    this.followFile = null;
-    this.followDelta = [];
-    this.followOffset = 0;
-    if (this.followActive) this.emitFollowState(false); // 切走时清锁（新会话自己的状态由 startFollow 重发）
-  }
-
-  private emitFollowState(active: boolean): void {
-    this.followActive = active;
-    this.events.emit("externalState", active);
-  }
-
-  /** 本地写入记账：prompt/模型/思考/改名等会 append 会话文件的动作调它——
-   *  1.5s 窗口内的文件增长不算外部（防误渲染/误锁）。rebase 跳过的窗口内若有外部增长，
-   *  会在下次交棒重载时从磁盘补齐（display 短暂缺口自愈） */
-  private markOwnWrite(): void {
-    this.followLastOwnWriteAt = Date.now();
-    if (!this.followFile) return;
-    try { const st = fs.statSync(this.followFile); this.followOffset = st.size; } catch { this.followOffset = 0; }
-  }
-
-  private followTick(): void {
-    const file = this.followFile;
-    if (!file) return;
-    // 武装制闸门：未武装 = 原行为（纯内存判定，零 IO 零副作用零锁）。只有两种入口武装：
-    // externalWriting 信号（registry）或 openSession 的 followRequest——自己的普通会话
-    // （列表点开）永远不碰外部写者判定，原功能在结构上不可能被波及（2026-10-29 结构修正）
-    if (!this.followArmed) {
-      const nm0 = this.session?.sessionName;
-      if (!isExternalWriting(file, nm0) && !isFollowRequested(file)) return;
-      this.followArmed = true; // 武装后本拍直接落入下方完整机制（registry→锁、request→跟随不锁）
-    }
-    let st: fs.Stats;
-    try { st = fs.statSync(file); } catch { return; } // 文件未创建（新会话首条消息前）
-    const now = Date.now();
-    const own =
-      !!this.session?.isStreaming ||
-      now - this.followLastOwnWriteAt < 1500 ||
-      now - this.followLastLocalEventAt < PiClient.FOLLOW_QUIET_MS; // 尾巴窗口与静默阈值对齐（2026-10-29：settled 后迟到落盘曾被 3s 窗误判外部 → 自己的会话误锁），外部写者场景无本地事件不受影响
-    if (st.size < this.followOffset) {
-      // 文件变小 = 外部重写（分支/_rewriteFile 换 inode）：delta 已不可信 → 请求交棒重载对齐
-      if (this.followDelta.length > 0) { this.events.emit("externalRelease", file); return; }
-      this.followOffset = st.size;
-    } else if (st.size > this.followOffset) {
-      if (own) {
-        this.followOffset = st.size; // 本地写入（流式/prompt/记忆补回/切模型）→ 跳过
-      } else {
-        const grown = this.readFollowGrowth(file, st.size);
-        if (grown) {
-          // 账本入口去重（2026-10-29 双份渲染实锤）：与本地内存尾部同条的不进账本——
-          // 误判过的本地消息与快照渲染两遍，这里提死在源头
-          const cleaned = this.filterLocalDupes(grown);
-          if (cleaned.length) { this.followDelta.push(...cleaned); this.events.emit("externalAppend", cleaned); }
-        }
-      }
-    }
-    // 活跃判定必须排除「本地刚写过」（2026-10-29 闩死实锤）：否则用户自己切模型/发消息
-    // 刷的 mtime 会把锁反复喂活——「只读跟随↔模型已切换」闪烁的直接原因
-    const active =
-      isExternalWriting(file, this.session?.sessionName) ||
-      (this.followDelta.length > 0 && !own && now - st.mtimeMs < PiClient.FOLLOW_QUIET_MS);
-    if (active !== this.followActive) this.emitFollowState(active);
-    // 交棒：外部不活跃且本地空闲 → 重发请求（每 tick 幂等重发，piCore 侧 extReleasing 加锁；
-    // 成功重载清 delta 后条件自然停；**失败不会重试**——extReleasing 不复位防 500ms 风暴，
-    // 下次 externalState 变化或 /reload 新 client 接线才复位，与 piCore onExternalRelease 一致）
-    if (!active && this.followDelta.length > 0 && !this.session?.isStreaming) {
-      this.events.emit("externalRelease", file);
-    }
-  }
-
-  /** 账本入口去重：本地运行时已持有的消息（内存尾部同 JSON）不进增量账本——
- *  双份渲染（快照一份+增量一份）的提法，2026-10-29 用户实测双份实锤 */
-  private filterLocalDupes(grown: any[]): any[] {
-    const mem = this.session?.messages ?? [];
-    if (!mem.length) return grown;
-    const sig = new Set<string>();
-    for (let i = Math.max(0, mem.length - 60); i < mem.length; i++) {
-      try { sig.add(JSON.stringify(mem[i])); } catch { /* ignore */ }
-    }
-    return grown.filter((m) => {
-      try { return !sig.has(JSON.stringify(m)); } catch { return true; }
-    });
-  }
-
-  /** 从 followOffset 读到 size：JSONL 按 \n 分帧铁律，半行不消费（不推进 offset）；
-   *  返回解析出的 message 列表（仅 type:"message" 条目，其余 entry 类型不进渲染） */
-  private readFollowGrowth(file: string, size: number): any[] | null {
-    let fd: number | null = null;
-    try {
-      const len = size - this.followOffset;
-      if (len <= 0) return null;
-      fd = fs.openSync(file, "r");
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, this.followOffset);
-      const text = buf.toString("utf8");
-      const lastNl = text.lastIndexOf("\n");
-      if (lastNl < 0) return null; // 整段都是半行 → 攑着
-      const complete = text.slice(0, lastNl + 1);
-      this.followOffset += Buffer.byteLength(complete, "utf8");
-      const out: any[] = [];
-      const lines = complete.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-        try {
-          const e = JSON.parse(line);
-          if (e && e.type === "message" && e.message) out.push(e.message);
-        } catch { /* 单行坏/非 JSON：跳过，不因单行卡死（分帧铁律只认 \n） */ }
-      }
-      return out.length ? out : null;
-    } catch {
-      return null;
-    } finally {
-      if (fd !== null) try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
-  }
-
-  /** 当前会话文件 mtime 是否在静默阈值内（piCore deferModelMemory 用：开档可疑即缓写） */
-  isExternalMtimeFresh(): boolean {
-    if (!this.followFile) return false;
-    try { return Date.now() - fs.statSync(this.followFile).mtimeMs < PiClient.FOLLOW_QUIET_MS; } catch { return false; }
-  }
-
-  /** 外部活跃状态（piCore 门禁/交棒判定用） */
-  isFollowActive(): boolean { return this.followActive; }
-
-  /** 外部增量条数（交棒重载成功的判据：重载后 startFollow 清零即对齐完成） */
-  followDeltaLength(): number { return this.followDelta.length; }
-
   /** 绑定当前 runtime.session 的事件订阅；每次会话替换后必须重调 */
   private bindSession(): void {
     this.unsubscribe?.();
     this.session = this.runtime.session;
-    this.startFollow(this.session?.sessionFile); // 工单32：所有会话挂载点（boot/切/fork）单点启动跟随
     this.unsubscribe = this.session.subscribe((e: any) => {
-      this.followLastLocalEventAt = Date.now(); // 本地事件流在跑 = 增长大概率是自己的 run
-      // 闩死修复（2026-10-29 用户实测红框常驻）：本地 run 启动且无外部登记信号 = 会话
-      // 正在本地使用，此前判「外部」的增量必是误判污染（settled 后迟到落盘超窗）——
-      // 不清则「增量非空+mtime 新鲜」恒真，锁永久卡死。有 registry 命中（ops-panel
-      // writing:true）不清，那才是真外部；真外部场景本地 run 本来就被输入锁挡着起不来
-      if (
-        e?.type === "agent_start" &&
-        this.followActive &&
-        this.followFile &&
-        !isExternalWriting(this.followFile, this.session?.sessionName)
-      ) {
-        this.followDelta = [];
-        try { const st = fs.statSync(this.followFile); this.followOffset = st.size; } catch { this.followOffset = 0; }
-        this.emitFollowState(false);
-      }
       this.events.emit("event", e);
     });
   }
@@ -597,7 +410,6 @@ export class PiClient {
           if (images && images.length) {
             opts.images = images.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
           }
-          this.markOwnWrite(); // 工单32：prompt 会 append 会话文件，记账防被当外部追加
           // 验收后的失败走事件流（rpc.md 契约）；resolve 兜底只在 preflight 回调从未触发时
           // 生效（现版 pi 源码不可达；若 ok=false 且 promise 反常 resolve，宁挂起不伪造成功）
           this.session.prompt(text, opts).then(
@@ -622,16 +434,11 @@ export class PiClient {
    *  才入 state，探针 probe-inflight.mjs 实测）——与 piCore 的在途消息深拷贝在**同一个同步块**
    *  里取，两者合起来才是完整真相（不重不漏）。getMessages 的 async 版本仍供他处使用 */
   messagesSync(): any[] {
-    const base = PiClient.snapshot(this.session?.messages ?? []);
-    // 工单32：外部增量叠加上快照——切页签/uiState 重绘不丢外部尾巴（交棒重载后 delta 清零）
-    return this.followDelta.length ? base.concat(this.followDelta) : base;
+    return PiClient.snapshot(this.session?.messages ?? []);
   }
 
   getMessages(): Promise<GetMessagesResult> {
-    return this.ready().then(() => {
-      const base = PiClient.snapshot(this.session.messages);
-      return { messages: this.followDelta.length ? base.concat(this.followDelta) : base };
-    });
+    return this.ready().then(() => ({ messages: PiClient.snapshot(this.session.messages) }));
   }
 
   /** 同步真读拼成 RPC get_state 的形状（字段含义见 protocol.ts GetStateResult） */
@@ -668,11 +475,9 @@ export class PiClient {
 
   setModel(provider: string, modelId: string): Promise<any> {
     return this.ready().then(async () => {
-      if (this.followActive) throw new Error("session is being written by an external process"); // 工单32：活跃期改模型 = 双写
       const m = this.session.modelRuntime.getModel(provider, modelId);
       if (!m) throw new Error("Model not found: " + provider + "/" + modelId);
       await this.session.setModel(m);
-      this.markOwnWrite();
       return { model: PiClient.snapshot(m) };
     });
   }
@@ -683,9 +488,7 @@ export class PiClient {
 
   setThinkingLevel(level: string): Promise<any> {
     return this.ready().then(() => {
-      if (this.followActive) throw new Error("session is being written by an external process"); // 工单32
       this.session.setThinkingLevel(level);
-      this.markOwnWrite();
       return {};
     });
   }
@@ -703,12 +506,10 @@ export class PiClient {
    *  比 boot 的 startOpts.openPath——页签中途切走过别的会话后，openPath 早已不是当前
    *  会话，拿它短路 = 「切回 boot 会话永远无效却报成功」（2026-10-20 实测：列表点击提示
    *  「已恢复会话」、内容页头全是旧会话）。路径比对做归一（Windows 大小写/斜杠） */
-  switchSession(sessionPath: string, force = false): Promise<any> {
+  switchSession(sessionPath: string): Promise<any> {
     const norm = (p?: string) => (p ? p.replace(/[\\/]+/g, "/").toLowerCase() : "");
     return this.ready().then(async () => {
-      // force=工单32 交棒重载：同文件重进（SessionManager 重读磁盘，delta 随 startFollow 清零），
-      // 必须绕过「已在目标上」短路——否则外部追加永远进不了内存态
-      if (!force && norm(sessionPath) && norm(this.session?.sessionFile) === norm(sessionPath)) {
+      if (norm(sessionPath) && norm(this.session?.sessionFile) === norm(sessionPath)) {
         return { cancelled: false };
       }
       const r = await this.runtime.switchSession(sessionPath);
@@ -720,9 +521,7 @@ export class PiClient {
   /** 设置当前会话的显示名称 */
   setSessionName(name: string): Promise<any> {
     return this.ready().then(() => {
-      if (this.followActive) throw new Error("session is being written by an external process"); // 工单32：改名会 append session_info
       this.session.setSessionName(name);
-      this.markOwnWrite();
       return {};
     });
   }
@@ -731,7 +530,6 @@ export class PiClient {
    *  包一层 .result 保持 RPC 响应形状 */
   compact(customInstructions?: string): Promise<any> {
     return this.ready().then(async () => {
-      if (this.followActive) throw new Error("session is being written by an external process"); // 工单32返修P1：压缩写当前文件（面板入口已在 compactSession 提前拦，此为纵深防御）
       const r = await this.session.compact(customInstructions);
       return { result: PiClient.snapshot(r) };
     });
@@ -877,7 +675,6 @@ export class PiClient {
       p.resolve(p.method === "confirm" ? false : undefined);
     }
     this.uiPending.clear();
-    this.stopFollow(); // 工单32：清跟随定时器，防泄漏
     this.unsubscribe?.();
     this.unsubscribe = null;
     const runtime = this.runtime;
