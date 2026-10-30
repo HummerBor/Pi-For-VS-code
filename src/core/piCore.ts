@@ -16,6 +16,7 @@ import { PiClient } from "../pi/piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
 import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
+import { readLedgerRows } from "./subagentLedger";
 import { toolDetail } from "../domain/toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
 
@@ -665,10 +666,25 @@ export class PiCore {
    * 历史运行被拦腰截断（用户实测「列表里只有一个调用记录」）。改全文件扫描——
    * subagent-async 行稀疏，只 parse 命中行，一次性成本可接受。
    */
+  /** 子 agent 台账推送（2026-10-30 段 3 刀 1）：全局列表的跨会话/跨重启真值是 harness
+   *  台账（runs/<handle>.json），本方法读盘转发，与浮窗直播（subagentUpdate）双源并存。
+   *  读盘失败/宿主无 agentDir 静默退化——观测面不阻主链路。 */
+  private pushLedger(): void {
+    try {
+      const dir = this.caps.getAgentDir?.();
+      if (!dir) return;
+      this.post({ type: "subagentLedger", rows: readLedgerRows(dir) });
+    } catch {
+      /* ignore */
+    }
+  }
+
   private async replaySubagentHistory(): Promise<void> {
     const file = this.lastSessionFile;
     if (!file || file === this.subagentHistoryReplayedFor) return;
     this.subagentHistoryReplayedFor = file;
+    // 台账推送（段 3）：重放即同步全局台账（跨会话历史 + 在册状态）
+    this.pushLedger();
     try {
       const stat = await fs.promises.stat(file).catch(() => null);
       if (!stat || stat.size === 0) return;
@@ -1959,10 +1975,14 @@ export class PiCore {
               endAt: rec.endAt,
             });
           }
+          // 台账刷新（段 3）：entry 帧后同步状态真值（读盘极轻）；kill 不发 entry，由
+          // tool_execution_end 兜底
+          this.pushLedger();
         }
         break;
 
       case "tool_execution_end": {
+        if (e.toolName === "subagent_kill") this.pushLedger(); // 段 3：kill 无 entry，台账在此刷新
         // 工单七：edit 的 result.details.patch（jsdiff unified）按时间序累积——
         // 未跟踪文件逆序逆向还原的唯一依据（裁决 11③）；write 无 details，不可还原
         const patch = e.result?.details?.patch;
@@ -2212,6 +2232,7 @@ const GATE_PASS_TYPES = new Set<string>([
   "queue",
   "compacting",
   "subagentUpdate",
+  "subagentLedger",
 ]);
 
 /** 从消息 content 里抽纯文本（核心与 adapter 共用；adapter 的会话预览读取也用它） */

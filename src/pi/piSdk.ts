@@ -95,6 +95,12 @@ async function doLoad(): Promise<any> {
       "pi 包缺少 SDK 入口 " + missing.join("/") + "（版本过旧或过新？）: " + root
     );
   }
+  // getAgentDir 同步缓存（段 3 台账读取用；失败不阻加载——核心侧对 null 退化为不发台账）
+  try {
+    agentDirCache = sdk.getAgentDir();
+  } catch {
+    /* ignore */
+  }
   return sdk;
 }
 
@@ -102,6 +108,12 @@ async function doLoad(): Promise<any> {
  * 定位用户已安装的 pi 包根目录。
  * 顺序：本地 node_modules（开发场景）→ PATH 上的 pi 命令反推（发布场景）。
  */
+let agentDirCache: string | null = null;
+/** getAgentDir 同步缓存（doLoad 填）：subagent 台账读取等宿主侧同步用；sdk 未加载时 null */
+export function getAgentDirSync(): string | null {
+  return agentDirCache;
+}
+
 export function findPiPackageRoot(): string | null {
   // 0) 插件内置的 pi（vsix 自带，用户免装）：out/pi/piSdk.js 上两级即扩展根目录，
   //    vendor/pi 是 compile 时 vendor-pi.mjs 从 node_modules 拷入的 bundle（不入 git）。

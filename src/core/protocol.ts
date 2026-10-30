@@ -546,6 +546,7 @@ export type HostToWebview =
   | ToolEndMsg
   | SubagentUpdateMsg
   | SubagentDetailMsg
+  | SubagentLedgerMsg
   | BusyMsg
   | RenderMsg
   | QueueMsg
@@ -739,3 +740,28 @@ export type PiEvent =
   | PiAgentSettledEvent
   | PiCompactionStartEvent
   | PiCompactionEndEvent;
+
+/** 子 agent 台账行（跨会话/跨重启全局列表，2026-10-30 段 3 刀 1）：wire 形状定义在
+ *  protocol（webview 共享编译无 node 类型，别 import 读盘模块）；数据源是 harness
+ *  runsLedger 的 runs/<handle>.json（状态唯一真值，形状与 RunRecord 对齐），piCore
+ *  经 core/subagentLedger.ts 读盘转发，webview 只展示。与浮窗直播（subagentUpdate）
+ *  双源并存：直播带活动流，台账管历史/死因/全局可见。 */
+export interface SubagentLedgerRow {
+  handle: string;
+  agent: string;
+  task: string;
+  status: "running" | "completed" | "failed" | "killed" | "orphaned";
+  deathReason?: string;
+  startedAt: number;
+  endedAt?: number;
+  model?: string;
+  /** 子会话落盘目录（subagents/<handle>/）——展开回看/接管的入口 */
+  sessionDir?: string;
+  /** 回传主会话是否已发（false = 「回传未达」，对账补送的依据） */
+  reported?: boolean;
+}
+
+export interface SubagentLedgerMsg {
+  type: "subagentLedger";
+  rows: SubagentLedgerRow[];
+}

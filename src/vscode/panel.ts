@@ -7,6 +7,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "../pi/piClient";
+import { getAgentDirSync } from "../pi/piSdk";
 import { displayNameFor } from "../domain/subagentNames";
 import { setDisplayNameLookup } from "../domain/subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
@@ -369,6 +370,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         const h = ChatPanelProvider.findHolder(file);
         return !!h && !(h.p === this && h.tabId === selfTabKey);
       },
+      // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
+      getAgentDir: () => getAgentDirSync(),
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
         vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
       showInputBox: async (options) => vscode.window.showInputBox(options),

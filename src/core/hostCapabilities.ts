@@ -49,4 +49,7 @@ export interface HostCapabilities {
    *  selfTabKey = 询问方自己的 tabKey（同 provider 同页签自己问不算占用——幂等重开无害）。
    *  可选：宿主没有多实例信息时省略，核心退化为不过闸（单实例行为不变） */
   isSessionHeld?(file: string, selfTabKey: string): boolean;
+  /** agent 目录（getAgentDir，~/.pi/agent）：subagent 台账读取用（段 3）。可选：
+   *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
+  getAgentDir?(): string | null;
 }
