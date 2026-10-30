@@ -13,8 +13,16 @@ import { createRequire } from "node:module";
 import { reverseApplyPatch } from "../../src/domain/patchRevert.ts";
 
 const require = createRequire(import.meta.url);
-// pi 包树内的 jsdiff（edit-diff.js 同款），仅测试期借用，不进 vsix
-const Diff = require("../../node_modules/@earendil-works/pi-coding-agent/node_modules/diff/libcjs/index.js");
+// pi 包树内的 jsdiff（edit-diff.js 同款），仅测试期借用，不进 vsix。
+// 2026-10-30 回退层：pi 1.4.0 依赖扁平化后嵌套 node_modules 被洗掉，同一份包提升到
+// 顶层——嵌套路径优先（旧布局），不在则借顶层（同一 lock 里的同一份 jsdiff）
+const Diff = (() => {
+  try {
+    return require("../../node_modules/@earendil-works/pi-coding-agent/node_modules/diff/libcjs/index.js");
+  } catch {
+    return require("diff");
+  }
+})();
 
 /** 复刻 pi edit.js 的 patch 生成：去 BOM + LF 归一化后 createTwoFilesPatch */
 function makePatch(oldText: string, newText: string): string {

@@ -23,17 +23,29 @@ const mkEntry = (i) => ({
 let listCalls = 0;
 const fakeSdk = {
   SessionManager: {
-    listAll: (onProgress) => {
+    listAll: (sessionDir, onProgress) => {
       listCalls++;
       onProgress(1, 3, [mkEntry(1)]);
       onProgress(2, 3, undefined);
       onProgress(3, 3, [mkEntry(1), mkEntry(2), mkEntry(3)]);
       return Promise.resolve([mkEntry(1), mkEntry(2), mkEntry(3)]);
     },
-    list: (cwd, _sessionDir, onProgress) => fakeSdk.SessionManager.listAll(onProgress),
+    list: (cwd, sessionDir, onProgress) => fakeSdk.SessionManager.listAll(sessionDir, onProgress),
   },
 };
 piSdk.loadPiSdk = () => Promise.resolve(fakeSdk);
+
+// 'vscode' 宿主模块裸 node 不在场（sessionCache 归位 src/vscode/ 后顶层 import vscode；
+// 旧日靠传递依赖捎带的 stub 包，pi 1.4.0 依赖升级洗没了，2026-10-30 自备最小桩）：
+// sessionCache 只用 workspace.getConfiguration("piChat").get("sessionDir", …)，返回缺省值即可
+const Module = require("node:module");
+const origLoad = Module._load;
+Module._load = function (request, ...rest) {
+  if (request === "vscode") {
+    return { workspace: { getConfiguration: () => ({ get: (_k, d) => d }) } };
+  }
+  return origLoad.call(this, request, ...rest);
+};
 
 const cache = require("../../out/vscode/sessionCache.js");
 
