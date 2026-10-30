@@ -25,7 +25,9 @@
    （能力裁剪）；runPrompt/abortSession/openSession 全部携令牌校验，不匹配 →
    `{ok:false, reason:"unauthorized"}`；`piChat.revokeClient` 撤销（弹窗确认）；授权
    必发通知留痕。**无逃生门/无免弹窗配置（用户拍板删）**：静默发杖可被冒名领取；
-   无人值守 = 装机后人工点一次注册（一生一次，之后全静默）。
+   无人值守 = 装机后人工点一次注册（一生一次，之后全静默）。**令牌只在首次注册瞬间
+   发出一次，重调 authorizeClient 绝不静默重发杖**（重注册=弹窗明示「吊旧杖换新杖」）；
+   令牌 90 天过期，到期首次调用弹窗续权。
 1. `piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`
    - 按 `name` 创建/复用**无头会话**（不占页签、进列表、openSession 点开即挂 live）；
    - **settle 时 resolve**（agent_settled / 错误结束 → `{ok:false, error}`）；
