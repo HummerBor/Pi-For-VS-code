@@ -130,6 +130,8 @@ export class PiCore {
   private extReleasing = false;
   /** 工单32：模型记忆缓写定时器（外部活跃/开档可疑时 applyModelMemory 挂起，静默后补） */
   private extMemTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 外部锁提示冷却（60s 内最多一条 notice）：锁反复喂活时曾刷屏（2026-10-29，根因已修，此处保险） */
+  private extNoticeAt = 0;
   /** postUiState 单飞：窗口期再入只标重跑（用最新真相重拉），避免重叠快照互冲 */
   private uiStateRunning = false;
   private uiStateRerun = false;
@@ -1387,7 +1389,8 @@ export class PiCore {
     this.extReleasing = false; // 状态变化 = 新一轮交棒周期，失败锁复位
     if (active) {
       this.post({ type: "externalState", locked: true });
-      this.post({ type: "notice", text: this.L.extRunningNotice });
+      const now = Date.now();
+      if (now - this.extNoticeAt > 60000) { this.extNoticeAt = now; this.post({ type: "notice", text: this.L.extRunningNotice }); }
       return;
     }
     if (this.client && this.client.followDeltaLength() > 0) {

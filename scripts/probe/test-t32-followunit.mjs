@@ -70,7 +70,7 @@ const mkTick = (opts = {}) => {
     session: { isStreaming: !!opts.streaming, sessionName: opts.name ?? null },
     events: { emit: (ev, arg) => emitted.push([ev, arg]) },
   };
-  for (const m of ["readFollowGrowth", "emitFollowState", "followTick", "markOwnWrite"]) {
+  for (const m of ["readFollowGrowth", "emitFollowState", "followTick", "markOwnWrite", "filterLocalDupes"]) {
     c[m] = PiClient.prototype[m];
   }
   return { c, emitted };
@@ -152,6 +152,7 @@ console.log("③ externalState 解锁时序（piCore 侧）");
     post: (m) => posts.push(m),
     dbg: () => {},
     extReleasing: true, // 上一轮交棒失败锁——状态变化应复位
+    extNoticeAt: 0, // notice 冷却起点（0 = 首条必发）
     L: { extRunningNotice: "n", extReleaseFail: "f" },
   };
   PiCore.prototype.onExternalState.call(core, false);

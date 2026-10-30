@@ -345,25 +345,32 @@ export class PiClient {
     let st: fs.Stats;
     try { st = fs.statSync(file); } catch { return; } // 文件未创建（新会话首条消息前）
     const now = Date.now();
+    const own =
+      !!this.session?.isStreaming ||
+      now - this.followLastOwnWriteAt < 1500 ||
+      now - this.followLastLocalEventAt < PiClient.FOLLOW_QUIET_MS; // 尾巴窗口与静默阈值对齐（2026-10-29：settled 后迟到落盘曾被 3s 窗误判外部 → 自己的会话误锁），外部写者场景无本地事件不受影响
     if (st.size < this.followOffset) {
       // 文件变小 = 外部重写（分支/_rewriteFile 换 inode）：delta 已不可信 → 请求交棒重载对齐
       if (this.followDelta.length > 0) { this.events.emit("externalRelease", file); return; }
       this.followOffset = st.size;
     } else if (st.size > this.followOffset) {
-      const own =
-        !!this.session?.isStreaming ||
-        now - this.followLastOwnWriteAt < 1500 ||
-        now - this.followLastLocalEventAt < PiClient.FOLLOW_QUIET_MS; // 尾巴窗口与静默阈值对齐（2026-10-29：settled 后 4s+ 的迟到落盘（subagent 终帧等）曾被 3s 窗误判外部 → 自己的会话误锁），外部写者场景无本地事件不受影响
       if (own) {
-        this.followOffset = st.size; // 本地写入（流式/prompt/记忆补回）→ 跳过
+        this.followOffset = st.size; // 本地写入（流式/prompt/记忆补回/切模型）→ 跳过
       } else {
         const grown = this.readFollowGrowth(file, st.size);
-        if (grown) { this.followDelta.push(...grown); this.events.emit("externalAppend", grown); }
+        if (grown) {
+          // 账本入口去重（2026-10-29 双份渲染实锤）：与本地内存尾部同条的不进账本——
+          // 误判过的本地消息与快照渲染两遍，这里提死在源头
+          const cleaned = this.filterLocalDupes(grown);
+          if (cleaned.length) { this.followDelta.push(...cleaned); this.events.emit("externalAppend", cleaned); }
+        }
       }
     }
+    // 活跃判定必须排除「本地刚写过」（2026-10-29 闩死实锤）：否则用户自己切模型/发消息
+    // 刷的 mtime 会把锁反复喂活——「只读跟随↔模型已切换」闪烁的直接原因
     const active =
       isExternalWriting(file, this.session?.sessionName) ||
-      (this.followDelta.length > 0 && now - st.mtimeMs < PiClient.FOLLOW_QUIET_MS);
+      (this.followDelta.length > 0 && !own && now - st.mtimeMs < PiClient.FOLLOW_QUIET_MS);
     if (active !== this.followActive) this.emitFollowState(active);
     // 交棒：外部不活跃且本地空闲 → 重发请求（每 tick 幂等重发，piCore 侧 extReleasing 加锁；
     // 成功重载清 delta 后条件自然停；**失败不会重试**——extReleasing 不复位防 500ms 风暴，
@@ -371,6 +378,20 @@ export class PiClient {
     if (!active && this.followDelta.length > 0 && !this.session?.isStreaming) {
       this.events.emit("externalRelease", file);
     }
+  }
+
+  /** 账本入口去重：本地运行时已持有的消息（内存尾部同 JSON）不进增量账本——
+ *  双份渲染（快照一份+增量一份）的提法，2026-10-29 用户实测双份实锤 */
+  private filterLocalDupes(grown: any[]): any[] {
+    const mem = this.session?.messages ?? [];
+    if (!mem.length) return grown;
+    const sig = new Set<string>();
+    for (let i = Math.max(0, mem.length - 60); i < mem.length; i++) {
+      try { sig.add(JSON.stringify(mem[i])); } catch { /* ignore */ }
+    }
+    return grown.filter((m) => {
+      try { return !sig.has(JSON.stringify(m)); } catch { return true; }
+    });
   }
 
   /** 从 followOffset 读到 size：JSONL 按 \n 分帧铁律，半行不消费（不推进 offset）；
