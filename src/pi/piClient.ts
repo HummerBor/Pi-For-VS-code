@@ -294,8 +294,8 @@ export class PiClient {
   private followDelta: any[] = [];
   private followTimer: ReturnType<typeof setInterval> | null = null;
   private followLastOwnWriteAt = 0;
-  /** 最近一次本地会话事件时间：工具执行间隔 isStreaming 可能为假，run 的尾部写入
-   *  （工具结果落盘等）靠这个窗口归本地，防误判外部（2026-10-29 卡死修复同批） */
+  /** 最近一次本地会话事件时间：工具执行间隔/收尾迟到写入（subagent 终帧等）靠这个
+   *  窗口归本地，防误判外部（窗口 = FOLLOW_QUIET_MS，2026-10-29 误锁修复同批） */
   private followLastLocalEventAt = 0;
   private followActive = false;
   static readonly FOLLOW_TICK_MS = 500;
@@ -353,7 +353,7 @@ export class PiClient {
       const own =
         !!this.session?.isStreaming ||
         now - this.followLastOwnWriteAt < 1500 ||
-        now - this.followLastLocalEventAt < 3000; // run 事件静默 3s 内的尾部写入（工具结果等）仍归本地
+        now - this.followLastLocalEventAt < PiClient.FOLLOW_QUIET_MS; // 尾巴窗口与静默阈值对齐（2026-10-29：settled 后 4s+ 的迟到落盘（subagent 终帧等）曾被 3s 窗误判外部 → 自己的会话误锁），外部写者场景无本地事件不受影响
       if (own) {
         this.followOffset = st.size; // 本地写入（流式/prompt/记忆补回）→ 跳过
       } else {
@@ -425,6 +425,20 @@ export class PiClient {
     this.startFollow(this.session?.sessionFile); // 工单32：所有会话挂载点（boot/切/fork）单点启动跟随
     this.unsubscribe = this.session.subscribe((e: any) => {
       this.followLastLocalEventAt = Date.now(); // 本地事件流在跑 = 增长大概率是自己的 run
+      // 闩死修复（2026-10-29 用户实测红框常驻）：本地 run 启动且无外部登记信号 = 会话
+      // 正在本地使用，此前判「外部」的增量必是误判污染（settled 后迟到落盘超窗）——
+      // 不清则「增量非空+mtime 新鲜」恒真，锁永久卡死。有 registry 命中（ops-panel
+      // writing:true）不清，那才是真外部；真外部场景本地 run 本来就被输入锁挡着起不来
+      if (
+        e?.type === "agent_start" &&
+        this.followActive &&
+        this.followFile &&
+        !isExternalWriting(this.followFile, this.session?.sessionName)
+      ) {
+        this.followDelta = [];
+        try { const st = fs.statSync(this.followFile); this.followOffset = st.size; } catch { this.followOffset = 0; }
+        this.emitFollowState(false);
+      }
       this.events.emit("event", e);
     });
   }
