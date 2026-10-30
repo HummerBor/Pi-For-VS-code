@@ -25,7 +25,7 @@
 > 协作流水：pi 施工 → 用户发 `1`/`111` 给总监 → 总监 review 并更新本文件。
 > 已完成工单、验收历史、账目/排队/守则等回顾性内容见 [归档.md](归档.md)（只留施工指令）；
 > 角色职责见 [总监.md](总监.md) / [施工方.md](施工方.md)；插件通用约定见 [AGENTS.md](AGENTS.md)。
-> 最后更新：2026-10-29 **工单32 收单**（施工三刀 + 独立测试 + 返修全链闭环，注记见工单区）；同日签发工单32、用户拍板放宽 webview/main.ts ES5 var 限制（AGENTS.md 已改）。前情：2026-09-21 验收循环（六）工单31 图片缩略图+点击放大全结（7142690，用户实测通过；归档 9.18）。
+> 最后更新：2026-10-29 架构拍板「ops-panel 是 pi-vscode 的扩展」→ 签发工单33（runPrompt 驱动契约 + 拆除工单32 跟随机制，用户令「把那坨垃圾干掉」）；契约 v2 落《交接-ops-panel-驱动接入.md》（v1 文件跟随版已删）。前情：工单32 全链收单（964d92c/c5fd56b/86e67a7/7070a48/热修三连，见工单区注记）；用户拍板放宽 webview/main.ts ES5 var 限制。
 > 前情：09-20 验收循环（五）：工单30 拆除验收通过结单（grep 零命中/compile 绿/逐 hunk 归属干净/原生 APPEND_SYSTEM.md 未误伤，纯拆除无实测项）；工单27 回收全链路闭环。
 
 ## 施工工单（待施工）
@@ -36,7 +36,21 @@
 > 做新单前若与旧单边界相关先查归档，勿凭记忆执行旧单条目。
 > **工单号一律阿拉伯数字**（工单23 起，用户拍板 2026-09-15；存量编号不改）
 
-### 工单32：外部会话通用接入——openSession/externalWriting 两命令 + 外部写入实时跟随 + 交棒信号
+### 工单33：pi-vscode 会话驱动契约（runPrompt/abortSession）+ 拆除外部写者跟随机制
+
+> **来源**：架构拍板（用户 2026-10-29）：「ops-panel 是 pi-vscode 的扩展」——执行也走 pi-vscode 进程内 pi（**唯一写者**），不再 spawn `pi -p`（用户原话「我就是要 ops-panel 执行靠 pi-vscode」，并以多会话并发无故障的实测驳回了进程内负载论）。契约全文：《交接-ops-panel-驱动接入.md》（v2，替代已删的 v1 文件跟随版）；拆除令原话「把之前你写的那坨垃圾干掉」——工单32 的跟随/锁/交棒机制整段拆除。
+>
+> **范围**：
+> 1. **拆除（纯拆除，独立提交）**：piClient 跟随器全套（tick/账本/武装/归因/去重/startFollow）、core/externalWriting.ts 整模块、piCore 的 ext 锁/交棒/缓写/门禁（onExternalState/onExternalRelease/deferModelMemory/sendPromptCore 接管段）、protocol 的 externalAppend/externalState 两消息、i18n 六键（zh/en）、webview 的 setExtLock/合批渲染/renderedList/徽标 + style.css 徽标段、extension.ts 的 externalWriting 命令、panel.ts compactSession 门禁、两个探针文件（follow-probe/test-t32-followunit——测的就是被拆的机制）。
+>    **保留**：openSession（刀1）、sessionDir 透传（刀1）、目录 watcher（刀3）、其余一律回到工单32 前行为。
+> 2. **新增**：`piChat.runPrompt({name, prompt, timeoutMs?}) → Promise<{ok, reason?, error?}>`——按 name 创建/复用**无头会话**（不占页签、进列表）、settle 时 resolve、timeoutMs 到点自动 abort（reason:"timeout"）、busy 同名拒收（reason:"busy"）；`piChat.abortSession({name}) → {ok}`。用户点开（openSession）即挂现成 live 链路实时渲染，跑完天然续聊。
+> 3. 交接文档已落（契约 v2）；ops-panel 侧按其 §三 改（不在本单）。
+>
+> **验证**：compile 全绿 + 全套 test 回归 + **拆除零残留**（grep `externalWriting|followActive|extBadge|ext-badge|externalAppend|externalState|followDelta` 全库零命中）+ runPrompt 探针（settle resolve / busy 拒收 / timeout 自动 abort 三态）。
+> **边界**：不动 pi 包/vendor；不动会话页 UI 形态；会话落盘审计红线不破；protocol 只增不改的唯一例外=拆消息（v1 契约废弃连带，用户拍板）；每步独立提交。
+> **验收**：契约文档 §四 A-F（B/C 两条即「随时随地看智能体操作」的产品要求）。
+
+### 工单32：外部会话通用接入——openSession/externalWriting 两命令 + 外部写入实时跟随 + 交棒信号（收单存查；跟随/锁/交棒部分已被工单33 拆除，openSession/sessionDir/watcher 保留）
 
 > **【收单】2026-10-29（di-duck-dispatch 全链：施工→独立测试→返修）**：
 > 施工 964d92c（刀1 两命令+sessionDir 透传，sa-1）+ c5fd56b（刀2 跟随/锁/交棒，主会话直施——sa-1 45min 侦察失速被停，用户直令接管）+ 86e67a7（刀3 目录 watcher）；
