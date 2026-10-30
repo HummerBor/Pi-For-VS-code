@@ -18,6 +18,13 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 
 ## 二、pi-vscode 侧改动（工单33，本仓施工）
 
+> **0. 授权层（所有命令的前置，2026-10-29 用户拍板「只有注册过的插件才能接入」）**：
+> VS Code 命令默认谁都能调（executeCommand 不带调用方身份）——控制面**零信任默认**：
+> 1. 客户端一次性注册：`piChat.authorizeClient({ extensionId })` → 原生确认框（列明能力：发 prompt/中止/打开会话）→ 同意则入信任表（globalState 持久）并返回 `{ ok:true, clientToken }`（随机令牌，每客户端一杖）；拒绝 → `{ok:false}`。
+> 2. 以下全部命令一律携带 `{ clientToken }`，表/令牌不匹配 → `{ ok:false, reason:"unauthorized" }`。
+> 3. 逃生门：设置 `piChat.trustedClients: string[]` 预授权（免弹窗）；撤销 = 删条目。
+> 4. 安全口径（诚实）：防误用/防未授权调用，不承诺防同宿主恶意代码（VS Code 扩展信任域固有上限）。
+
 1. **`piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`**
    - 按 `name` 创建或复用会话 → 发 prompt → **agent settle（跑完）时 resolve**；
    - `error`：run 以错误结束时的原因文本；`reason:"timeout"`：`timeoutMs` 到点自动
@@ -35,8 +42,9 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 ## 三、ops-panel 侧改动
 
 1. **llm 步不再 spawn `pi -p`**：改为
-   `const r = await vscode.commands.executeCommand("piChat.runPrompt", { name, prompt, timeoutMs })`
+   `const r = await vscode.commands.executeCommand("piChat.runPrompt", { name, prompt, timeoutMs, clientToken })`
    ——步骤的完成/失败就看 `r.ok / r.error`（替代子进程退出码）。
+   **首次使用先注册**：`piChat.authorizeClient({ extensionId: "local.wechat-ops-panel" })`→ 弹窗同意 → 存好 `clientToken`，之后所有调用携带。
 2. **会话命名沿用**：`name = ops-<垂类>-<日期>-<时间戳>`（与原 `--name` 同值，继续做定位键）。
 3. **「🔎 查看详情」→ `piChat.openSession({ name })`**（无 run 禁用语义不变）。
 4. **停止/超时** → `piChat.abortSession({ name })`（替代 `child.kill`）；`runPrompt` 传
@@ -58,6 +66,7 @@ ops-panel ──runPrompt/abortSession/openSession（命令）──► pi-vscod
 | D | 超时/手动停止 | abortSession 生效；runPrompt resolve（timeout/false） | 双方 |
 | E | 未装 pi-vscode | ops-panel 提示不崩 | ops-panel |
 | F | 多垂类并发跑 | 并行互不干扰（pi 原生多会话） | pi-vscode |
+| G | 未注册/令牌错的调用 | `{ok:false, reason:"unauthorized"}`，零副作用 | pi-vscode |
 
 ## 五、红线（两边）
 

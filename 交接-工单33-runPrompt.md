@@ -1,0 +1,75 @@
+# 交接 · 工单33 runPrompt 驱动契约（下一会话接任入口）
+
+> 2026-10-29 收工交接。接任者先读本文，再读 DIRECTOR.md 工单33 与
+> 《交接-ops-panel-驱动接入.md》（契约 v2，两边改动的唯一口径）。
+
+## 一、当前状态（git 为准，勿信记忆）
+
+| commit | 内容 |
+|---|---|
+| 7a0c7a8 | 契约 v2 文档 + 工单33 签发（含拆除令）；旧《外部会话接入》v1 已删 |
+| 5e6cf1f | **拆除完成**：跟随/锁/交棒机制净删 751 行（验收四连：精确命中×1/零残留 grep/全套回归零回退/diff 逐文件核） |
+| 901747c~353773e | （工单32 时代的热修三连，随拆除大半失效，勿翻案） |
+
+- 本地包：`pi-for-vscode-0.1.57.vsix`（干净版，可验证原功能复原）；版本号随下次提交入库（AGENTS.md 口径）。
+- **保留件**（新架构照用，勿拆）：`piChat.openSession`、sessionCache 的
+  `piChat.sessionDir` 透传、extension.ts 会话目录 watcher（fs.watch + 2s 冷却）。
+- 工作树应为净（交接文档自身除外）；若见残留改动先 `git status` 对账再动。
+
+## 二、下一步施工：工单33 新增段（runPrompt/abortSession）
+
+**目标**（细节以契约 v2 §二为准）：
+
+0. **授权层（前置）**：`piChat.authorizeClient({extensionId})`——原生确认框（列明能力）→
+   同意入信任表（globalState）+发随机 clientToken；runPrompt/abortSession/openSession
+   全部携令牌校验，不匹配 → `{ok:false, reason:"unauthorized"}`；设置
+   `piChat.trustedClients` 预授权逃生门。注意：`authorizeClient` 本身不带令牌
+   （鸡生蛋问题），靠确认框把关；弹窗文案写清对方 extensionId 与能力清单。
+1. `piChat.runPrompt({ name, prompt, timeoutMs? })` → `Promise<{ ok, reason?, error? }>`
+   - 按 `name` 创建/复用**无头会话**（不占页签、进列表、openSession 点开即挂 live）；
+   - **settle 时 resolve**（agent_settled / 错误结束 → `{ok:false, error}`）；
+   - `timeoutMs` 到点自动 abort → `{ok:false, reason:"timeout"}`；
+   - 同名在跑再提交 → `{ok:false, reason:"busy"}`。
+2. `piChat.abortSession({ name })` → `{ok}`（abort 语义）。
+3. ops-panel 侧按契约 v2 §三（不在本仓）。
+
+**实现线索**（省摸底时间）：
+- 复用现有链路：`sendPromptCore`（piCore.ts，prompt 全套语义）、busy/settled 事件
+  （piCore onPiEvent）、`PiCore` 的 post 闸门（GATE_PASS_TYPES）。settle resolve =
+  在 prompt 发出后挂一个「等 settled」的 Promise 桥。
+- 无头会话：每会话一个 PiCore（cores Map，panel.ts ensureCore）——无头即「有 core
+  无 webview」；打开（openSession/openOrFocusSession）时挂上已有 core 即可出 live。
+  注意 panel 的 openOrFocusSession→openEditorTab 链（pendingSessionFile 握手）与
+  claimSession 双开守卫别破坏。
+- name→会话定位已有：extension.ts resolveSessionFile（listSessions 的 name 字段）。
+- 会话落盘审计红线：任何路径禁 `--no-session`（piClient 有焊死拒绝）。
+
+**验证点**：compile 全绿 + 全套 `npm run test:*` 回归 + runPrompt 三态探针
+（settle resolve / busy 拒收 / timeout 自动 abort，放 scripts/probe/，参照被删的
+follow-probe 裸跑姿势：`PiClient.prototype` 调用 + 假对象）+ 授权探针（未注册/令牌错
+拒收零副作用）。
+
+## 三、本周学费（都付过账，别再付）
+
+1. **常驻路径禁重活**：500ms 同步 readdir（46ms×2）曾把 VS Code 整窗钉死——
+   watcher 用事件驱动 + 冷却；渲染用合批；重载只在用户动作时付费。
+2. **Windows CRLF**：edit 工具多行锚点会被 \r\n 卡死——机械批量改动用**脚本 +
+   精确字符串命中恰好 1 次**的校验（`.mjs` 跑完即删）；换行符被搅时用
+   `git show <基线>:<file>` 整文件还原，不修 diff 噪音。
+3. **范围错误比 bug 贵**：工单32 把「点名跟随」做成「全局监听」，启发式误判连锁
+   事故三轮——新功能先问「默认关闭还是常驻」，能点名开启就点名开启。
+4. **多会话并发是 pi 的正常态**（用户实测）：进程内跑 agent ≠ 单线程跑重活
+   （工具是独立进程、模型在远端），别再拿负载论反对进程内方案。
+5. 独立测试段（di-duck-dispatch）抓过 P1（compact 绕锁）——新活照走「施工→独立
+   测试→返修」流水线，任务书五段自包含（该技能在 .pi/skills/di-duck-dispatch/）。
+
+## 四、验收（契约 v2 §四 A-F，收单对照）
+
+A 垂类点开始 runPrompt 跑完 resolve、B 运行中打开即 0 延迟实时流、C 跑完页面续聊、
+D 超时/停止 abort 生效、E 未装 pi-vscode 提示不崩（ops-panel 侧）、F 多垂类并发互扰。
+
+## 五、口令（本仓惯例）
+
+- 用户发 `2`/`222` → 施工会话按 DIRECTOR.md 工单区开工；`1`/`111` → 总监验收循环。
+- 施工回报写 BUILDER.md（直令留痕 ✅活14）；工单里的「三处查留证」勿重查。
+- git 只本地 commit，push 等用户明示；禁 amend（并行会话事故先例）。
