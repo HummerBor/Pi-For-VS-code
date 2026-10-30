@@ -4,6 +4,7 @@ import { join } from "path";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "../core/protocol";
 import { loadPiSdk } from "./piSdk";
 import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
+import { ensureSubagentHarness } from "./ensureSubagentHarness";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
 let dbg: (s: string) => void = () => {};
@@ -81,6 +82,13 @@ function createServices(sdk: any, cwd: string): Promise<any> {
     // 显示名/分类归位钩子（subagentNames.ts 头注释）：resourceLoaderOptions.extensionFactories
     // 是 SDK 给宿主的内联扩展口（sdk.md「Extensions」）——pi 内容零改动，调用名在工具执行前
     // 归位 pi 注册分类，展示名走台账（2026-09-24 两层分离拍板）
+    // 内置 subagent 扩展同步（2026-10-30）：必须先于 services 创建——本次创建就会扫
+    // extensions 目录加载 harness（详见 ensureSubagentHarness.ts 头注释）
+    try {
+      ensureSubagentHarness(sdk.getAgentDir());
+    } catch {
+      /* 观测面不阻会话创建 */
+    }
     return sdk.createAgentSessionServices({
       cwd,
       modelRuntime,

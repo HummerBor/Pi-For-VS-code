@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "note": "随插件分发的 subagent harness（内置，2026-10-30 用户拍板）。源码归属 pi-vscode 仓 harness/subagent/，激活时同步到 <agentDir>/extensions/subagent（见 src/pi/ensureSubagentHarness.ts）。改动后 bump version 才会覆盖已安装副本。"
+}

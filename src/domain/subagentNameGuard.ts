@@ -83,7 +83,9 @@ export function makeSubagentNameGuard(sdk: any, cwd: string): { name: string; fa
         // 先记台账（原名），再归位改写——顺序反了台账里就是分类名了
         noteDispatchNames(input);
         const valid = validNamesFor(input.agentScope, sdk, cwd);
-        const fallback = valid.includes("worker") ? "worker" : valid[0] ?? null;
+        // 内置 worker 兜底（2026-10-30）：词表为空的新项目也归位到内置 worker
+        // （harness agents.ts BUILTIN_AGENTS），否则直通 Unknown agent「找不到子 agent」
+        const fallback = valid.includes("worker") ? "worker" : (valid[0] ?? "worker");
         rewriteSubagentInput(input, (n) => classifyDispatchName(n, valid, fallback));
       });
     },
