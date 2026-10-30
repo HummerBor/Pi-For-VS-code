@@ -440,6 +440,19 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     wholeFile: "整个文件",
     chipOff: "× 点击不附带",
     chipOn: "✓ 点击附带",
+    // ── 工单33 客户端授权（控制面零信任：注册制 + 令牌，原生弹窗双语）──
+    caAuthAsk: "插件「{n}」请求接入 piChat 控制面，能力：发送 prompt / 中止会话 / 打开会话。同意仅此一次弹窗，之后调用静默。",
+    caAuthAllow: "同意并授权",
+    caAuthDeny: "拒绝",
+    caReRegisterAsk: "插件「{n}」已注册过。重新注册将吊销旧令牌、签发新令牌（吊旧杖换新杖），确定？",
+    caReplaceBtn: "吊旧换新",
+    caRenewAsk: "插件「{n}」的接入令牌已过期（90 天限期）。续权后令牌不变、有效期再延 90 天，是否续权？",
+    caRenewBtn: "续权",
+    caRevokeAsk: "撤销插件「{n}」的 piChat 接入授权？其令牌立即失效。",
+    caRevokeBtn: "撤销授权",
+    caAuthNotify: "已授权插件「{n}」接入 piChat 控制面",
+    caRevokeNotify: "已撤销插件「{n}」的 piChat 接入授权",
+    caExtMissing: "未找到该扩展，拒绝授权",
   },
 
   en: {
@@ -852,6 +865,19 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     wholeFile: "whole file",
     chipOff: "× Click to exclude",
     chipOn: "✓ Click to attach",
+    // ── t33 client authorization (zero-trust control plane: registration + token) ──
+    caAuthAsk: "Extension \"{n}\" requests piChat control-plane access. Capabilities: run prompts / abort sessions / open sessions. One-time confirmation; later calls are silent.",
+    caAuthAllow: "Authorize",
+    caAuthDeny: "Deny",
+    caReRegisterAsk: "Extension \"{n}\" is already registered. Re-registering revokes the old token and issues a new one. Continue?",
+    caReplaceBtn: "Replace token",
+    caRenewAsk: "The access token for \"{n}\" has expired (90-day limit). Renewing keeps the same token and extends it 90 more days. Renew?",
+    caRenewBtn: "Renew",
+    caRevokeAsk: "Revoke piChat access for \"{n}\"? Its token stops working immediately.",
+    caRevokeBtn: "Revoke",
+    caAuthNotify: "Authorized \"{n}\" for piChat control-plane access",
+    caRevokeNotify: "Revoked piChat access for \"{n}\"",
+    caExtMissing: "Extension not found; authorization denied",
   },
 };
 
@@ -920,4 +946,7 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "enterKey", "authPicker", "authDetail", "delAuthAsk", "delete",
   // 模型 / 思考 / pi 扩展 UI 请求
   "ctx", "modelPicker", "thinkingPicker", "pleaseSelect", "confirm", "pleaseInput",
+  // 工单33 客户端授权弹窗（原生弹窗一律双语，同 nsConfirm 口径）
+  "caAuthAsk", "caAuthAllow", "caAuthDeny", "caReRegisterAsk", "caReplaceBtn",
+  "caRenewAsk", "caRenewBtn", "caRevokeAsk", "caRevokeBtn", "caExtMissing",
 ]);

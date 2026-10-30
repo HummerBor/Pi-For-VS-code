@@ -8,6 +8,7 @@ import { listSessions, invalidateListMemo } from "./sessionCache";
 import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
+import { ClientAuth } from "./clientAuth";
 
 /** openSession 命令入参 file/name 解析（file 优先；name 兜底扫列表 name 字段——`--name`
  *  写进 session_info 的那个名）。解析不出返回 null。存疑记录：name 匹配用精确相等（外部
@@ -36,6 +37,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
   const ws0 = vscode.workspace.workspaceFolders?.[0];
   if (ws0) prewarmPiServices(ws0.uri.fsPath);
   const version = ctx.extension.packageJSON.version;
+  // 工单33：授权层单例（信任表落 globalState，命令注册见下方 subscriptions.push 块）
+  const clientAuth = new ClientAuth(ctx.globalState);
   // 新建编辑器标签的初始题（2026-10-20 用户拍板「新建会话由 "pi" 改成 "新会话"」）：
   // 与 panel 的 tabMeta 初值同源同语（tabUntitled），首帧 state 到达前标签就是最终文案；
   // 同时 panel.syncTabMeta 有补写兑底（初值分歧不等 titleDirty），两头夹住不回退 "pi"
@@ -141,13 +144,30 @@ export function activate(ctx: vscode.ExtensionContext): void {
   );
   ctx.subscriptions.push(
     vscode.commands.registerCommand("piChat.openInEditor", () => openEditorTab()),
+    // 工单33 刀1：控制面授权层（零信任注册制 + 令牌，实现见 clientAuth.ts 文件头）。
+    // 纯程序接口（不进 package.json contributes，不污染命令面板）。
+    // authorizeClient：首次弹窗注册（一生一次）/ 重注册=吊旧杖换新杖（绝不静默重发）；
+    // revokeClient：弹窗确认后吊销。授权动作必发通知留痕（弹窗可回查）。
+    vscode.commands.registerCommand(
+      "piChat.authorizeClient",
+      (args?: { extensionId?: string; caps?: string[] }) => clientAuth.authorizeClient(args)
+    ),
+    vscode.commands.registerCommand(
+      "piChat.revokeClient",
+      (args?: { extensionId?: string }) => clientAuth.revokeClient(args)
+    ),
     // 工单32 刀1：通用外部接入命令（纯程序接口，不进 package.json contributes，不污染命令面板）。
     // openSession：打开/聚焦外部会话。返回 {ok, reason?}——not-found 在命令入口先查
     // （existsSync/列表命中），openOrFocusSession 的 pendingSessionFile 握手后失败走 notice
     // 不改返回值（返回值只代表「已路由」，语义写进 REPORT-t32）。openInEditor 原样保留
+    // 工单33：所有控制面命令（runPrompt/abortSession/openSession）携令牌校验，
+    // 校验必须是 handler 第一行——reject 早于任何副作用（验收场景 G 零副作用）。
+    // 内部 UI（会话列表/⏱ 选择器）走 openOrFocusSession 直调，不绕令牌门也不会被误伤。
     vscode.commands.registerCommand(
       "piChat.openSession",
-      async (args?: { file?: string; name?: string }) => {
+      async (args?: { file?: string; name?: string; clientToken?: string }) => {
+        const a = await clientAuth.verify(args?.clientToken, "piChat.openSession");
+        if (!a.ok) return { ok: false, reason: "unauthorized" };
         const file = await resolveSessionFile(args);
         if (!file || !fs.existsSync(file)) return { ok: false, reason: "not-found" };
         await ChatPanelProvider.openOrFocusSession(file);
