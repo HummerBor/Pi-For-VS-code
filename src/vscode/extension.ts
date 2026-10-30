@@ -8,7 +8,7 @@ import { listSessions, invalidateListMemo } from "./sessionCache";
 import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
-import { setExternalWriting, setExternalWritingName } from "../core/externalWriting";
+import { setExternalWriting, setExternalWritingName, requestFollow } from "../core/externalWriting";
 
 /** 工单32 刀1：openSession/externalWriting 两命令的入参 file/name 解析（file 优先；
  *  name 兜底扫列表 name 字段——`--name` 写进 session_info 的那个名）。解析不出返回 null。
@@ -151,6 +151,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
       async (args?: { file?: string; name?: string }) => {
         const file = await resolveSessionFile(args);
         if (!file || !fs.existsSync(file)) return { ok: false, reason: "not-found" };
+        requestFollow(file); // 武装制：openSession 打开的会话才进跟随机制（普通列表点开不碰）
         await ChatPanelProvider.openOrFocusSession(file);
         return { ok: true };
       }

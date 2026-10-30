@@ -3,7 +3,7 @@ import * as fs from "fs";
 import { join } from "path";
 import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from "../core/protocol";
 import { loadPiSdk } from "./piSdk";
-import { isExternalWriting } from "../core/externalWriting";
+import { isExternalWriting, isFollowRequested } from "../core/externalWriting";
 import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
@@ -297,6 +297,9 @@ export class PiClient {
   /** 最近一次本地会话事件时间：工具执行间隔/收尾迟到写入（subagent 终帧等）靠这个
    *  窗口归本地，防误判外部（窗口 = FOLLOW_QUIET_MS，2026-10-29 误锁修复同批） */
   private followLastLocalEventAt = 0;
+  /** 武装制（2026-10-29 结构修正）：跟随机制只服务被点名的会话——externalWriting 信号
+   *  或 openSession 打开才武装；普通列表点开的会话不碰任何外部写者判定（原功能隔离） */
+  private followArmed = false;
   private followActive = false;
   static readonly FOLLOW_TICK_MS = 500;
   static readonly FOLLOW_QUIET_MS = 10_000; // mtime 静默阈值（派单 N=10s，启发式兑底）
@@ -309,6 +312,7 @@ export class PiClient {
     this.followOffset = 0; // 文件不存在（新会话首条消息前）时=0，出现后首笔按本地写窗口归位
     this.followDelta = [];
     this.followLastOwnWriteAt = 0;
+    this.followArmed = false; // 新挂载默认未武装，等 externalWriting 信号或 followRequest 点名
     // 开闸即同步判（不能等 tick）：piCore 打开会话后马上跑 applyModelMemory（写点），
     // 等 500ms tick 就晚了——registry 命中必须在 switchSession resolve 前把 externalState(true)
     // 发出去。mtime 可疑不在此判（delta=0 时自己的刚写也 fresh）——堵写点走 piCore
@@ -342,6 +346,14 @@ export class PiClient {
   private followTick(): void {
     const file = this.followFile;
     if (!file) return;
+    // 武装制闸门：未武装 = 原行为（纯内存判定，零 IO 零副作用零锁）。只有两种入口武装：
+    // externalWriting 信号（registry）或 openSession 的 followRequest——自己的普通会话
+    // （列表点开）永远不碰外部写者判定，原功能在结构上不可能被波及（2026-10-29 结构修正）
+    if (!this.followArmed) {
+      const nm0 = this.session?.sessionName;
+      if (!isExternalWriting(file, nm0) && !isFollowRequested(file)) return;
+      this.followArmed = true; // 武装后本拍直接落入下方完整机制（registry→锁、request→跟随不锁）
+    }
     let st: fs.Stats;
     try { st = fs.statSync(file); } catch { return; } // 文件未创建（新会话首条消息前）
     const now = Date.now();

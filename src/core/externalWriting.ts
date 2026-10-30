@@ -21,6 +21,18 @@ function normPath(p: string): string {
   return p.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+/** 跟随请求登记（2026-10-29 结构修正：武装制）：piChat.openSession 打开的会话才
+ *  进入跟随机制。普通列表点开 = 100% 老路径，不碰任何外部写者判定——原功能隔离。 */
+const followRequests = new Set<string>();
+
+export function requestFollow(file: string): void {
+  followRequests.add(normPath(file));
+}
+
+export function isFollowRequested(file: string | null | undefined): boolean {
+  return !!file && followRequests.has(normPath(file));
+}
+
 /** 外部写者登记/注销（writing:false = 交棒信号）。路径按规范化 key 存取 */
 export function setExternalWriting(file: string, writing: boolean): void {
   const k = normPath(file);
@@ -53,4 +65,5 @@ export function isExternalWriting(file: string | null | undefined, name?: string
 export function _resetExternalWritingForTest(): void {
   holders.clear();
   holderNames.clear();
+  followRequests.clear();
 }

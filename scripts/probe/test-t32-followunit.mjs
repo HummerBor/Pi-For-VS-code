@@ -67,6 +67,7 @@ const mkTick = (opts = {}) => {
     followDelta: opts.delta ?? [],
     followActive: opts.active ?? false,
     followLastOwnWriteAt: 0,
+    followArmed: opts.armed !== false, // 默认武装（用例测的是机制内部）；armed:false 专测闸门
     session: { isStreaming: !!opts.streaming, sessionName: opts.name ?? null },
     events: { emit: (ev, arg) => emitted.push([ev, arg]) },
   };
@@ -76,6 +77,13 @@ const mkTick = (opts = {}) => {
   return { c, emitted };
 };
 _resetExternalWritingForTest();
+
+// 分支 ⓪：武装制闸门——未武装且无信号/请求 → 完全不动（原功能隔离）
+{
+  const { c, emitted } = mkTick({ armed: false });
+  c.followTick();
+  ok(c.followArmed === false && emitted.length === 0, "⓪: 未武装+无信号 → 什么都不做（老路径零开销）");
+}
 
 // 分支 A：registry 命中（delta=0 也锁）
 {
