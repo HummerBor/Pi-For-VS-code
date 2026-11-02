@@ -1,4 +1,4 @@
 {
-  "version": 7,
-  "note": "v7: 台账记 parentSession（派单方会话文件）——左侧列表把子会话挂在对应主会话下（父子分组）。v6: 同步单落独立会话+台账+handle。v5: 职务·随机代号。v4: 未注册名 worker 兜底。v3: --name 会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才覆盖已安装副本。"
+  "version": 8,
+  "note": "v8: 子会话按项目分桶 subagents/<项目slug>/<handle>/（与 pi 的 sessions/<slug>/ 同规则，老单旧路径继续可读）。v7: 台账记 parentSession。v6: 同步单落独立会话+台账+handle。v5: 职务·随机代号。v4: 未注册名 worker 兜底。v3: --name 会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才覆盖已安装副本。"
 }

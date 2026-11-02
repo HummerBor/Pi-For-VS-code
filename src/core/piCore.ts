@@ -1087,14 +1087,21 @@ export class PiCore {
         }
         const h = String(m.handle ?? "");
         if (!/^sa-\d+$/.test(h)) break; // 只认句柄（call_* 是同步调用，无独立子会话）
-        const subDir = path.join(dir, "sessions", "subagents", h);
+        // 目录优先取台账 sessionDir（2026-11-02 按项目分桶后不再能拼死路径：
+        // 新单在 subagents/<项目slug>/<handle>/，老单在 subagents/<handle>/）；
+        // 台账读不到才退回旧平铺布局（兑底，不让无台账的边角直接失效）
+        let ledgerRow: ReturnType<typeof readLedgerRows>[number] | undefined;
+        try {
+          ledgerRow = readLedgerRows(dir).find((r) => r.handle === h);
+        } catch { /* 台账不可读 */ }
+        const subDir = ledgerRow?.sessionDir || path.join(dir, "sessions", "subagents", h);
         // 可读标题（2026-11-02 用户实测「标签只有 11-02 11:54，认不出是哪个任务」）：
         // 子会话 jsonl 里 name 为空 → 面板标题 fallback 成文件名时间戳。台账有 agent+task，
         // 拼成「worker · 只回复两个字：完成」当标签题——与浮窗行同口径，一眼能对上。
         // 台账读不到就不传（面板照旧 fallback，不阻主链路）
         let tabTitle: string | undefined;
         try {
-          const row = readLedgerRows(dir).find((r) => r.handle === h);
+          const row = ledgerRow;
           const task = String(row?.task ?? "").replace(/\s+/g, " ").trim();
           const agent = String(row?.agent ?? "");
           if (agent || task) {

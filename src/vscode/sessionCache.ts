@@ -200,9 +200,21 @@ async function scanSubagentSessions(): Promise<PiSessionProjection[]> {
     return []; // 还没派过子 agent
   }
   const out: PiSessionProjection[] = [];
-  for (const h of names) {
-    if (!/^sa-\d+$/.test(h)) continue; // 只认句柄目录（runs/ 是台账，不是会话）
-    const dir = join(base, h);
+  // 两种布局共存（2026-11-02 按项目分桶）：新 `subagents/<项目slug>/<handle>/`，
+  // 旧 `subagents/<handle>/` 继续可读——老单不迁移（文件是审计真值，不动）
+  const handleDirs: string[] = [];
+  for (const n of names) {
+    const p = join(base, n);
+    if (/^sa-\d+$/.test(n)) handleDirs.push(p);
+    else if (n.startsWith("--")) {
+      try {
+        for (const h of fs.readdirSync(p)) if (/^sa-\d+$/.test(h)) handleDirs.push(join(p, h));
+      } catch {
+        /* 空桶/权限：跳过 */
+      }
+    }
+  }
+  for (const dir of handleDirs) {
     let cands: { f: string; t: number }[];
     try {
       cands = fs
@@ -278,9 +290,10 @@ export async function subagentParentMap(): Promise<Map<string, string>> {
   return out;
 }
 
-/** 从子会话文件路径反推句柄（.../subagents/sa-9/xxx.jsonl → sa-9） */
+/** 从子会话文件路径反推句柄（.../subagents/[<slug>/]sa-9/xxx.jsonl → sa-9，
+ *  兼容 2026-11-02 按项目分桶后的两层布局） */
 export function handleFromSubPath(file: string): string | undefined {
-  const m = /[\\/]subagents[\\/](sa-\d+)[\\/]/.exec(file);
+  const m = /[\\/]subagents[\\/](?:[^\\/]+[\\/])?(sa-\d+)[\\/]/.exec(file);
   return m?.[1];
 }
 

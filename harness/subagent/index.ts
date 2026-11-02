@@ -396,7 +396,7 @@ async function runSingleAgent(
 	// 项目会话目录 → 混进左侧主列表 ②没有子会话文件 → 点行只能浮窗下钻，跟异步单
 	// 行为分裂）。分配同一个 sa-N 序号池 + 每单独立目录，与异步单同构。
 	const handle = `sa-${++asyncSeq}`;
-	const runDir = runDirFor(handle);
+	const runDir = runDirFor(handle, cwd ?? defaultCwd); // 按项目分桶（2026-11-02）
 	try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 目录失败在 spawn 侧会暴露 */ }
 	args.push("--session-dir", runDir);
 	const inheritsDispatchConfig = !agent.model;
@@ -592,6 +592,8 @@ interface AsyncRun {
 	agentScope: AgentScope;
 	task: string;
 	model?: string;
+	/** 本单会话目录（按项目分桶后不能靠 runDirFor 重算——cwd 在 run 上不总齐备） */
+	runDir?: string;
 	/** 派单方会话文件（左侧列表父子分组用，2026-11-02） */
 	parentSession?: string;
 	startedAt: number;
@@ -642,7 +644,7 @@ function startAsyncRun(
 			model: run.model,
 			task: run.task,
 			cwd: opts.cwd,
-			sessionDir: runDirFor(run.handle),
+			sessionDir: run.runDir ?? runDirFor(run.handle),
 			// 父会话路径（2026-11-02）：左侧列表按它把子会话挂到对应主会话下
 			parentSession: run.parentSession,
 			pid: proc.pid,
@@ -897,7 +899,7 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 	// frames.jsonl，piCore 重放读它（appendEntry 仍发事件，两路并行互为备份）
 	try {
 		fs.appendFileSync(
-			path.join(runDirFor(run.handle), "frames.jsonl"),
+			path.join(run.runDir ?? runDirFor(run.handle), "frames.jsonl"),
 			JSON.stringify({ handle: run.handle, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, detail: asyncDetails(run) }) + "\n",
 		);
 	} catch {
@@ -1077,6 +1079,7 @@ export default function (pi: ExtensionAPI) {
 					agentScope,
 					task: params.task!,
 					model: agent.model,
+					runDir,
 					parentSession: ctx.sessionManager?.getSessionFile?.(),
 					startedAt: Date.now(),
 					status: "running",
@@ -1111,7 +1114,7 @@ export default function (pi: ExtensionAPI) {
 				// 会话落盘（P0-1，2026-10-30）：每单独立 --session-dir，handle ↔ 子会话目录
 				// 一一对应（台账记指针）——子 agent 记录不再绑父会话，「新开项目找不到
 				// 子 agent」的治本。禁 --no-session 红线见 runSingleAgent 处注释。
-				const runDir = runDirFor(handle);
+				const runDir = runDirFor(handle, params.cwd ?? ctx.cwd); // 按项目分桶（2026-11-02）
 				fs.mkdirSync(runDir, { recursive: true });
 				cliArgs.push("--session-dir", runDir);
 				let tmpPromptDir: string | null = null;

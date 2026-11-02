@@ -49,8 +49,19 @@ export function subagentsBase(): string {
 	return path.join(getAgentDir(), "sessions", "subagents");
 }
 
-export function runDirFor(handle: string): string {
-	return path.join(subagentsBase(), handle);
+/** 子会话落盘目录。2026-11-02 用户拍板按项目分桶：`subagents/<项目slug>/<handle>/`——
+ *  之前全局平铺在 subagents/ 下，多项目并行派单时 sa-N 混在一个池子里，用户按项目
+ *  归档/清理/备份无从下手。slug 口径跟 pi 自己的会话目录同规则（`:` 与分隔符换 `-`，
+ *  两侧包 `--`），用户一眼能跟 pi 的 sessions/--d--xxx--/ 对上。
+ *  不传 cwd 时退回旧平铺路径（只给迁移期/兼容调用用，新派单一律带 cwd）。 */
+export function runDirFor(handle: string, cwd?: string): string {
+	if (!cwd) return path.join(subagentsBase(), handle);
+	return path.join(subagentsBase(), projectSlug(cwd), handle);
+}
+
+/** 项目分桶名（与 pi 的 sessions/<slug>/ 同规则） */
+export function projectSlug(cwd: string): string {
+	return "--" + path.resolve(cwd).replace(/[:\/]/g, "-") + "--";
 }
 
 function runsDir(): string {
