@@ -271,6 +271,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  core.lang 只在创建时同步：语言切换走 applyHtml 重载 webview，webviewReady 握手后
    *  重绘链路经核心；后台标签保持旧语言到下次创建——可接受，刀3 会话语义再按标签收口 */
   private ensureCore(tabId: string): PiCore {
+    dbgLog("[装配] ensureCore " + tabId);
     let core = this.cores.get(tabId);
     if (!core) {
       core = new PiCore(this.buildCaps(), this.buildUi(), (msg) => this.pipeFromCore(msg, tabId), this.version);
@@ -546,10 +547,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 视图装配（刀1 抽出）：resolveWebviewView（侧边栏）与刀3 的编辑器 WebviewPanel 共用——
    *  HTML/消息路由/编辑器选区监听/预热全在这里接一次，容器只是外壳 */
   private attachView(view: HostView): void {
+    dbgLog("[装配] attachView enter"); // [装配] 埋点，理由见 piCore ctor 处注释
     this.view = view;
     // retainContextWhenHidden：切到其他侧边栏时保活 webview，回来不重建、不丢会话
     view.webview.options = { enableScripts: true };
     this.applyHtml();
+    dbgLog("[装配] attachView html set");
     // 背景图/透明度配置变更 → 重置 webview（webviewReady 握手会自动重绘历史）
     const bgWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("piChat.backgroundImage") || e.affectsConfiguration("piChat.backgroundOpacity")) {
@@ -581,6 +584,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 建视图时会抢在标签清单前面。恒启动（会话必须落盘，审计红线；原「!== ephemeral」
       // 门随档位判死移除）
     }
+    dbgLog("[装配] attachView wiring"); // 此行之后无「in」= 消息死在 webview→接线之间
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
       // A 刀诊断日志：panel 级拦截消息（webviewReady/tab*）不进 core.onWebviewMessage，
       // 这里补留痕——否则 in 时间线有盲区（清单核对教训：漏一条就少一个锚点）

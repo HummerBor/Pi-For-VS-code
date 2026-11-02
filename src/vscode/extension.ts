@@ -136,6 +136,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.window.registerWebviewPanelSerializer("piChat.editorPanel", {
       deserializeWebviewPanel: async (panel, state) => {
         const tabKey = (state as { tabKey?: string } | undefined)?.tabKey;
+        dbgAppend("[装配] deserialize tabKey=" + String(tabKey ?? "none")); // [装配] 埋点，理由见 piCore ctor 处注释
         panel.iconPath = tabIcon; // 重启恢复的标签同样要图标（iconPath 不进 webview state）
         const inst = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version, panel, tabKey);
         inst.attachEditorPanel();

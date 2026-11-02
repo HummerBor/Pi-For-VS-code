@@ -254,6 +254,10 @@ export class PiCore {
     post: (msg: HostToWebview) => void,
     private readonly version: string
   ) {
+    // [装配] 链路埋点（2026-11-02 boot 杀手教训）：那轮 webviewReady 零留痕、装配日志零输出，
+    // 死亡点无从下手——deserialize→attachView→ensureCore→PiCore ctor 四点留痕把断点钉到环。
+    // 纯增量不改行为，排查期一过也别删（下次 boot 疑案直接省一轮取证）
+    dbgAppend("[装配] PiCore ctor");
     this.rawPost = post;
     // 工单24：出口闸门——所有 this.post 调用点零改动，分流集中在这一处
     this.post = (msg) => {
