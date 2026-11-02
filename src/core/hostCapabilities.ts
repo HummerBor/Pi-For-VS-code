@@ -52,6 +52,9 @@ export interface HostCapabilities {
   /** agent 目录（getAgentDir，~/.pi/agent）：subagent 台账读取用（段 3）。可选：
    *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
   getAgentDir?(): string | null;
+  /** 子 agent 终态时通知宿主刷新列表（2026-11-02）：左侧「主会话→子会话」嵌套靠它
+   *  自动出现，不用用户手点刷新。可选：不实现就不刷（核心不依赖） */
+  onSubagentSettled?(): void;
   /** 会话文件另开一个页签展示（openOrFocusSession 语义：新页签，绝不顶当前会话）。
    *  可选：宿主不支持时核心静默降级（子 agent 展开回看不可用）。
    *  title 可选：子会话没有 pi 生成的会话名（jsonl name 为空），不传就 fallback 成文件名

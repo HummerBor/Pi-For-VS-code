@@ -384,6 +384,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       getAgentDir: () => getAgentDirSync(),
       // 子 agent 展开回看另开页签（2026-11 用户反馈）：不顶当前会话
       openSessionInTab: (file, title) => void ChatPanelProvider.openOrFocusSession(file, title),
+      // 子 agent 终态 → 左侧列表刷新（嵌套行/未归属组随之更新，2026-11-02）
+      onSubagentSettled: () => notifySessionsChanged(),
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
         vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
       showInputBox: async (options) => vscode.window.showInputBox(options),

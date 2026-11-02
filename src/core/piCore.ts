@@ -2146,6 +2146,8 @@ export class PiCore {
               startAt: rec.startAt,
               endAt: rec.endAt,
             });
+            // 终态 → 左侧列表刷新（2026-11-02：主会话下多一行子会话，不刷就看不见）
+            if (data!.status !== "running") this.caps.onSubagentSettled?.();
           }
           // 台账刷新（段 3）：entry 帧后同步状态真值（读盘极轻）；kill 不发 entry，由
           // tool_execution_end 兜底
@@ -2211,6 +2213,8 @@ export class PiCore {
               startAt: rec.startAt,
               endAt: rec.endAt,
             });
+            // 终态 → 左侧列表刷新（同步单同口径，2026-11-02）
+            this.caps.onSubagentSettled?.();
           } else {
             if (finalSnap && hm && !this.subagentRuns.has(hm[0])) {
               // entry 帧没来的边角：终态归位句柄行（有 entry 留存时不动，终帧是真值）
