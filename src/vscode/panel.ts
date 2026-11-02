@@ -372,6 +372,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
       getAgentDir: () => getAgentDirSync(),
+      // 子 agent 展开回看另开页签（2026-11 用户反馈）：不顶当前会话
+      openSessionInTab: (file) => void ChatPanelProvider.openOrFocusSession(file),
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
         vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
       showInputBox: async (options) => vscode.window.showInputBox(options),

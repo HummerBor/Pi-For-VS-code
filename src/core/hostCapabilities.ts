@@ -52,4 +52,7 @@ export interface HostCapabilities {
   /** agent 目录（getAgentDir，~/.pi/agent）：subagent 台账读取用（段 3）。可选：
    *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
   getAgentDir?(): string | null;
+  /** 会话文件另开一个页签展示（openOrFocusSession 语义：新页签，绝不顶当前会话）。
+   *  可选：宿主不支持时核心静默降级（子 agent 展开回看不可用） */
+  openSessionInTab?(file: string): void;
 }

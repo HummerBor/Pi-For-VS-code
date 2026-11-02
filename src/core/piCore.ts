@@ -104,6 +104,9 @@ export class PiCore {
   /** 本轮 agent 运行起点（agent_start 时记录，settled 时算实测耗时）；0=无运行 */
   private runStartTs = 0;
   private lastSessionFile: string | null = null;
+  /** 本会话见过的子 agent 句柄（重放 + 实时 entry 累积）：台账行按它收口——没派过
+   *  子 agent 的会话一行台账都不给（2026-11 用户实测「没有子 agent 的会话莫名其妙有了」） */
+  private subagentHandles = new Set<string>();
   /** 提前认领的会话文件（跨实例双开守卫的「提前量」，2026-10-22 用户实测同一会话
    *  开两份）：真值 lastSessionFile 要等 refreshState 回填才有值，boot 链上这段空窗
    *  长达数秒（services 扫描）——期间 findHolder 失明，别的实例点同一会话就开出第二份
@@ -676,7 +679,11 @@ export class PiCore {
     try {
       const dir = this.caps.getAgentDir?.();
       if (!dir) return;
-      this.post({ type: "subagentLedger", rows: readLedgerRows(dir) });
+      // 台账是全局的，展示必须跟会话走（2026-11 用户实测反馈）：按本会话 handle 集过滤
+      this.post({
+        type: "subagentLedger",
+        rows: readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle)),
+      });
     } catch {
       /* ignore */
     }
@@ -738,10 +745,12 @@ export class PiCore {
             if (!h) continue;
             frame = { detail: det, final: true, ...(rec.timestamp ? { endAt: Date.parse(rec.timestamp as string) || undefined } : {}) };
           }
+          this.subagentHandles.add(h); // 台账收口：本会话 handle 集
           order++;
           const prev = finals.get(h);
           if (!prev || frame.final) finals.set(h, { frame, order });
         }
+        this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
         for (const [h, { frame }] of ordered) {
           const snap = subagentSnapshot(frame.detail);
@@ -988,7 +997,11 @@ export class PiCore {
             .filter((f) => f.endsWith(".jsonl"))
             .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
             .sort((a, b) => b.t - a.t);
-          if (cands.length) await this.openSessionFile(path.join(dir, cands[0].f));
+          if (cands.length) {
+            // 另开页签（2026-11 用户反馈「打开应该另开一个 tab」）：绝不走 openSessionFile——
+            // 那是就地换会话，会顶掉当前面板
+            this.caps.openSessionInTab?.(path.join(dir, cands[0].f));
+          }
           else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
         } catch (err) {
           this.post({ type: "notice", text: this.L.openSessionFileFail + String((err as Error)?.message ?? err) });
@@ -1983,6 +1996,7 @@ export class PiCore {
           | undefined;
           const asyncSnap = data?.handle ? subagentSnapshot(data.detail) : null;
           if (asyncSnap && data!.handle) {
+            this.subagentHandles.add(data!.handle); // 台账收口：实时 handle 也入集
             // 异步运行计时由扩展随 entry 带来（扩展侧 spawn 时起表，比宿主首见准）
             const rec = this.trackSubagentRun(data!.handle, data!.detail);
             if (typeof data!.startedAt === "number") rec.startAt = data!.startedAt;
