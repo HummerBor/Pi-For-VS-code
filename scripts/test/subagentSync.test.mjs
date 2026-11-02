@@ -8,7 +8,7 @@ import assert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { syncSubagentHarness } from "../out/pi/ensureSubagentHarness.js";
+import { syncSubagentHarness } from "../../out/pi/ensureSubagentHarness.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sa-sync-"));
 const agentDir = path.join(tmp, "agent");

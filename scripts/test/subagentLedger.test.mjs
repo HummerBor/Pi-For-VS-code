@@ -5,7 +5,7 @@ import assert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readLedgerRows } from "../out/core/subagentLedger.js";
+import { readLedgerRows } from "../../out/core/subagentLedger.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sa-ledger-"));
 const runs = path.join(tmp, "sessions", "subagents", "runs");
