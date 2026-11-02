@@ -332,7 +332,13 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 ): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
+	// 「名字应该可以随便取」（2026-09-24 用户拍板）的 harness 半边（2026-11-02 补齐）：
+	// 面板侧的 subagentNameGuard 只在面板进程里归位名字，子 agent 是独立 spawn 的 pi
+	// 进程——这里不兜底就报 Unknown agent。未注册名 → 按内置 worker 的定义跑，但名字
+	// （展示名/会话名）保留调用方给的原名；回执里注明，拼错名不至于静默误跑。
+	const registered = agents.find((a) => a.name === agentName);
+	const agent = registered ?? agents.find((a) => a.name === "worker");
+	const displayName = agentName; // 原名不论是否注册都当显示名（会话名/浮窗行同口径）
 
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
@@ -356,7 +362,7 @@ async function runSingleAgent(
 	// pi 的会话名住 session_info.name，CLI 原生 --name 写它；面板标题与 pi 原生 Resume 列表
 	// 都优先显示 name（session.name ?? firstMessage），不写就只剩首条消息/文件名时间戳。
 	// 格式与浮窗行同口径：agent · 任务摘要——一眼能对上哪一行
-	args.push("--name", sessionLabel(agent.name, task));
+	args.push("--name", sessionLabel(displayName, task));
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
@@ -976,7 +982,11 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails("single")([]),
 					};
 				}
-				const agent = agents.find((a) => a.name === params.agent);
+				// 名字随便取的异步半边（同 runSingleAgent 处注释）：未注册名按 worker 定义跑，
+				// 但 handle/会话名/展示名都用调用方给的原名——面板侧 guard 只归位调用参数，
+				// 子进程这边不兜底就 Unknown agent
+				const requestedName = String(params.agent);
+				const agent = agents.find((a) => a.name === requestedName) ?? agents.find((a) => a.name === "worker");
 				if (!agent) {
 					const available = agents.map((a) => a.name).join(", ") || "none";
 					return {
@@ -987,7 +997,7 @@ export default function (pi: ExtensionAPI) {
 				const handle = `sa-${++asyncSeq}`;
 				const run: AsyncRun = {
 					handle,
-					agent: agent.name,
+					agent: requestedName,
 					agentSource: agent.source,
 					agentScope,
 					task: params.task!,
@@ -995,7 +1005,7 @@ export default function (pi: ExtensionAPI) {
 					startedAt: Date.now(),
 					status: "running",
 					result: {
-						agent: agent.name,
+						agent: requestedName,
 						agentSource: agent.source,
 						task: params.task!,
 						exitCode: 0,
@@ -1021,7 +1031,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (agent.tools && agent.tools.length > 0) cliArgs.push("--tools", agent.tools.join(","));
 				// 可读会话名（同 runSingleAgent 处注释）：异步单同样要能在面板/pi Resume 里认出任务
-				cliArgs.push("--name", sessionLabel(agent.name, params.task ?? ""));
+				cliArgs.push("--name", sessionLabel(requestedName, params.task ?? ""));
 				// 会话落盘（P0-1，2026-10-30）：每单独立 --session-dir，handle ↔ 子会话目录
 				// 一一对应（台账记指针）——子 agent 记录不再绑父会话，「新开项目找不到
 				// 子 agent」的治本。禁 --no-session 红线见 runSingleAgent 处注释。

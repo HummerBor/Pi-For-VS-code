@@ -1,4 +1,4 @@
 {
-  "version": 3,
-  "note": "v3: 派单带 --name（agent · 任务摘要）写进 pi session_info.name——面板标题与 pi 原生 Resume 列表不再只剩文件名时间戳（2026-11-02 用户实测）。v2: 帧真值自写 runDir/frames.jsonl（SDK 宿主下 pi.appendEntry custom 帧不落盘，2026-11-02 治本）+ appendEntry 失败不静默。源码归属 pi-vscode 仓 harness/subagent/，激活时同步到 <agentDir>/extensions/subagent，改动 bump version 才会覆盖已安装副本。"
+  "version": 4,
+  "note": "v4: 名字随便取的 harness 半边——未注册 agent 名按内置 worker 定义跑但保留原名（展示名/会话名），面板 guard 只归位调用参数、子进程不兜底就 Unknown agent（2026-11-02 补齐）。v3: 派单带 --name 写 session_info.name。v2: 帧真值自写 frames.jsonl。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才会覆盖已安装副本。"
 }
