@@ -1,44 +1,102 @@
-# 交接 · 子 agent 三件修复 + 面板 boot 杀手（2026-11-02）
+# 结案 · 子 agent 展示链路 + 面板 boot 疑云（2026-11-02 更新）
 
-> 自包含：新会话读完本文即可开工，不需要回看旧会话。仓库 = pi-vscode（d:/work/docs/pi test/pi-vscode）。
+> 本文原名「子agent三件候选与boot杀手」，2026-11-02 会话已把两件都结案并落地，
+> 旧结论（「9cf636f 三件里有一件杀面板 boot」）已被证伪，故整篇重写。自包含。
 
-## 一、现状（已验证，勿再动）
+## 一、结案：面板「发不出消息」不是代码杀的
 
-- 源码树 = commit `00afe29` 状态（用户真机验证面板正常），HEAD=`d9e447f`，compile 全绿。
-- 好态 = `4b54980`（抄 CC UI）+ `a2acf22`（另开页签/台账收口）之上的干净树。
-- harness（`~/.pi/agent/extensions/subagent`，源码归属仓内 `harness/subagent/`）已修好并生效：
-  删 --no-session、落盘、台账（runsLedger.ts）、帧文件（frames.jsonl）、内置 worker。
-  harness 侧不受本交接的回滚影响。
+**旧结论（已证伪）**：`9cf636f` 三件修复里有一件杀面板 boot，所以回滚。
 
-## 二、待办：三件修复（原 commit `9cf636f`，整体回滚在 `00afe29`）
+**真因**：扩展宿主重启（装/更新扩展、重载窗口）后，VS Code 只重新序列化**部分**编辑器
+面板——08:13 那次 `p203` 有完整 `deserialize → attachView → webviewReady`，而同窗口的
+`p226`（用户正在用的）**零装配日志**。扩展侧 provider 实例丢失，webview 却因
+`retainContextWhenHidden` 保活照旧活着：界面在、能打字、消息全进虚空，连点击也全哑
+（点击要发消息给宿主）。「同构建两窗口只活一个」也是这个原因。
 
-用 `git show 9cf636f` 取 diff，三件拆开逐个重上（**一件一提交，pathspec 提交，禁 git add -u**）：
+证据链：`[装配]` 四点埋点（`ff7ed8b`）——`deserialize` / `attachView enter` /
+`attachView html set` / `attachView wiring` / `ensureCore` / `PiCore ctor`。
 
-1. **frames 重放**（B 治本：重启后子 agent 列表还在）：piCore.replaySubagentHistory
-   读 `<agentDir>/sessions/subagents/<handle>/frames.jsonl`（harness 已在写）。
-2. **句柄收口**：replay 的 toolResult 分支从 `m.toolName === "subagent"` 的内容抓 `sa-\d+`
-   进 subagentHandles（不依赖 entry 帧）。
-3. **会话列表剔除子会话**（A：调子 agent 后列表被刷）：sessionCache 过滤 `sessions/subagents/` 路径。
+**为什么旧会话误判**：回滚后「正常了」只是那次重启恰好把面板恢复了；`9cf636f` 与 boot
+无关（本次树里早已没有它，照样复现过一次）。教训：**「回滚后好转」不等于回滚的就是凶手**。
 
-## 三、事故根因线索（三件里有一件杀面板 boot，未定位）
+**已做的处置**（`1c033e8`）：
+- webview 每 3s `ping`，宿主 panel 层直回 `pong`（不进 core），12s 无答挂顶部红条
+- 红条文案直接给恢复动作：关闭标签 → 从左侧列表重开
+- VS Code **没有**「扩展接管孤儿 panel」的 API，所以只能做到「可见化 + 指引」，
+  不能自愈。这是平台边界，别再试图自愈。
 
-- 症状：重载后**webview→宿主方向单向断**——`webviewReady`/`prompt` 在 pi-chat-debug.log
-  零留痕，宿主→webview 的 uiState/render 照常（转录渲染正常、能打字，但发送无声消失）。
-- 同构建两个窗口只活一个（另一个窗口面板正常 boot）；换回好态构建即恢复。
-- 日志：`~/.pi/agent/pi-chat-debug.log`——判据 = 重载后 `in webviewReady` 条数（每面板 1 条）。
-- 疑点排序（未证实）：③ sessionCache（激活路径，跨窗口差异嫌疑）> ① frames 重放块
-  > ② 句柄正则（`\bsa-\d+\b` 对大 content 的 match）。疑点：好态里 webview 源码与 9cf636f
-  完全相同，纯扩展侧代码杀 webview→host 通道的机制没想通——可从「webview state 恢复带
-  旧 tabId → 消息被路由丢弃」方向查（vpost 给所有消息盖 `m.tabId = id`）。
+## 二、本轮落地（bceebc6..67479a7，19 笔）
 
-## 四、怎么继续（三选一）
+### 面板/浮窗
+| 提交 | 内容 |
+|---|---|
+| `ff7ed8b` | 装配链四点埋点（下次 boot 疑案直接钉环，不用猜） |
+| `1c033e8` | 断连心跳 + 红条（幽灵面板可见化） |
+| `bdfe90d` | 双胞胎行 / 疑似失联：冻结壳自带 `exitCode:0` 骗过判壳 → 判壳改吃回执句柄 |
+| `19ba632` | 重放改吃 `frames.jsonl`（SDK 宿主下 `pi.appendEntry` 不落盘），重载后子列表不清零 |
+| `613d2f5` | 终态行点开 → 会话页签（不再浮窗下钻）；运行中仍下钻（双写者红线） |
+| `d47435d` | 用量只留 `ctx + 金额`，名字不再被挤成「研究...」 |
 
-- A（推荐）：三件逐个重上，每件后用户重载 + 发一条消息 + 看日志 webviewReady —— 最多 3 轮钉死。
-- C：离线破案（按第三节疑点顺序查 tabId 路由），定准了装一件带修丁的。
+### 子会话命名与身份
+| 提交 | 内容 |
+|---|---|
+| `8441074` | 页签标题用台账 `agent·task`（子会话 jsonl 里 `name` 空，之前只显示 `11-02 11:54`） |
+| `2732b2a` | harness 派单带 `--name` 写 `session_info.name`（面板页签 / pi 原生 Resume 列表都认） |
+| `f818a78` | 未注册 agent 名按内置 worker 跑但保留原名（子 agent 是独立进程，面板 guard 够不着） |
+| `5bf8e5d` | 展示名 = **职务 · 随机代号**（工程师 · 云雀）；颜色按职务取 |
+| `51ea4e5` | 同步单也落独立会话 + 台账，行身份统一用句柄 |
 
-## 五、纪律（本会话血泪，勿再犯）
+### 左侧会话列表
+| 提交 | 内容 |
+|---|---|
+| `7c26789` | 主列表剔除 `subagents/`（A 件重上） |
+| `7eaf485` → `b77dce3` | 子会话折叠组落地；**pi 的 `listAll` 不扫 `subagents/`**（实测 407 条 / subs=0），目录发现只能自己扫 + pi 原生 `parseSessionEntries` 解析 |
+| `400e001` | 子会话**挂到主会话下**（父子分组）：台账 `parentSession` + 行首 `▸`；无归属老单进「未归属」组；存量行按名字回找文件可点开 |
+| `1d74cfe` | 子 agent 终态自动刷新左侧（`onSubagentSettled` 宿主钩子） |
+| `67479a7` | 子会话存储**按项目分桶** `subagents/<项目slug>/<handle>/`（slug 与 pi 的 `sessions/<slug>/` 同规则） |
 
-- 脏树禁 `git add -u`（曾把坏代码卷回并重新编译，砸了用户面板两次）——一律 pathspec 提交。
-- 二分期**不动用户正在用的构建**：每步先报用户、点头才 compile；验证 = 用户重载试发 + 看日志。
-- webview/面板改动必过主链路冒烟才交（AGENTS.md 铁律）。
-- 调试日志抓取可用（pi-chat-debug.log），但别拿日志分析代替用户真机复验。
+### harness（内置，`~/.pi/agent/extensions/subagent`，源码在 `harness/subagent/`）
+版本已到 **v8**，每次改动必须 bump `harness.json` 的 `version`，否则已安装副本不更新。
+历次：v2 帧自写 → v3 `--name` → v4 未注册名兜底 → v5 职务·代号 → v6 同步单落盘
+→ v7 `parentSession` → v8 项目分桶。
+
+## 三、当前架构现状（改之前先读）
+
+```
+~/.pi/agent/sessions/
+├── --d--work-docs-xxx--/             主会话（pi 原生）
+└── subagents/
+    ├── --d--work-docs-xxx--/         子会话按项目分桶（v8+）
+    │   └── sa-11/
+    │       ├── <ts>_<uuid>.jsonl     子会话转录（session_info.name = 「职务 · 代号：任务」）
+    │       └── frames.jsonl          实时帧（浮窗重放数据源）
+    ├── sa-1 … sa-10/                 老单（v8 前平铺，**不迁移**，读取仍兼容）
+    └── runs/sa-N.json                台账（全局，按 handle 索引；含 parentSession/sessionDir）
+```
+
+链路要点：
+- **名字**：harness `--name` → `session_info.name` → 面板标题 / pi Resume 列表 / 浮窗行同源
+- **父子**：harness 用 `ctx.sessionManager.getSessionFile()` 记台账 `parentSession`
+- **浮窗重放**：读 `frames.jsonl`（不赌 `pi.appendEntry`，SDK 宿主下不落盘）
+- **左侧嵌套**：`sessionCache.scanSubagentSessions()` 自己扫目录（pi 没有这个能力）+
+  `subagentParentMap()` 读台账 → `nestSubs()`
+- **打开子会话**：优先台账 `sessionDir`（分桶后不能拼死路径），退回旧平铺
+
+## 四、挂账 / 已知限制
+
+1. **幽灵面板不能自愈**：VS Code 无 API，只能心跳提示用户重开（见第一节）。
+2. **老数据不可点开的边角**：v6 之前的同步单没有独立会话目录，靠名字前缀回找文件；
+   名字被用户 `/name` 改过就找不回（文件仍在项目会话目录里）。
+3. **`subagentNames` 台账（显示名两层分离）已不再参与主链路**：显示名改由 harness 生成，
+   台账只作历史兜底。`classifyDispatchName`/`rewriteSubagentInput` 纯逻辑与用例保留
+   （诊断/旧数据用），但 `subagentNameGuard` 不再归位改写——归位会抹掉用户自取名。
+4. **`piChat.sessionDir` 自定义会话库时**，子会话仍落 `getAgentDir()` 下的默认库
+   （harness 的 `subagentsBase()` 不看该配置）。需要再统一时改 `runDirFor`。
+
+## 五、纪律（血泪，勿犯）
+
+- 脏树禁 `git add -u`，一律 pathspec 提交（曾把坏代码卷回并重编译，砸用户面板两次）。
+- 二分期不动用户正在用的构建：先报用户、点头才 compile；验证 = 用户重载试发。
+- **「回滚后好转」不等于回滚的就是凶手**——先看日志指纹再下结论（本次旧结论就是这么错的）。
+- 机械对照代替脑子模拟：pi 到底扫不扫某个目录，跑一次 `listAll` 数结果，别推理。
+- harness 改文件不热更新：必须重打包/重载 + bump version，派单才走新代码。
