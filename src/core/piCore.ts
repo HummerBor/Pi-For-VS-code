@@ -733,6 +733,12 @@ export class PiCore {
             // 是全量正本。空壳防御：results 空或首任务 messages 为 0 = 异步返回值的冻结壳，跳过
             const m = rec.message as Record<string, unknown> | undefined;
             if (!m || m.role !== "toolResult") continue;
+            // 段 3 修正（2026-11-02）：subagent 工具回执里的句柄 = 本会话的运行——
+            // 台账行收口与 frames 重放都靠它（entry 帧 SDK 下不落盘，见 harness 注）
+            if (m.toolName === "subagent") {
+              const hm = JSON.stringify(m.content ?? "").match(/\bsa-\d+\b/g);
+              if (hm) for (const x of hm) this.subagentHandles.add(x);
+            }
             const det = m.details as Record<string, unknown> | undefined;
             if (!det) continue;
             const mode = det.mode;
@@ -749,6 +755,38 @@ export class PiCore {
           order++;
           const prev = finals.get(h);
           if (!prev || frame.final) finals.set(h, { frame, order });
+        }
+        // frames.jsonl 重放（2026-11-02 段 3 治本）：SDK 宿主下 custom 帧不落盘，
+        // 帧真值由 harness 自写 runDir/frames.jsonl——句柄集内的运行才收（跨会话不串）；
+        // 与 entry 帧双路并存，同 id 覆盖写（updateSubRun 幂等）不双份
+        const agentDir = this.caps.getAgentDir?.();
+        if (agentDir) {
+          for (const h of this.subagentHandles) {
+            try {
+              const lines2 = fs.readFileSync(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"), "utf8").split("\n");
+              let last: { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown } | null = null;
+              for (const ln of lines2) {
+                if (!ln.trim()) continue;
+                try { last = JSON.parse(ln); } catch { /* 截断半条跳过 */ }
+              }
+              const snap2 = last ? subagentSnapshot(last.detail) : null;
+              if (snap2 && !snap2.tasks.some((t) => t.status === "running")) {
+                const rec2 = this.trackSubagentRun(h, last!.detail);
+                if (typeof last!.startedAt === "number") rec2.startAt = last!.startedAt;
+                if (typeof last!.endedAt === "number") rec2.endAt = last!.endedAt;
+                this.post({
+                  type: "subagentUpdate",
+                  id: h,
+                  snapshot: snap2,
+                  final: last!.status !== "running",
+                  startAt: rec2.startAt,
+                  endAt: rec2.endAt,
+                });
+              }
+            } catch {
+              /* 无帧文件（老运行/纯 entry 路）：静默跳过 */
+            }
+          }
         }
         this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);

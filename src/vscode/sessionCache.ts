@@ -75,6 +75,10 @@ export function configuredSessionDir(): string | undefined {
  *  就是「正在加载会话… 17/193」干等。
  *  【注意】交接里「pi 实测 0 次 partialSessions」是拿 devDep 旧版 pi 0.85.1 量的误判
  *  （该版无 partial 发布）；运行时 PATH 上的 pi 1.3.0 有。版本错位见 BUILDER.md 挂账。 */
+/** 子会话（harness 每单落 sessions/subagents/<handle>/）不进主列表（2026-11-02 用户
+ *  实测「调用子 agent 后一堆会话历史被刷」）：回看走子 agent 浮窗台账行，列表保干净；
+ *  后续如需分组展示再做「子智能体」折叠组（需求文档 P0-2），先过滤止血 */
+const isMainSession = (e: PiSessionEntry): boolean => !/[\\/]subagents[\\/]/.test(e.path);
 const project = (x: PiSessionEntry): PiSessionProjection => ({
   path: x.path,
   cwd: x.cwd,
@@ -113,13 +117,13 @@ export function listNative(
       const sdk = await loadPiSdk();
       // pi 原始条目进、投影出——两个方向的回调类型不能混（混了就是 TS2345）
       const progress = (loaded: number, total: number, partial?: PiSessionEntry[]) => {
-        const proj = partial ? partial.map(project) : undefined;
+        const proj = partial ? partial.filter(isMainSession).map(project) : undefined;
         for (const fn of subs) fn(loaded, total, proj);
       };
       const entries = (cwd
         ? await sdk.SessionManager.list(cwd, sessionDir, progress)
         : await sdk.SessionManager.listAll(sessionDir, progress)) as PiSessionEntry[];
-      const result: PiSessionProjection[] = entries.map(project);
+      const result: PiSessionProjection[] = entries.filter(isMainSession).map(project);
       memo.set(key, { at: Date.now(), result });
       return result;
     } finally {
