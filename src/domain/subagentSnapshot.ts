@@ -17,6 +17,9 @@
 export interface SubagentTaskSnapshot {
   /** 显示名：调用方给的名字优先（随便取），缺则分类名（两层分离，见 setDisplayNameLookup） */
   agent: string;
+  /** 本单句柄（sa-N）：同步单现在也落盘独立会话（2026-11-02），有句柄才能像异步单一样
+   *  点开页签。缺省 = 老数据/无子会话（只能浮窗下钻） */
+  handle?: string;
   /** 任务描述（单行截断） */
   task: string;
   status: "running" | "done" | "failed";
@@ -240,6 +243,7 @@ function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean)
     // 如「工程师 · 云雀」）；台账查表只当兜底（老记录/字段缺失时回退调用方原名/分类名）。
     // 早期是 lookup 优先，但 harness 现在主动写可读名，再让 lookup 盖掉就退回英文分类名了
     agent: r.agent || (typeof r.task === "string" && displayNameLookup ? displayNameLookup(r.task) : undefined) || "?",
+    handle: typeof r.handle === "string" && /^sa-\d+$/.test(r.handle) ? r.handle : undefined,
     task: typeof r.task === "string" ? (full ? capText(r.task, 2000) : oneLine(r.task, TASK_MAX)) : "",
     status: taskStatus(r),
     step: typeof r.step === "number" ? r.step : undefined,

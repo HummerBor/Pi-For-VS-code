@@ -197,6 +197,9 @@ interface UsageStats {
 interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "built-in" | "unknown";
+	/** 本单句柄（sa-N，2026-11-02）：同步单也落独立会话目录后，面板靠它把行点开页签
+	 *  （与异步单同一条路）。缺省 = 早期记录/无子会话 */
+	handle?: string;
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -388,6 +391,13 @@ async function runSingleAgent(
 	// 都优先显示 name（session.name ?? firstMessage），不写就只剩首条消息/文件名时间戳。
 	// 格式与浮窗行同口径：agent · 任务摘要——一眼能对上哪一行
 	args.push("--name", sessionLabel(displayName, task));
+	// 同步单也落独立会话（2026-11-02 用户实测两个病：①同步单没 --session-dir → 落在
+	// 项目会话目录 → 混进左侧主列表 ②没有子会话文件 → 点行只能浮窗下钻，跟异步单
+	// 行为分裂）。分配同一个 sa-N 序号池 + 每单独立目录，与异步单同构。
+	const handle = `sa-${++asyncSeq}`;
+	const runDir = runDirFor(handle);
+	try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 目录失败在 spawn 侧会暴露 */ }
+	args.push("--session-dir", runDir);
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
@@ -402,6 +412,7 @@ async function runSingleAgent(
 	const currentResult: SingleResult = {
 		agent: displayName,
 		agentSource: agent.source,
+		handle,
 		task,
 		exitCode: 0,
 		messages: [],
@@ -438,6 +449,25 @@ async function runSingleAgent(
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
+			// 台账首写（2026-11-02）：同步单也进台账——左侧「子智能体」折叠组与浮窗历史
+			// 都读 runs/<handle>.json，不写就只剩实时流，重载即消失
+			try {
+				writeRecord({
+					handle,
+					agent: displayName,
+					model,
+					task,
+					cwd: cwd ?? defaultCwd,
+					sessionDir: runDir,
+					pid: proc.pid,
+					ownerPid: process.pid,
+					startedAt: Date.now(),
+					status: "running",
+					reported: false,
+				});
+			} catch {
+				/* 台账失败不阻派单 */
+			}
 			let buffer = "";
 
 			const processLine = (line: string) => {
@@ -511,6 +541,17 @@ async function runSingleAgent(
 		});
 
 		currentResult.exitCode = exitCode;
+		// 台账收口（2026-11-02）：终态写回——左侧折叠组/浮窗历史的真值
+		try {
+			markRun(handle, {
+				status: wasAborted ? "killed" : exitCode === 0 ? "completed" : "failed",
+				endedAt: Date.now(),
+				exitCode,
+				...(currentResult.stderr ? { error: currentResult.stderr.slice(0, 400) } : {}),
+			});
+		} catch {
+			/* 台账失败不阻派单 */
+		}
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {

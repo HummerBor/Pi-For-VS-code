@@ -2070,8 +2070,11 @@ export class PiCore {
           if (this.subagentEndedCalls.has(e.toolCallId)) break;
           const snap = subagentSnapshot(e.partialResult?.details);
           if (snap) {
-            const rec = this.trackSubagentRun(e.toolCallId, e.partialResult?.details);
-            this.post({ type: "subagentUpdate", id: e.toolCallId, snapshot: snap, final: false, startAt: rec.startAt });
+            // 句柄优先（2026-11-02：同步单也落独立会话后，快照带 sa-N）：行 id 与台账行同键，
+            // 否则浮窗会同时出现 call_xxx（实时）+ sa-N（台账）两条双胞胎
+            const rid = snap.tasks.find((t) => t.handle)?.handle ?? e.toolCallId;
+            const rec = this.trackSubagentRun(rid, e.partialResult?.details);
+            this.post({ type: "subagentUpdate", id: rid, snapshot: snap, final: false, startAt: rec.startAt });
           }
         }
         break;
@@ -2151,11 +2154,14 @@ export class PiCore {
           const hm = extractText(e.result?.content).match(/\bsa-\d+\b/);
           const isAsyncShell = !!hm || (!!finalSnap && finalSnap.tasks.some((t) => t.status === "running"));
           if (finalSnap && !isAsyncShell) {
-            const rec = this.trackSubagentRun(e.toolCallId, e.result?.details);
+            // 同步单落盘后快照带 sa-N（2026-11-02）：行 id 用句柄——与台账行同键，
+            // 否则浮窗同时出现 call_xxx（实时）+ sa-N（台账）两条双胞胎
+            const rid = finalSnap.tasks.find((t) => t.handle)?.handle ?? e.toolCallId;
+            const rec = this.trackSubagentRun(rid, e.result?.details);
             rec.endAt = Date.now();
             this.post({
               type: "subagentUpdate",
-              id: e.toolCallId,
+              id: rid,
               snapshot: finalSnap,
               final: true,
               startAt: rec.startAt,

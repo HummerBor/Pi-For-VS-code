@@ -1,4 +1,4 @@
 {
-  "version": 5,
-  "note": "v5: 展示名 = 职务中文 · 随机代号（工程师 · 云雀），写进 run/result/会话名——同职务多单可区分，颜色按职务取（2026-11-02 用户拍板「职务+随机名字」）。v4: 未注册名按 worker 兜底但保留原名。v3: --name 写会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才会覆盖已安装副本。"
+  "version": 6,
+  "note": "v6: 同步单也落独立会话目录 + 台账（分配 sa-N 序号、--session-dir、writeRecord/markRun 终态、SingleResult.handle）——治同步单混进项目主列表、点行只能浮窗下钻、重载即消失。v5: 职务·随机代号展示名。v4: 未注册名 worker 兜底。v3: --name 会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才会覆盖已安装副本。"
 }
