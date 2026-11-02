@@ -990,6 +990,32 @@ export class PiCore {
       case "openSession":
         await this.openSessionFile(m.file);
         break;
+      case "subagentOpenHandle": {
+        // 概览行点开子会话（2026-11-02）：webview 只传句柄，目录在这里拼（agentDir 是宿主能力）。
+        // 复用 subagentOpenSession 的落点：<agentDir>/sessions/subagents/<handle>/ → 最新 jsonl →
+        // 另开页签（绝不 openSessionFile——那是就地换会话，会顶掉当前面板）。
+        // running/orphaned 禁点由 webview 把关（双写者红线：写者只有子进程）
+        const dir = this.caps.getAgentDir?.();
+        if (!dir) {
+          this.post({ type: "notice", text: this.L.openSessionFileFail + "(no agentDir)" });
+          break;
+        }
+        const h = String(m.handle ?? "");
+        if (!/^sa-\d+$/.test(h)) break; // 只认句柄（call_* 是同步调用，无独立子会话）
+        const subDir = path.join(dir, "sessions", "subagents", h);
+        try {
+          const cands = fs
+            .readdirSync(subDir)
+            .filter((f) => f.endsWith(".jsonl") && f !== "frames.jsonl")
+            .map((f) => ({ f, t: fs.statSync(path.join(subDir, f)).mtimeMs }))
+            .sort((a, b) => b.t - a.t);
+          if (cands.length) this.caps.openSessionInTab?.(path.join(subDir, cands[0].f));
+          else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
+        } catch (err) {
+          this.post({ type: "notice", text: this.L.openSessionFileFail + String((err as Error)?.message ?? err) });
+        }
+        break;
+      }
       case "subagentOpenSession": {
         // 台账行展开回看（段 3 刀 3）：子会话目录 → 里面的 jsonl → openSessionFile
         // （pi 原生渲染，不自绘转录）。目录里多个 jsonl（跨纪元）取 mtime 最新。

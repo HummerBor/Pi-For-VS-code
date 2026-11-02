@@ -2197,7 +2197,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       });
       rowEl.appendChild(delBtn);
     }
-    rowEl.addEventListener('click', function () { openSubDetail(row.runId, row.ti); });
+    // 点行去向（2026-11-02 用户拍板）：终态句柄行 → 直接在会话页面打开（另开页签，pi 原生
+    // 渲染转录）；运行中行 / 同步调用（call_* 无独立子会话）→ 浮窗下钻看活动流。
+    // 运行中禁开：写者只有子进程，接管写 = 双写者红线（需求文档 P0-2）
+    rowEl.addEventListener('click', function () {
+      if (/^sa-\d+$/.test(row.runId) && t.status !== 'running') {
+        vscode.postMessage({ type: 'subagentOpenHandle', handle: row.runId });
+        return;
+      }
+      openSubDetail(row.runId, row.ti);
+    });
     return rowEl;
   }
   function renderSubDetail(body: HTMLElement) {

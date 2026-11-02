@@ -158,6 +158,7 @@ export type WebviewToHost =
   | WvGetSlashMsg
   | WvOpenSessionMsg
   | WvSubagentOpenSessionMsg
+  | WvSubagentOpenHandleMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
   | WvOpenImageMsg
@@ -773,4 +774,11 @@ export interface SubagentLedgerMsg {
 export interface WvSubagentOpenSessionMsg {
   type: "subagentOpenSession";
   sessionDir: string;
+}
+/** 概览行点开子会话（2026-11-02 用户拍板「列表点一下应该在会话页面打开，不该停在浮窗下钻」）：
+ *  webview 只知句柄，目录由宿主拼 <agentDir>/sessions/subagents/<handle>——agentDir 是宿主
+ *  能力，webview 拿不到也不该拿 */
+export interface WvSubagentOpenHandleMsg {
+  type: "subagentOpenHandle";
+  handle: string;
 }
