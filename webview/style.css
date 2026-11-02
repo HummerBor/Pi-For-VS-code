@@ -1813,12 +1813,5 @@ details.think.compaction-flash>summary {
 .sm-row.sm-open { cursor: pointer; }
 .sm-row.sm-open:hover .sm-agent { text-decoration: underline; }
 
-/* 断连横幅（2026-11-02 幽灵面板事故）：扩展宿主重启后部分编辑器面板不被重新序列化，
-   webview 界面活着但消息无人接——不提示的话用户只会以为「插件坏了」。固定在顶部，
-   高对比不容忽略；用户按提示关标签重开即恢复（详见 main.ts 文件尾心跳注释） */
-.conn-lost {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
-  padding: 8px 12px; font-size: 12px; line-height: 1.5; text-align: center;
-  background: #d13438; color: #fff; cursor: help;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
-}
+/* 断连横幅（.conn-lost）已退役（2026-11-02 用户拍板）：心跳判定会把 webview 自身卡顿
+   当成宿主断连，挂出红条用户只会认为「插件炸了」。退役说明见 main.ts 文件尾 */
