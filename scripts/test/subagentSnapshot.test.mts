@@ -54,7 +54,8 @@ if (running) {
   eq("任务数", running.tasks.length, 1);
   const t = running.tasks[0];
   eq("status=running", t.status, "running");
-  eq("usage 串", t.usage, "3 turns ↑1.2k ↓340 $0.0021 ctx:45.0k");
+  // 用量收束口径（2026-11-02 用户拍板）：只留 ctx 与金额，turns/↑/↓/缓存 不展示
+  eq("usage 串（只 ctx+金额）", t.usage, "ctx:45.0k $0.0021");
   eq("活动条数", t.activityCount, 3);
   eq("活动内容", t.items, ["开始读 DIRECTOR.md", "$ npm run compile", "read src/panel.ts"]);
   eq("运行中无最终输出", t.output, "");
@@ -76,7 +77,7 @@ ok("done 识别", done !== null);
 if (done) {
   eq("status=done", done.tasks[0].status, "done");
   eq("最终输出（换行压平）", done.tasks[0].output, "结论： 认证代码在 src/auth/");
-  eq("零用量不留串", done.tasks[0].usage, "1 turn");
+  eq("零用量不留串", done.tasks[0].usage, ""); // 2026-11-02 收束：无 ctx/金额就是空串（turns 不再展示）
 }
 
 /* 第 4 组：失败态——exitCode!==0 取 errorMessage/stderr */

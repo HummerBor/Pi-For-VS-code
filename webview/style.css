@@ -1199,11 +1199,16 @@ details.think.compaction-flash>summary {
 }
 
 .sm-name .sm-agent {
+  /* 名字优先给空间（2026-11-02 用户「把名字展示的全一点」：原来用量串挤得名字只剩
+     「研究...」）：名字不缩、用量让位（用量已收束成 ctx+金额，短得多） */
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.sm-name .sm-usage {
   flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sm-row.failed .sm-status {

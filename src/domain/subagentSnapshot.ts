@@ -64,23 +64,16 @@ function fmtTokens(n: unknown): string {
 }
 
 /** 对齐官方扩展 formatUsageStats（index.ts:45），字段缺失静默跳过 */
+/** 用量收束串（2026-11-02 用户拍板「这些可以不展示，或者只展示上下文和金额」）：
+ *  只留 ctx 与花费——turns/↑输入/↓输出/R缓存 对「这单花了多少、上下文多满」没帮助，
+ *  反而挤掉了名字的空间（浮窗行名字被截成「研究...」）。完整用量仍可从详情页看。 */
 function fmtUsage(u: unknown): string {
   if (!u || typeof u !== "object") return "";
   const usage = u as Record<string, unknown>;
   const parts: string[] = [];
-  const turns = usage.turns;
-  if (typeof turns === "number" && turns > 0) parts.push(turns + (turns > 1 ? " turns" : " turn"));
-  const up = fmtTokens(usage.input);
-  if (up) parts.push("↑" + up);
-  const down = fmtTokens(usage.output);
-  if (down) parts.push("↓" + down);
-  const cr = fmtTokens(usage.cacheRead);
-  if (cr) parts.push("R" + cr);
-  const cw = fmtTokens(usage.cacheWrite);
-  if (cw) parts.push("W" + cw);
-  if (typeof usage.cost === "number" && usage.cost > 0) parts.push("$" + usage.cost.toFixed(4));
   const ctx = fmtTokens(usage.contextTokens);
   if (ctx) parts.push("ctx:" + ctx);
+  if (typeof usage.cost === "number" && usage.cost > 0) parts.push("$" + usage.cost.toFixed(4));
   return parts.join(" ");
 }
 
