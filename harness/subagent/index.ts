@@ -45,6 +45,17 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
+/** 子会话可读名（agent · 任务摘要）：写进 pi 的 session_info.name（CLI --name）。
+ *  2026-11-02 用户实测痛点：子会话没有名字时，面板标签只能 fallback 成文件名时间戳
+ *  「11-02 11:54」，pi 原生 Resume 列表也只能显示首条消息——认不出是哪个任务。
+ *  名里不许有换行/控制字符（pi 把它当单行标题渲染），超长截断。 */
+function sessionLabel(agentName: string, task: string): string {
+	const flat = String(task ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+	const chars = Array.from(flat);
+	const snip = chars.slice(0, 40).join("") + (chars.length > 40 ? "…" : "");
+	return snip ? `${agentName} · ${snip}` : agentName;
+}
+
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -341,6 +352,11 @@ async function runSingleAgent(
 	// 一定要落盘」）：会话文件是审计/恢复/展示的唯一真值；与 piClient 同款禁令。历史教训：
 	// 硬编码 --no-session 导致子 agent 转录只活在内存注册表，重启全蒸发、断线不可续跑。
 	const args: string[] = ["--mode", "json", "-p"];
+	// 可读会话名（2026-11-02 用户实测「子会话点开标题只有 11-02 11:54，认不出是哪个任务」）：
+	// pi 的会话名住 session_info.name，CLI 原生 --name 写它；面板标题与 pi 原生 Resume 列表
+	// 都优先显示 name（session.name ?? firstMessage），不写就只剩首条消息/文件名时间戳。
+	// 格式与浮窗行同口径：agent · 任务摘要——一眼能对上哪一行
+	args.push("--name", sessionLabel(agent.name, task));
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
@@ -1004,6 +1020,8 @@ export default function (pi: ExtensionAPI) {
 						cliArgs.push("--thinking", dispatchDefaults.thinkingLevel);
 				}
 				if (agent.tools && agent.tools.length > 0) cliArgs.push("--tools", agent.tools.join(","));
+				// 可读会话名（同 runSingleAgent 处注释）：异步单同样要能在面板/pi Resume 里认出任务
+				cliArgs.push("--name", sessionLabel(agent.name, params.task ?? ""));
 				// 会话落盘（P0-1，2026-10-30）：每单独立 --session-dir，handle ↔ 子会话目录
 				// 一一对应（台账记指针）——子 agent 记录不再绑父会话，「新开项目找不到
 				// 子 agent」的治本。禁 --no-session 红线见 runSingleAgent 处注释。

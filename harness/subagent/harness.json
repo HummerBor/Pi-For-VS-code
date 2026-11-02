@@ -1,4 +1,4 @@
 {
-  "version": 2,
-  "note": "v2: 帧真值自写 runDir/frames.jsonl（SDK 宿主下 pi.appendEntry custom 帧不落盘，2026-11-02 治本）+ appendEntry 失败不静默。源码归属 pi-vscode 仓 harness/subagent/，激活时同步到 <agentDir>/extensions/subagent，改动 bump version 才会覆盖已安装副本。"
+  "version": 3,
+  "note": "v3: 派单带 --name（agent · 任务摘要）写进 pi session_info.name——面板标题与 pi 原生 Resume 列表不再只剩文件名时间戳（2026-11-02 用户实测）。v2: 帧真值自写 runDir/frames.jsonl（SDK 宿主下 pi.appendEntry custom 帧不落盘，2026-11-02 治本）+ appendEntry 失败不静默。源码归属 pi-vscode 仓 harness/subagent/，激活时同步到 <agentDir>/extensions/subagent，改动 bump version 才会覆盖已安装副本。"
 }
