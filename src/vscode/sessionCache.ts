@@ -21,6 +21,8 @@
  */
 import { loadPiSdk } from "../pi/piSdk";
 import * as vscode from "vscode";
+import * as fs from "fs";
+import { join } from "path";
 
 export interface SessionInfo {
   file: string;
@@ -178,22 +180,86 @@ export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null
 }
 
 /** 子会话列表（2026-11-02 用户拍板：左侧列表也列，但走折叠组不混主列表）。
- *  数据源必须用 listNative(undefined) 即 pi 的 listAll：list(cwd) 只扫项目目录，
- *  subagents/ 不在 cwd 映射里——用 list(cwd) 时 subs 恒为空（折叠组永不出现的事故）。
- *  listAll 本来就会扫到 subagents（当初 isMainSession 过滤就是因为它被扫进来了）。
- *  cwd 过滤交给 toSessionInfos：子会话 jsonl 头里记的就是派发方项目路径。 */
+ *
+ *  【为什么不能让 pi 扫】实测：SessionManager.listAll 不认 subagents/ 目录——407 条会话、
+ *  subs=0（2026-11-02 实捞）。而 list(cwd) 只扫 cwd 映射目录，更扫不到。所以目录发现
+ *  这一层必须自己做；解析仍用 pi 原生 parseSessionEntries（版本迁移/兼容它管）。
+ *  这与「能用原生就用」不冲突：原生没有这个能力，壳补的只是「找目录 + 读元数据」。
+ *
+ *  只读每个文件头部 256KB（header + session_info + 首条消息都在前几行，实测 sa-9 在
+ *  第 2 行）——长转录会话动辄几 MB，为拿个标题读全文件不值得。 */
+async function scanSubagentSessions(): Promise<PiSessionProjection[]> {
+  const sdk = await loadPiSdk();
+  const agentDir: string | undefined = sdk.getAgentDir?.();
+  if (!agentDir) return [];
+  const base = join(agentDir, "sessions", "subagents");
+  let names: string[];
+  try {
+    names = fs.readdirSync(base);
+  } catch {
+    return []; // 还没派过子 agent
+  }
+  const out: PiSessionProjection[] = [];
+  for (const h of names) {
+    if (!/^sa-\d+$/.test(h)) continue; // 只认句柄目录（runs/ 是台账，不是会话）
+    const dir = join(base, h);
+    let cands: { f: string; t: number }[];
+    try {
+      cands = fs
+        .readdirSync(dir)
+        .filter((f) => f.endsWith(".jsonl") && f !== "frames.jsonl")
+        .map((f) => ({ f, t: fs.statSync(join(dir, f)).mtimeMs }))
+        .sort((a, b) => b.t - a.t);
+    } catch {
+      continue;
+    }
+    if (!cands.length) continue;
+    const file = join(dir, cands[0].f);
+    try {
+      const buf = fs.readFileSync(file);
+      const head = buf.subarray(0, Math.min(buf.length, 256 * 1024)).toString("utf8");
+      const cut = head.lastIndexOf("\n");
+      const text = cut > 0 ? head.slice(0, cut) : head; // 截断的半行丢掉（parse 会报）
+      const entries = (sdk.parseSessionEntries?.(text) ?? []) as Record<string, any>[];
+      const header = entries.find((e) => e.type === "session");
+      // 名字取最后一处 session_info（用户 /name 改过就以最新为准）；头部窗口内找不到就留空
+      let name: string | undefined;
+      for (const e of entries) if (e.type === "session_info" && e.name?.trim()) name = String(e.name).trim();
+      const firstUser = entries.find((e) => e.type === "message" && e.message?.role === "user");
+      const fm = firstUser?.message?.content;
+      const firstMessage =
+        typeof fm === "string"
+          ? fm
+          : Array.isArray(fm)
+            ? fm.map((c: any) => (c?.type === "text" ? String(c.text ?? "") : "")).join(" ")
+            : "";
+      out.push({
+        path: file,
+        cwd: typeof header?.cwd === "string" ? header.cwd : "",
+        name,
+        firstMessage,
+        modified: new Date(cands[0].t),
+      });
+    } catch {
+      continue; // 烂文件/正在写：跳过不阻列表
+    }
+  }
+  return out;
+}
+
 export async function listSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
-  await listNative(undefined); // listAll；memo 命中则不重扫
-  const key = "all|dir:" + (configuredSessionDir() ?? "");
-  const subs = memo.get(key)?.subs ?? [];
+  const subs = await scanSubagentSessions().catch(() => []);
   return toSessionInfos(subs, cwd, limit);
 }
 
-/** 子会话秒出（同 peekListSessions 口径） */
-export function peekSubagentSessions(cwd?: string, limit = 50): SessionInfo[] | null {
-  const hit = memo.get("all|dir:" + (configuredSessionDir() ?? ""));
-  if (!hit) return null;
-  return toSessionInfos(hit.subs, cwd, limit);
+/** 子会话秒出：扫描本身很轻（每单只读头部 256KB），不做 memo——子会话数量小且
+ *  随时新增（派单即出），缓存反而让人以为「刚派的没出现」 */
+export async function peekSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[] | null> {
+  try {
+    return toSessionInfos(await scanSubagentSessions(), cwd, limit);
+  } catch {
+    return null;
+  }
 }
 
 /** 列出历史会话，按最近使用排序；传 cwd 只列该项目的会话。数据源 = pi 原生（见头注释）。

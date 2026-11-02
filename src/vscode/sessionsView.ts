@@ -27,6 +27,23 @@ interface SvItem {
  * busy 才开新并行标签），不再默认在中间开编辑器标签；
  * 删除不变：deleteSessionFile 单一真相（跨实例守卫/边界/模态确认）。
  */
+/** 旧同步单迁移（2026-11-02）：v6 之前的同步单没有独立 session-dir，会话落在项目目录里，
+ *  但名字是「职务 · 代号：任务」格式（v3 起 --name 写的）。按名字格式识别为子会话，从
+ *  主列表移到折叠组——文件不删不动，只改展示归类（不动磁盘是硬约束：会话文件是审计真值）。
+ *  新单（v6+）已经直接落 subagents/，不需要依赖这条启发式。 */
+const SUB_NAME_RE = /^[^：]{1,24} · [^：]{1,12}：/;
+
+/** 按名字把条目分成主列表/遗留子会话两堆 */
+function splitLegacySubs(list: { file: string; name?: string; preview: string; time: string }[]): {
+  main: typeof list;
+  legacy: typeof list;
+} {
+  const main: typeof list = [];
+  const legacy: typeof list = [];
+  for (const s of list) (SUB_NAME_RE.test(s.name || "") ? legacy : main).push(s);
+  return { main, legacy };
+}
+
 export class SessionsViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private refreshTimer: NodeJS.Timeout | undefined;
@@ -101,8 +118,15 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     if (!view) return;
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const cached = peekListSessions(cwd);
-    const cachedSubs = peekSubagentSessions(cwd);
-    if (cached) void view.webview.postMessage({ type: "svItems", items: toItemMsgs(cached), subs: toItemMsgs(cachedSubs ?? []) });
+    const cachedSubs = await peekSubagentSessions(cwd).catch(() => null);
+    if (cached) {
+      const sp = splitLegacySubs(cached);
+      void view.webview.postMessage({
+        type: "svItems",
+        items: toItemMsgs(sp.main),
+        subs: toItemMsgs([...(cachedSubs ?? []), ...sp.legacy]),
+      });
+    }
     // 渐进上屏（与 ⏱ 选择器同款，2026-10-22「2比1加载慢」定案）：原来 await 全量才发，
     // 死等 1.2~2s（宿主拥堵下 22~30s）期间侧栏空白——partial 首批 ~19ms 就有货，
     // picker 先修了这里漏了。有缓存时不再上屏 partial（秒出已兜底，真值到达原地替换）；
@@ -117,9 +141,14 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       lastProgressAt = now;
       void view.webview.postMessage({ type: "svItems", items: toItemMsgs(partial) });
     }).catch(() => []);
-    // 子会话（折叠组）：与主会话同一趟扫描（sessionCache memo 命中不重扫），列表不混排
+    // 子会话（折叠组）：扫 subagents/ 目录 + v6 之前遗留的同步单（按名字格式识别）
     const subs = await listSubagentSessions(cwd).catch(() => []);
-    void view.webview.postMessage({ type: "svItems", items: toItemMsgs(sessions), subs: toItemMsgs(subs) });
+    const sp = splitLegacySubs(sessions);
+    void view.webview.postMessage({
+      type: "svItems",
+      items: toItemMsgs(sp.main),
+      subs: toItemMsgs([...subs, ...sp.legacy]),
+    });
   }
 
   /** 主题切换广播（panel.pickTheme 全实例广播的补充——本 provider 不是 ChatPanelProvider，
