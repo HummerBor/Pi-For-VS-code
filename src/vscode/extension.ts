@@ -63,15 +63,17 @@ export function activate(ctx: vscode.ExtensionContext): void {
   // pi-icon-small.svg）：WebviewPanel.iconPath 单 Uri（彩色 svg，亮暗同用）；
   // 文件在 media/source/，必须过 .vscodeignore 的 media/* 白名单才进 vsix
   const tabIcon = vscode.Uri.joinPath(ctx.extensionUri, "media", "source", "pi-icon-small.svg");
-  const openEditorTab = (sessionFile?: string) => {
+  const openEditorTab = (sessionFile?: string, title?: string) => {
     const panel = vscode.window.createWebviewPanel(
       "piChat.editorPanel",
-      newTabTitle,
+      title || newTabTitle,
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true }
     );
     panel.iconPath = tabIcon;
-    const inst = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version, panel);
+    // title：子会话没有 pi 会话名（jsonl name 空），由调用方（台账 agent·task）给出可读题；
+    // 不传 = 普通新会话，标题仍随 state.sessionName 回写（syncTabMeta）
+    const inst = new ChatPanelProvider(ctx.extensionUri, ctx.globalState, version, panel, undefined, title);
     inst.attachEditorPanel(sessionFile);
   };
   ChatPanelProvider.setFactories({ openEditorTab });

@@ -1044,13 +1044,28 @@ export class PiCore {
         const h = String(m.handle ?? "");
         if (!/^sa-\d+$/.test(h)) break; // 只认句柄（call_* 是同步调用，无独立子会话）
         const subDir = path.join(dir, "sessions", "subagents", h);
+        // 可读标题（2026-11-02 用户实测「标签只有 11-02 11:54，认不出是哪个任务」）：
+        // 子会话 jsonl 里 name 为空 → 面板标题 fallback 成文件名时间戳。台账有 agent+task，
+        // 拼成「worker · 只回复两个字：完成」当标签题——与浮窗行同口径，一眼能对上。
+        // 台账读不到就不传（面板照旧 fallback，不阻主链路）
+        let tabTitle: string | undefined;
+        try {
+          const row = readLedgerRows(dir).find((r) => r.handle === h);
+          const task = String(row?.task ?? "").replace(/\s+/g, " ").trim();
+          const agent = String(row?.agent ?? "");
+          if (agent || task) {
+            const snip = Array.from(task).slice(0, 20).join("");
+            tabTitle = [agent || h, snip && (Array.from(task).length > 20 ? snip + "…" : snip)]
+              .filter(Boolean).join(" · ");
+          }
+        } catch { /* 台账不可读则不传标题 */ }
         try {
           const cands = fs
             .readdirSync(subDir)
             .filter((f) => f.endsWith(".jsonl") && f !== "frames.jsonl")
             .map((f) => ({ f, t: fs.statSync(path.join(subDir, f)).mtimeMs }))
             .sort((a, b) => b.t - a.t);
-          if (cands.length) this.caps.openSessionInTab?.(path.join(subDir, cands[0].f));
+          if (cands.length) this.caps.openSessionInTab?.(path.join(subDir, cands[0].f), tabTitle);
           else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
         } catch (err) {
           this.post({ type: "notice", text: this.L.openSessionFileFail + String((err as Error)?.message ?? err) });
@@ -1070,8 +1085,12 @@ export class PiCore {
             .sort((a, b) => b.t - a.t);
           if (cands.length) {
             // 另开页签（2026-11 用户反馈「打开应该另开一个 tab」）：绝不走 openSessionFile——
-            // 那是就地换会话，会顶掉当前面板
-            this.caps.openSessionInTab?.(path.join(dir, cands[0].f));
+            // 那是就地换会话，会顶掉当前面板。标题同理从台账拿可读题（子会话 name 空）
+            const row = readLedgerRows(dir).find((r) => r.handle === String(m.sessionDir).split(/[\\/]/).pop());
+            const task = String(row?.task ?? "").replace(/\s+/g, " ").trim();
+            const snip = Array.from(task).slice(0, 20).join("");
+            const t = (row?.agent || "") + (snip ? " · " + (Array.from(task).length > 20 ? snip + "…" : snip) : "");
+            this.caps.openSessionInTab?.(path.join(dir, cands[0].f), t || undefined);
           }
           else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
         } catch (err) {

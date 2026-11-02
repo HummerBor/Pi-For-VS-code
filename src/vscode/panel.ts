@@ -71,9 +71,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 跨实例工厂（extension.ts 注入）：面板实例的「＋新会话」开新编辑器标签用——
    *  panel.ts 不 import 工厂实现，依赖倒置同 setPiClientDebug 接法 */
   private static readonly factories = {
-    openEditorTab: undefined as ((sessionFile?: string) => void) | undefined,
+    openEditorTab: undefined as ((sessionFile?: string, title?: string) => void) | undefined,
   };
-  static setFactories(f: { openEditorTab?: (sessionFile?: string) => void }): void {
+  static setFactories(f: { openEditorTab?: (sessionFile?: string, title?: string) => void }): void {
     ChatPanelProvider.factories.openEditorTab = f.openEditorTab;
   }
 
@@ -91,6 +91,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 工单十五刀2：标签元数据（宿主是唯一事实源）：标题随各核心 state 记账、busy 随 busy 记账，
    *  未读随后台跑完记账（刀5：webview 零影子状态，未读点也归宿主） */
   private tabMeta = new Map<string, { title: string; busy: boolean; unread?: boolean }>();
+  /** 固定标题（子会话专用，2026-11-02 用户实测「标签只有 11-02 11:54，认不出是哪个任务」）：
+   *  子会话 jsonl 的 name 为空，标题本来 fallback 到文件名时间戳；固定标题在 state 回写时
+   *  优于此 fallback，但让位于 pi 真给的 sessionName（子会话日后真有了名字就自动让位） */
+  private fixedTitle?: string;
   /** 标签栏持久化（用户直令 09-18「按1」）：重启前聊在非 t1 标签、重启后标签栏整体消失，
    *  活动标签退回 t1 → 恢复的是 t1 名下的陈旧会话记忆（lastSessionByWs2 按标签存），
    *  把 -c 已接对的最近会话顶掉（用户实测：重启后打开的是上午的会话，不是重启前聊的）。
@@ -139,9 +143,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     editorPanel?: vscode.WebviewPanel,
     /** 刀3 重启恢复：serializer 从 webview state 传回的原 tabKey——用它重建（不取新号、
      *  不置 freshTab）→ 按 tabKey 记忆恢复原会话；缺省 = 新面板（取号 + 新会话语义） */
-    restoredTabKey?: string
+    restoredTabKey?: string,
+    /** 初始标题（子会话专用）：子会话 jsonl 里 name 为空 → 不传就 fallback 成文件名时间戳
+     *  「11-02 11:54」（用户实测「认不出是哪个任务」）；传了则它在 state 回写时优先于
+     *  时间戳 fallback（见 syncTabMeta）——一旦 pi 真给了 sessionName 就让位给它 */
+    restoredTitle?: string
   ) {
     this.editorPanel = editorPanel;
+    this.fixedTitle = restoredTitle;
     this.lang = (globalState.get<Lang>("piChat.lang") ?? "zh") as Lang;
     ChatPanelProvider.allProviders.add(this);
     if (!editorPanel) ChatPanelProvider.sidebar = this; // 副栏实例（构造器无面板 = 视图 provider）
@@ -167,7 +176,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.activeTabId = "p" + ChatPanelProvider.takePanelSeq(globalState);
         this.freshTabs.add(this.activeTabId);
       }
-      this.tabMeta.set(this.activeTabId, { title: this.L.tabUntitled, busy: false });
+      this.tabMeta.set(this.activeTabId, { title: restoredTitle || this.L.tabUntitled, busy: false });
       ChatPanelProvider.lastActiveEditor = this; // 新开的编辑器标签必然是激活态
       return;
     }
@@ -293,7 +302,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
    *  · 未打开 → 中间区开新编辑器标签装它（绝不就地换掉活动标签的会话）；
    *  · 已打开 → 切到持有者（副栏后台持有先切页签再聚焦）——占用守卫同在此，绝开第二份；
    *  副栏「当前会话内切换」是另一条链路（副栏自己的 🕐 选择器），用户拍板不动 */
-  static async openOrFocusSession(file: string, _label?: string): Promise<void> {
+  static async openOrFocusSession(file: string, label?: string): Promise<void> {
     const holder = ChatPanelProvider.findHolder(file);
     if (holder) {
       if (holder.p === ChatPanelProvider.sidebar && holder.tabId !== holder.p.activeTabId) {
@@ -302,7 +311,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       holder.p.focusSelf();
       return;
     }
-    ChatPanelProvider.factories.openEditorTab?.(file);
+    ChatPanelProvider.factories.openEditorTab?.(file, label);
   }
 
   /** 列表齿轮按钮（2026-10-20 图2 拍板：中间区 ✳ 菜单移到左侧列表）：⚡ 命令菜单开在
@@ -374,7 +383,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
       getAgentDir: () => getAgentDirSync(),
       // 子 agent 展开回看另开页签（2026-11 用户反馈）：不顶当前会话
-      openSessionInTab: (file) => void ChatPanelProvider.openOrFocusSession(file),
+      openSessionInTab: (file, title) => void ChatPanelProvider.openOrFocusSession(file, title),
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
         vscode.window.showQuickPick(items, placeHolder ? { placeHolder } : undefined),
       showInputBox: async (options) => vscode.window.showInputBox(options),
@@ -833,7 +842,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     if (msg.type === "busy") {
       if (meta.busy !== msg.value) { meta.busy = msg.value; changed = true; }
     } else if (msg.type === "state") {
-      const t = msg.sessionName || this.fmtSessionTitle(msg.sessionFile ?? null);
+      const t = msg.sessionName || this.fixedTitle || this.fmtSessionTitle(msg.sessionFile ?? null);
+      // 标题优先级：pi 会话名 > 固定标题（子会话 agent·task）> 文件名时间戳 fallback
       if (t && meta.title !== t) { meta.title = t; changed = true; titleDirty = true; }
     }
     if (changed) this.postTabs();

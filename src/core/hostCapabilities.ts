@@ -53,6 +53,8 @@ export interface HostCapabilities {
    *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
   getAgentDir?(): string | null;
   /** 会话文件另开一个页签展示（openOrFocusSession 语义：新页签，绝不顶当前会话）。
-   *  可选：宿主不支持时核心静默降级（子 agent 展开回看不可用） */
-  openSessionInTab?(file: string): void;
+   *  可选：宿主不支持时核心静默降级（子 agent 展开回看不可用）。
+   *  title 可选：子会话没有 pi 生成的会话名（jsonl name 为空），不传就 fallback 成文件名
+   *  时间戳（用户实测「标题只有 11-02 11:54，认不出是哪个任务」）——传了则优先当标签题 */
+  openSessionInTab?(file: string, title?: string): void;
 }
