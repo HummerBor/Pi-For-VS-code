@@ -1803,3 +1803,7 @@ details.think.compaction-flash>summary {
   border-left: 2px solid var(--vscode-charts-purple, #b180d7);
   padding-left: 6px;
 }
+
+/* 台账终态行可点开子会话回看（段 3 刀 3，抄 CC 展开回看） */
+.sm-row.sm-open { cursor: pointer; }
+.sm-row.sm-open:hover .sm-agent { text-decoration: underline; }

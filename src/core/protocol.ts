@@ -157,6 +157,7 @@ export type WebviewToHost =
   | WvPickModeMsg
   | WvGetSlashMsg
   | WvOpenSessionMsg
+  | WvSubagentOpenSessionMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
   | WvOpenImageMsg
@@ -764,4 +765,12 @@ export interface SubagentLedgerRow {
 export interface SubagentLedgerMsg {
   type: "subagentLedger";
   rows: SubagentLedgerRow[];
+}
+
+/** 台账行「展开回看」（2026-10-30 段 3 刀 3）：webview 传子会话目录，宿主解析出里面的
+ *  jsonl 走 openSession 打开（pi 原生渲染，不自绘转录）。running/orphaned 行禁点
+ *（写者只有子进程，运行中禁接管写——需求文档 P0-2 双写者红线）。 */
+export interface WvSubagentOpenSessionMsg {
+  type: "subagentOpenSession";
+  sessionDir: string;
 }

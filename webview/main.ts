@@ -1817,6 +1817,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 数据模型：每页签 runs（id → {snap, final, startAt, endAt}），id 是 toolCallId 或异步句柄
   // sa-n；一个 parallel 运行拆多行（每任务一行，Codex 同款）
   var SM_ICONS: Record<string, string> = { running: ico('loading', 12), done: ico('check', 12), failed: ico('x', 12) };
+  /** 每 agent 固定色（抄 CC agentColorManager.getAgentColor）：名字哈希 → HSL，同 agent
+   *  恒同色——并行多 agent 一眼分清谁是谁 */
+  function agentColor(name: string): string {
+    var h = 0;
+    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return 'hsl(' + (h % 360) + ', 55%, 62%)';
+  }
   // 浮窗：单例。收起（subCollapsed）= 整块隐藏、头部 spinner 亮（运行中），codex 模型；
   // 拖过一次（dockDragged）后位置归用户，未拖则每次刷新回默认右上角（防漂移事故）
   var subdock: HTMLElement | null = null;
@@ -2046,7 +2053,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rowEl.appendChild(elIco('sm-ico', SM_ICONS[st] || '·'));
     var main = el('div', 'sm-row-main');
     var line1 = el('div', 'sm-name');
-    line1.appendChild(el('span', 'sm-agent', String(r.handle) + ' · ' + String(r.agent || '')));
+    var agEl2 = el('span', 'sm-agent', String(r.handle) + ' · ' + String(r.agent || ''));
+    agEl2.style.color = agentColor(String(r.agent || r.handle)); // 每 agent 固定色（抄 CC）
+    line1.appendChild(agEl2);
     var stTxt = r.status === 'running' ? L.smProcessing : r.status === 'completed' ? L.smDoneGroup : String(r.deathReason || L.smFailedSt);
     line1.appendChild(el('span', 'sm-st ' + (st === 'running' ? 'run' : st === 'failed' ? 'fail' : 'done'), stTxt));
     main.appendChild(line1);
@@ -2055,7 +2064,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     rowEl.appendChild(main);
     var time = (r.endedAt || r.startedAt) ? fmtRel(r.endedAt || r.startedAt) : '';
     if (time) rowEl.appendChild(el('span', 'sm-time', time));
-    if (r.reported === false) rowEl.title = String(r.handle) + '（' + L.smUnreported + '）';
+    var tips: string[] = [];
+    if (r.reported === false) tips.push(L.smUnreported);
+    // 展开回看（段 3 刀 3）：终态行点开子会话（pi 原生渲染，不自绘转录）；running/orphaned
+    // 禁点——写者只有子进程，运行中禁接管写（需求文档 P0-2 双写者红线）
+    if (r.status === 'running' || r.status === 'orphaned') {
+      tips.push(L.smProcessing);
+    } else if (r.sessionDir) {
+      rowEl.classList.add('sm-open');
+      rowEl.addEventListener('click', function () {
+        vscode.postMessage({ type: 'subagentOpenSession', sessionDir: String(r.sessionDir) });
+      });
+    }
+    if (tips.length) rowEl.title = String(r.handle) + '：' + tips.join('、');
     return rowEl;
   }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
@@ -2129,11 +2150,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
     // ✓/✗ 图标只作辅助——状态不许靠猜
     var line1 = el('div', 'sm-name');
-    line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
+    var agEl = el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : ''));
+    agEl.style.color = agentColor(t.agent); // 每 agent 固定色（抄 CC）
+    line1.appendChild(agEl);
     line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? (stale ? 'stale' : 'run') : t.status === 'failed' ? 'fail' : 'done'), stTxt));
     // 进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
     // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
-    if (t.status === 'running' && t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
+    if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage)); // 用量收束行（抄 CC Done 行：收尾也显 turns/tokens/$）
     main.appendChild(line1);
     // 第二行：任务摘要单行省略（全是 worker 时靠任务认行；全文 hover title / 点行下钻）
     var taskSnipBase = t.status === 'failed'
@@ -2148,7 +2171,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 摘要去 markdown 记号（2026-10-23「很漏」：**只测不修** 这类原文星号直接漏在列表上）
     var taskSnip = taskSnipBase.replace(/\s+/g, ' ').replace(/[*_`#]/g, '').slice(0, 48);
     var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), taskSnip);
-    line2.title = taskSnipBase;
+    // 运行中行悬停显示最近 3 条动作（抄 CC MAX_PROGRESS_MESSAGES_TO_SHOW=3）
+    line2.title = (t.status === 'running' && t.items && t.items.length) ? t.items.slice(-3).join('\n') : taskSnipBase;
     main.appendChild(line2);
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
@@ -2193,7 +2217,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var hd = el('div', 'sm-task ' + t.status);
     var line1 = el('div', 'sm-line');
     line1.appendChild(elIco('sm-ico' + (t.status === 'running' && !dstale ? ' spin' : ''), SM_ICONS[t.status] || '·'));
-    line1.appendChild(el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : '')));
+    var hdAg = el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : ''));
+    hdAg.style.color = agentColor(t.agent); // 每 agent 固定色（抄 CC）
+    line1.appendChild(hdAg);
     if (dstale) line1.appendChild(el('span', 'sm-st stale', L.smStale));
     if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
     hd.appendChild(line1);

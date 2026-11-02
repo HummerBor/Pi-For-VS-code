@@ -977,6 +977,24 @@ export class PiCore {
       case "openSession":
         await this.openSessionFile(m.file);
         break;
+      case "subagentOpenSession": {
+        // 台账行展开回看（段 3 刀 3）：子会话目录 → 里面的 jsonl → openSessionFile
+        // （pi 原生渲染，不自绘转录）。目录里多个 jsonl（跨纪元）取 mtime 最新。
+        // running/orphaned 禁点由 webview 把关（本层只管开文件）
+        try {
+          const dir = m.sessionDir;
+          const cands = fs
+            .readdirSync(dir)
+            .filter((f) => f.endsWith(".jsonl"))
+            .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
+            .sort((a, b) => b.t - a.t);
+          if (cands.length) await this.openSessionFile(path.join(dir, cands[0].f));
+          else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
+        } catch (err) {
+          this.post({ type: "notice", text: this.L.openSessionFileFail + String((err as Error)?.message ?? err) });
+        }
+        break;
+      }
       case "revealSessionFile":
         await this.ui.revealSessionFile(m.file);
         break;
