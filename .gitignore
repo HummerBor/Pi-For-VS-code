@@ -26,3 +26,5 @@ scripts/.check-out.txt
 scripts/.vm-err.txt
 skills
 media/动画
+# 会话/助手临时草稿（prompt 中转、冒烟日志、复现产物）——垃圾不入库不碍眼（2026-11-02 用户令）
+.pi/tmp/
