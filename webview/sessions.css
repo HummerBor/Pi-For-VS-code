@@ -203,3 +203,15 @@ body {
 .row.sub .r-label {
   color: var(--pi-fg-dim, var(--vscode-descriptionForeground));
 }
+
+/* 主会话行的展开箭头（2026-11-02「主会话加收放按钮」）：有子会话才显示，无则占位保持对齐 */
+.r-caret {
+  width: 12px;
+  flex: none;
+  text-align: center;
+  font-size: 10px;
+  color: var(--pi-fg-dim, var(--vscode-descriptionForeground));
+  cursor: pointer;
+}
+.r-caret.empty { cursor: inherit; }
+.r-caret:hover { color: var(--pi-fg); }

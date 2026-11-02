@@ -2205,10 +2205,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 运行中禁开：写者只有子进程，接管写 = 双写者红线（需求文档 P0-2）
     rowEl.addEventListener('click', function () {
       // 句柄优先（2026-11-02：同步单现在也落独立会话，快照带 handle）：异步/同步统一走
-      // 「开页签」。无句柄 = 老数据/无子会话 → 浮窗下钻；运行中仍禁开（双写者红线）
+      // 「开页签」。无句柄 = v6 之前的存量行 → 按显示名回找文件（subagentOpenLabel，
+      // 宿主侧扫 session_info.name），不再只能浮窗下钻；运行中仍禁开（双写者红线）
       var openId = (/^sa-\d+$/.test(String(t.handle || ''))) ? String(t.handle) : row.runId;
       if (/^sa-\d+$/.test(openId) && t.status !== 'running') {
         vscode.postMessage({ type: 'subagentOpenHandle', handle: openId });
+        return;
+      }
+      if (t.status !== 'running' && t.agent && /^.+ · .+$/.test(String(t.agent))) {
+        vscode.postMessage({ type: 'subagentOpenLabel', label: String(t.agent) });
         return;
       }
       openSubDetail(row.runId, row.ti);

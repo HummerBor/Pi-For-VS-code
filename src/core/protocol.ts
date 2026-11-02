@@ -164,6 +164,7 @@ export type WebviewToHost =
   | WvOpenSessionMsg
   | WvSubagentOpenSessionMsg
   | WvSubagentOpenHandleMsg
+  | WvSubagentOpenLabelMsg
   | WvRevealSessionFileMsg
   | WvOpenPathMsg
   | WvOpenImageMsg
@@ -773,6 +774,9 @@ export interface SubagentLedgerRow {
   model?: string;
   /** 子会话落盘目录（subagents/<handle>/）——展开回看/接管的入口 */
   sessionDir?: string;
+  /** 派单方会话文件（2026-11-02）：左侧列表把子会话挂在对应主会话下面用它，
+   *  缺省 = v6 之前的老记录（落到「未归属」堆） */
+  parentSession?: string;
   /** 回传主会话是否已发（false = 「回传未达」，对账补送的依据） */
   reported?: boolean;
 }
@@ -795,4 +799,10 @@ export interface WvSubagentOpenSessionMsg {
 export interface WvSubagentOpenHandleMsg {
   type: "subagentOpenHandle";
   handle: string;
+}
+/** 无句柄存量行的回看口（2026-11-02）：v6 之前的同步单没独立目录指针，按显示名
+ *  （「职务 · 代号：任务」）回找 session_info.name 前缀命中的文件，再开页签 */
+export interface WvSubagentOpenLabelMsg {
+  type: "subagentOpenLabel";
+  label: string;
 }

@@ -31,6 +31,9 @@ export interface RunRecord {
 	pid?: number;
 	/** 派单方 pi 进程 pid（孤儿判定：父死子活 → orphaned） */
 	ownerPid?: number;
+	/** 派单方会话文件（2026-11-02）：左侧列表把子会话挂在对应主会话下面用它，
+	 *  无此值的老记录落到「未归属」组 */
+	parentSession?: string;
 	startedAt: number;
 	endedAt?: number;
 	status: "running" | "completed" | "failed" | "killed" | "orphaned";

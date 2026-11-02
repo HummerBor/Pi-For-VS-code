@@ -1031,6 +1031,50 @@ export class PiCore {
       case "openSession":
         await this.openSessionFile(m.file);
         break;
+      case "subagentOpenLabel": {
+        // 无句柄的存量行（v6 之前的同步单，runId 是 call_*，没有独立目录指针）：
+        // 按显示名回找子会话文件——名字是「职务 · 代号：任务」（--name 写的），
+        // 扫 subagents/ 与当前项目会话目录的 session_info.name，前缀命中即开页签。
+        // 找不到就安静（不弹错：老数据不可点属预期）
+        const label = String((m as { label?: string }).label ?? "").trim();
+        if (!label) break;
+        const prefix = label.endsWith("：") ? label : label + "：";
+        const dirs: string[] = [];
+        const agentDir2 = this.caps.getAgentDir?.();
+        if (agentDir2) {
+          const base = path.join(agentDir2, "sessions", "subagents");
+          try {
+            for (const h of fs.readdirSync(base)) if (/^sa-\d+$/.test(h)) dirs.push(path.join(base, h));
+          } catch { /* 无子会话 */ }
+        }
+        if (this.lastSessionFile) dirs.push(path.dirname(this.lastSessionFile));
+        let hit: string | undefined;
+        for (const d of dirs) {
+          let files: string[];
+          try {
+            files = fs.readdirSync(d).filter((f) => f.endsWith(".jsonl") && f !== "frames.jsonl");
+          } catch { continue; }
+          for (const f of files) {
+            const full = path.join(d, f);
+            try {
+              const buf = fs.readFileSync(full);
+              const head = buf.subarray(0, Math.min(buf.length, 256 * 1024)).toString("utf8");
+              for (const ln of head.split("\n")) {
+                if (!ln.includes("session_info")) continue;
+                const e = JSON.parse(ln) as { type?: string; name?: unknown };
+                if (e.type === "session_info" && typeof e.name === "string" && e.name.startsWith(prefix)) {
+                  hit = full;
+                  break;
+                }
+              }
+            } catch { /* 半行/烂文件跳过 */ }
+            if (hit) break;
+          }
+          if (hit) break;
+        }
+        if (hit) this.caps.openSessionInTab?.(hit, label);
+        break;
+      }
       case "subagentOpenHandle": {
         // 概览行点开子会话（2026-11-02）：webview 只传句柄，目录在这里拼（agentDir 是宿主能力）。
         // 复用 subagentOpenSession 的落点：<agentDir>/sessions/subagents/<handle>/ → 最新 jsonl →

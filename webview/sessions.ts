@@ -19,11 +19,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   (document.getElementById("refresh") as HTMLElement).innerHTML = ico("refresh", 16);
   (document.getElementById("gear") as HTMLElement).innerHTML = ico("gear", 16);
 
-  /** 全量条目（宿主 svItems 唯一事实源）；sel = 选中下标（键盘导航），渲染即过滤 */
-  let items: { file: string; label: string; time: string }[] = [];
-  /** 子会话（折叠组，2026-11-02 用户拍板）：不混主列表（混排 = 调子 agent 后列表被刷），
-   *  单独一折叠组放底部；展开态是 webview 内存态，重建即回折叠（低频入口，不值得持久化） */
+  /** 全量条目（宿主 svItems 唯一事实源）；sel = 选中下标（键盘导航），渲染即过滤。
+   *  item.subs = 属于本主会话的子会话（2026-11-02 用户拍板「主会话加收放按钮，展开是
+   *  对应的子智能体」）——不再全堆在底部一个全局组（那样跟右侧浮窗重复）*/
+  let items: { file: string; label: string; time: string; subs?: { file: string; label: string; time: string }[] }[] = [];
+  /** 未归属的子会话（无台账 parentSession 的老单）：单独一组堆底部，至少不让它们消失 */
   let subs: { file: string; label: string; time: string }[] = [];
+  /** 展开状态：主会话按 file 记，未归属组用 "__orphans__" */
+  let expanded: Record<string, boolean> = {};
   let subsOpen = false;
   let sel = -1;
 
@@ -62,57 +65,78 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function render() {
     const list = filtered();
     const q = qEl.value.trim().toLowerCase();
-    const subsShown = subs.filter(
-      (s) => !q || s.label.toLowerCase().indexOf(q) >= 0 || s.file.toLowerCase().indexOf(q) >= 0
-    );
-    // 搜索有命中则自动展开（不然搜不到实感）；无搜索时尊重用户手动的展开态
-    const open = q ? subsShown.length > 0 : subsOpen;
-    const rowsHtml = list
-      .map(
-        (it) =>
-          `<div class="row${it.idx === sel ? " sel" : ""}" data-idx="${it.idx}" data-file="${esc(it.file)}">` +
-          `<span class="r-label">${esc(it.label)}</span>` +
-          `<span class="r-time">${esc(it.time)}</span>` +
-          `<span class="r-del" title="${esc(L.svDelete)}">${ico("trash")}</span>` +
-          `</div>`
-      )
-      .join("");
-    // 子会话组：组头可点开合；子行不给删除钮（删除链路的目录守卫只认会话库根，
-    // 子会话目录不在白名单内，给了按钮只会报错——需要清理时用浮窗/台账侧的口径）
+    const matchSub = function (s: { label: string; file: string }): boolean {
+      return !q || s.label.toLowerCase().indexOf(q) >= 0 || s.file.toLowerCase().indexOf(q) >= 0;
+    };
+    var rowsHtml = '';
+    for (var ri2 = 0; ri2 < list.length; ri2++) {
+      var it = list[ri2];
+      var item = items[it.idx];
+      var kids = (item && item.subs) ? item.subs.filter(matchSub) : [];
+      // 搜索命中子行时自动展开（不然搜不到实感）；否则尊重手动的展开态
+      var open = q ? kids.length > 0 : !!expanded[it.file];
+      rowsHtml +=
+        `<div class="row${it.idx === sel ? ' sel' : ''}" data-idx="${it.idx}" data-file="${esc(it.file)}">` +
+        `<span class="r-caret${kids.length ? '' : ' empty'}">${kids.length ? (open ? '▾' : '▸') : ''}</span>` +
+        `<span class="r-label">${esc(it.label)}</span>` +
+        `<span class="r-time">${esc(it.time)}</span>` +
+        `<span class="r-del" title="${esc(L.svDelete)}">${ico('trash')}</span>` +
+        `</div>`;
+      if (open) {
+        for (var ki = 0; ki < kids.length; ki++) {
+          rowsHtml +=
+            `<div class="row sub" data-file="${esc(kids[ki].file)}">` +
+            `<span class="r-label">${esc(kids[ki].label)}</span>` +
+            `<span class="r-time">${esc(kids[ki].time)}</span>` +
+            `</div>`;
+        }
+      }
+    }
+    // 未归属组（老同步单）：无 parentSession 可挂，堆底部一个折叠组
+    const subsShown = subs.filter(matchSub);
+    const openAll = q ? subsShown.length > 0 : subsOpen;
     const groupHtml = subs.length
       ? `<div class="group-head" data-group="sub">` +
-        `<span class="g-caret">${open ? "▾" : "▸"}</span>` +
-        `<span class="g-label">${esc(L.svSubGroup)} (${subsShown.length})</span></div>` +
-        (open
+        `<span class="g-caret">${openAll ? '▾' : '▸'}</span>` +
+        `<span class="g-label">${esc(L.svSubOrphans)} (${subsShown.length})</span></div>` +
+        (openAll
           ? subsShown
               .map(
-                (it) =>
-                  `<div class="row sub" data-file="${esc(it.file)}">` +
-                  `<span class="r-label">${esc(it.label)}</span>` +
-                  `<span class="r-time">${esc(it.time)}</span>` +
+                (s) =>
+                  `<div class="row sub" data-file="${esc(s.file)}">` +
+                  `<span class="r-label">${esc(s.label)}</span>` +
+                  `<span class="r-time">${esc(s.time)}</span>` +
                   `</div>`
               )
-              .join("")
-          : "")
-      : "";
+              .join('')
+          : '')
+      : '';
     listEl.innerHTML = rowsHtml + groupHtml;
-    emptyEl.style.display = list.length || subsShown.length ? "none" : "block";
-    const cur = listEl.querySelector(".row.sel") as HTMLElement | null;
-    if (cur) cur.scrollIntoView({ block: "nearest" });
+    emptyEl.style.display = list.length || subsShown.length ? 'none' : 'block';
+    const cur = listEl.querySelector('.row.sel') as HTMLElement | null;
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
 
   // 点击行 = 打开；点删除钮 = 删除（stopPropagation 防穿到打开）
   listEl.addEventListener("click", (e) => {
     const del = (e.target as HTMLElement).closest(".r-del") as HTMLElement | null;
     const head = (e.target as HTMLElement).closest(".group-head") as HTMLElement | null;
-    if (head) { subsOpen = !subsOpen; render(); return; } // 组头开合
+    const caret = (e.target as HTMLElement).closest(".r-caret") as HTMLElement | null;
+    if (head) { subsOpen = !subsOpen; render(); return; } // 未归属组开合
     const row = (e.target as HTMLElement).closest(".row") as HTMLElement | null;
     if (!row) return;
     const file = row.getAttribute("data-file") || "";
+    // 展开箭头：只切展开态，不打开会话（stopPropagation 语义靠这里提前 return）
+    if (caret && !caret.classList.contains("empty")) {
+      expanded[file] = !expanded[file];
+      render();
+      return;
+    }
     if (del) { vscode.postMessage({ type: "svDelete", file }); return; }
     if (row.classList.contains("sub")) {
       // 子会话行：直接开会话页签（与浮窗行同链路：openOrFocusSession → 另开页签）
-      const hit = subs.find((s) => s.file === file);
+      const hit = subs.find((s) => s.file === file) ||
+        (items.map(function (m) { return m.subs || []; }).reduce(function (a, b) { return a.concat(b); }, []) as any[]).find(function (s) { return s.file === file; });
       vscode.postMessage({ type: "svOpen", file, label: hit ? hit.label : undefined });
       return;
     }
@@ -151,7 +175,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 宿主→webview：svItems 唯一事实源（全量重发，本地零影子状态——与聊天 tabs 同纪律）；
   // svTheme = 主题广播（body[data-theme] 就地换，与聊天面板同款 token）
   window.addEventListener("message", (ev: MessageEvent) => {
-    const m = ev.data as { type: string; items?: { file: string; label: string; time: string }[]; subs?: { file: string; label: string; time: string }[]; name?: string };
+    const m = ev.data as { type: string; items?: { file: string; label: string; time: string; subs?: { file: string; label: string; time: string }[] }[]; subs?: { file: string; label: string; time: string }[]; name?: string };
     if (m.type === "svItems") {
       items = m.items || [];
       subs = m.subs || [];

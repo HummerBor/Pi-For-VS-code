@@ -1,15 +1,18 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { listSessions, peekListSessions, listSubagentSessions, peekSubagentSessions } from "./sessionCache";
+import { listSessions, peekListSessions, listSubagentSessions, peekSubagentSessions, subagentParentMap, handleFromSubPath, samePath } from "./sessionCache";
 import { ChatPanelProvider } from "./panel";
 import { bb } from "../core/i18n";
 import { getSessionsHtml } from "./webview-html";
 
-/** 列表条目（宿主→webview svItems 的形状；本地零影子状态，宿主全量重发） */
+/** 列表条目（宿主→webview svItems 的形状；本地零影子状态，宿主全量重发）。
+ *  subs（2026-11-02 用户拍板「主会话加收放按钮，展开是对应的子智能体」）：
+ *  属于本主会话的子会话，嵌套在行上——不再全堆在底部一个全局组里（那样跟右侧浮窗重复）*/
 interface SvItem {
   file: string;
   label: string;
   time: string;
+  subs?: SvItem[];
 }
 
 /**
@@ -121,11 +124,9 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     const cachedSubs = await peekSubagentSessions(cwd).catch(() => null);
     if (cached) {
       const sp = splitLegacySubs(cached);
-      void view.webview.postMessage({
-        type: "svItems",
-        items: toItemMsgs(sp.main),
-        subs: toItemMsgs([...(cachedSubs ?? []), ...sp.legacy]),
-      });
+      const subs = toItemMsgs([...(cachedSubs ?? []), ...sp.legacy]);
+      const { items, orphans } = nestSubs(toItemMsgs(sp.main), subs, await subagentParentMap());
+      void view.webview.postMessage({ type: "svItems", items, subs: orphans });
     }
     // 渐进上屏（与 ⏱ 选择器同款，2026-10-22「2比1加载慢」定案）：原来 await 全量才发，
     // 死等 1.2~2s（宿主拥堵下 22~30s）期间侧栏空白——partial 首批 ~19ms 就有货，
@@ -141,14 +142,12 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       lastProgressAt = now;
       void view.webview.postMessage({ type: "svItems", items: toItemMsgs(partial) });
     }).catch(() => []);
-    // 子会话（折叠组）：扫 subagents/ 目录 + v6 之前遗留的同步单（按名字格式识别）
+    // 子会话：扫 subagents/ 目录 + v6 之前遗留的同步单（按名字格式识别），按 parentSession 嵌套
     const subs = await listSubagentSessions(cwd).catch(() => []);
     const sp = splitLegacySubs(sessions);
-    void view.webview.postMessage({
-      type: "svItems",
-      items: toItemMsgs(sp.main),
-      subs: toItemMsgs([...subs, ...sp.legacy]),
-    });
+    const merged = toItemMsgs([...subs, ...sp.legacy]);
+    const { items, orphans } = nestSubs(toItemMsgs(sp.main), merged, await subagentParentMap());
+    void view.webview.postMessage({ type: "svItems", items, subs: orphans });
   }
 
   /** 主题切换广播（panel.pickTheme 全实例广播的补充——本 provider 不是 ChatPanelProvider，
@@ -173,6 +172,31 @@ function toItemMsgs(sessions: { file: string; name?: string; preview: string; ti
     label: s.name || s.preview || path.basename(s.file),
     time: s.time,
   }));
+}
+
+/** 主列表 + 子会话 → 嵌套结构（2026-11-02 用户拍板）。
+ *  归属依据 = 台账 parentSession（harness 派单时记的父会话文件）；
+ *  无台账/子会话目录的老同步单归不进去——它们按名字格式认出是子会话，
+ *  统一放到未归属组（不丢、也不污染主列表）。 */
+function nestSubs(
+  main: SvItem[],
+  subs: { file: string; label: string; time: string }[],
+  parents: Map<string, string>,
+): { items: SvItem[]; orphans: SvItem[] } {
+  const byParent = new Map<string, SvItem[]>();
+  const orphans: SvItem[] = [];
+  for (const s of subs) {
+    const handle = handleFromSubPath(s.file);
+    const parent = handle ? parents.get(handle) : undefined;
+    const host = parent ? main.find((m) => samePath(m.file, parent)) : undefined;
+    if (!host) {
+      orphans.push({ ...s });
+      continue;
+    }
+    if (!host.subs) host.subs = [];
+    host.subs.push({ ...s });
+  }
+  return { items: main, orphans };
 }
 
 /** 注册左侧会话列表（extension.activate 调用一次）：容器 piChatSessions 常驻左侧活动栏，

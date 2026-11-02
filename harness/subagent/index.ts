@@ -361,6 +361,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	parentSession?: string,
 ): Promise<SingleResult> {
 	const registered = agents.find((a) => a.name === agentName);
 	const agent = registered ?? agents.find((a) => a.name === "worker");
@@ -459,6 +460,7 @@ async function runSingleAgent(
 					task,
 					cwd: cwd ?? defaultCwd,
 					sessionDir: runDir,
+					parentSession,
 					pid: proc.pid,
 					ownerPid: process.pid,
 					startedAt: Date.now(),
@@ -590,6 +592,8 @@ interface AsyncRun {
 	agentScope: AgentScope;
 	task: string;
 	model?: string;
+	/** 派单方会话文件（左侧列表父子分组用，2026-11-02） */
+	parentSession?: string;
 	startedAt: number;
 	endedAt?: number;
 	status: "running" | "completed" | "failed" | "killed";
@@ -639,6 +643,8 @@ function startAsyncRun(
 			task: run.task,
 			cwd: opts.cwd,
 			sessionDir: runDirFor(run.handle),
+			// 父会话路径（2026-11-02）：左侧列表按它把子会话挂到对应主会话下
+			parentSession: run.parentSession,
 			pid: proc.pid,
 			ownerPid: process.pid,
 			startedAt: run.startedAt,
@@ -1071,6 +1077,7 @@ export default function (pi: ExtensionAPI) {
 					agentScope,
 					task: params.task!,
 					model: agent.model,
+					parentSession: ctx.sessionManager?.getSessionFile?.(),
 					startedAt: Date.now(),
 					status: "running",
 					result: {
@@ -1180,6 +1187,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						ctx.sessionManager?.getSessionFile?.(),
 					);
 					results.push(result);
 
@@ -1259,6 +1267,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						ctx.sessionManager?.getSessionFile?.(),
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -1296,6 +1305,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					ctx.sessionManager?.getSessionFile?.(),
 				);
 				const isError = isFailedResult(result);
 				if (isError) {

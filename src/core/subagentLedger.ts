@@ -43,6 +43,7 @@ export function readLedgerRows(agentDir: string): SubagentLedgerRow[] {
         endedAt: typeof raw.endedAt === "number" ? raw.endedAt : undefined,
         model: typeof raw.model === "string" ? raw.model : undefined,
         sessionDir: typeof raw.sessionDir === "string" ? raw.sessionDir : undefined,
+        parentSession: typeof raw.parentSession === "string" ? raw.parentSession : undefined,
         reported: typeof raw.reported === "boolean" ? raw.reported : undefined,
       });
     } catch {

@@ -252,6 +252,38 @@ export async function listSubagentSessions(cwd?: string, limit = 50): Promise<Se
   return toSessionInfos(subs, cwd, limit);
 }
 
+/** handle → 派单方会话文件（2026-11-02 左侧列表父子分组用）。
+ *  数据源 = harness 台账（runs/<handle>.json 的 parentSession）；无台账/老记录缺席。 */
+export async function subagentParentMap(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const sdk = await loadPiSdk();
+    const agentDir: string | undefined = sdk.getAgentDir?.();
+    if (!agentDir) return out;
+    const dir = join(agentDir, "sessions", "subagents", "runs");
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const rec = JSON.parse(fs.readFileSync(join(dir, f), "utf8")) as Record<string, unknown>;
+        const handle = String(rec.handle ?? "");
+        const parent = rec.parentSession;
+        if (/^sa-\d+$/.test(handle) && typeof parent === "string" && parent) out.set(handle, parent);
+      } catch {
+        /* 烂 JSON 跳过 */
+      }
+    }
+  } catch {
+    /* 台账不可读：全部归「未归属」 */
+  }
+  return out;
+}
+
+/** 从子会话文件路径反推句柄（.../subagents/sa-9/xxx.jsonl → sa-9） */
+export function handleFromSubPath(file: string): string | undefined {
+  const m = /[\\/]subagents[\\/](sa-\d+)[\\/]/.exec(file);
+  return m?.[1];
+}
+
 /** 子会话秒出：扫描本身很轻（每单只读头部 256KB），不做 memo——子会话数量小且
  *  随时新增（派单即出），缓存反而让人以为「刚派的没出现」 */
 export async function peekSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[] | null> {
