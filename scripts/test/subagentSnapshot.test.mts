@@ -170,14 +170,16 @@ eq("tasks 槽归位", (input.tasks as any[])[0].agent, "worker");
 eq("chain 槽归位", (input.chain as any[])[0].agent, "worker");
 eq("task 文本不动", (input.tasks as any[])[0].task, "T-par");
 
-// 快照显示原名（台账）而非分类名（details）
+// 快照显示名口径（2026-11-02 改变，理由见 subagentSnapshot.snapTask 注释）：
+// 优先 details.agent——harness 现在主动写「职务 · 随机代号」（如「工程师 · 云雀」）；
+// 台账只当空值兜底。早期是台账优先，但那样会把 harness 的可读名盖回英文分类名。
 const renamed = subagentSnapshot({
   mode: "single",
-  results: [{ agent: "worker", task: "T-single", exitCode: 0, stopReason: "end", usage: {}, messages: [] }],
+  results: [{ agent: "工程师 · 云雀", task: "T-single", exitCode: 0, stopReason: "end", usage: {}, messages: [] }],
 });
 ok("改名快照识别", renamed !== null);
-if (renamed) eq("显示调用名而非分类名", renamed.tasks[0].agent, "test-agent");
-if (renamed) eq("台账里是原名", displayNameFor("T-single"), "test-agent");
+if (renamed) eq("显示 harness 的职务代号名", renamed.tasks[0].agent, "工程师 · 云雀");
+if (renamed) eq("台账仍记原名（供老帧/历史渲染）", displayNameFor("T-single"), "test-agent");
 eq("台账缺回退分类名", displayNameFor("没见过的任务"), undefined);
 
 console.log(`subagentSnapshot: ${passed} 项全过`);

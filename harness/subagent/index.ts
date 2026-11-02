@@ -45,15 +45,42 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
-/** 子会话可读名（agent · 任务摘要）：写进 pi 的 session_info.name（CLI --name）。
+/** 职务中文名（2026-11-02 用户拍板「职务 + 随机名字」）：pi 注册分类是英文的
+ *  worker/planner/...，展示层要中文职务 —— 一层映射，不碰 pi 注册表。
+ *  未注册名（调用方自取的名字）本身就当职务用，不再二次翻译。 */
+const DUTY_LABELS: Record<string, string> = {
+	worker: "工程师",
+	planner: "规划师",
+	researcher: "研究员",
+	reviewer: "审阅者",
+	scout: "侦察兵",
+};
+
+/** 随机代号池（中文两字，有画面感、不易混）：同职务多单并行时靠它区分。
+ *  只在本单派发时取一次并写进 run/会话名——重载/重放读的是已落盘的值，不会耍名字。 */
+const CODENAMES = [
+	"云雀", "青松", "白鹭", "墨竹", "赤狸", "星野", "寒山", "听雨", "望月", "微澜",
+	"长风", "初雪", "孤舟", "远山", "流萤", "惊蛰", "空谷", "青岚", "栖梧", "拾光",
+];
+
+/** 展示名 = 职务 · 随机代号（如「工程师 · 云雀」）。
+ *  同时用于：details/台账的 agent 字段（浮窗行）、pi 会话名（--name，页签标题与
+ *  pi 原生 Resume 列表）、子 agent 自己的自述。 */
+function displayAgentName(agentName: string): string {
+	const duty = DUTY_LABELS[agentName] ?? agentName;
+	const code = CODENAMES[Math.floor(Math.random() * CODENAMES.length)];
+	return `${duty} · ${code}`;
+}
+
+/** 子会话可读名（展示名：任务摘要）：写进 pi 的 session_info.name（CLI --name）。
  *  2026-11-02 用户实测痛点：子会话没有名字时，面板标签只能 fallback 成文件名时间戳
  *  「11-02 11:54」，pi 原生 Resume 列表也只能显示首条消息——认不出是哪个任务。
  *  名里不许有换行/控制字符（pi 把它当单行标题渲染），超长截断。 */
-function sessionLabel(agentName: string, task: string): string {
+function sessionLabel(displayName: string, task: string): string {
 	const flat = String(task ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
 	const chars = Array.from(flat);
 	const snip = chars.slice(0, 40).join("") + (chars.length > 40 ? "…" : "");
-	return snip ? `${agentName} · ${snip}` : agentName;
+	return snip ? `${displayName}：${snip}` : displayName;
 }
 
 function formatTokens(count: number): string {
@@ -332,13 +359,11 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 ): Promise<SingleResult> {
-	// 「名字应该可以随便取」（2026-09-24 用户拍板）的 harness 半边（2026-11-02 补齐）：
-	// 面板侧的 subagentNameGuard 只在面板进程里归位名字，子 agent 是独立 spawn 的 pi
-	// 进程——这里不兜底就报 Unknown agent。未注册名 → 按内置 worker 的定义跑，但名字
-	// （展示名/会话名）保留调用方给的原名；回执里注明，拼错名不至于静默误跑。
 	const registered = agents.find((a) => a.name === agentName);
 	const agent = registered ?? agents.find((a) => a.name === "worker");
-	const displayName = agentName; // 原名不论是否注册都当显示名（会话名/浮窗行同口径）
+	// 展示名 = 职务 · 随机代号（2026-11-02 用户拍板）：不论是否注册都用它当 agent 字段/
+	// 会话名，浮窗行与页签一眼能区分同职务的多单。原始分类仍走 agent 定义（下文 agent.tools 等）
+	const displayName = displayAgentName(agentName);
 
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
@@ -375,7 +400,7 @@ async function runSingleAgent(
 	let tmpPromptPath: string | null = null;
 
 	const currentResult: SingleResult = {
-		agent: agentName,
+		agent: displayName,
 		agentSource: agent.source,
 		task,
 		exitCode: 0,
@@ -994,10 +1019,13 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails("single")([]),
 					};
 				}
+				// 展示名 = 职务 · 随机代号（同 runSingleAgent 处注释）：本单派发时取一次，
+				// 写进 run/result/会话名——台账与帧都落这个值，重载后不会变
+				const displayName = displayAgentName(requestedName);
 				const handle = `sa-${++asyncSeq}`;
 				const run: AsyncRun = {
 					handle,
-					agent: requestedName,
+					agent: displayName,
 					agentSource: agent.source,
 					agentScope,
 					task: params.task!,
@@ -1005,7 +1033,7 @@ export default function (pi: ExtensionAPI) {
 					startedAt: Date.now(),
 					status: "running",
 					result: {
-						agent: requestedName,
+						agent: displayName,
 						agentSource: agent.source,
 						task: params.task!,
 						exitCode: 0,
@@ -1031,7 +1059,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (agent.tools && agent.tools.length > 0) cliArgs.push("--tools", agent.tools.join(","));
 				// 可读会话名（同 runSingleAgent 处注释）：异步单同样要能在面板/pi Resume 里认出任务
-				cliArgs.push("--name", sessionLabel(requestedName, params.task ?? ""));
+				cliArgs.push("--name", sessionLabel(displayName, params.task ?? ""));
 				// 会话落盘（P0-1，2026-10-30）：每单独立 --session-dir，handle ↔ 子会话目录
 				// 一一对应（台账记指针）——子 agent 记录不再绑父会话，「新开项目找不到
 				// 子 agent」的治本。禁 --no-session 红线见 runSingleAgent 处注释。

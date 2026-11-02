@@ -1820,8 +1820,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 每 agent 固定色（抄 CC agentColorManager.getAgentColor）：名字哈希 → HSL，同 agent
    *  恒同色——并行多 agent 一眼分清谁是谁 */
   function agentColor(name: string): string {
+    // 颜色按「职务」取（2026-11-02「职务 · 随机代号」）：同一职务的不同单共色，
+    // 不同职务不同色——否则随机代号把颜色也打散，「每 agent 固定色」就名存实亡
+    var duty = String(name).split('·')[0].trim();
     var h = 0;
-    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    for (var i = 0; i < duty.length; i++) h = (h * 31 + duty.charCodeAt(i)) >>> 0;
     return 'hsl(' + (h % 360) + ', 55%, 62%)';
   }
   // 浮窗：单例。收起（subCollapsed）= 整块隐藏、头部 spinner 亮（运行中），codex 模型；

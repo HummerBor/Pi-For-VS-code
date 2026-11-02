@@ -14,7 +14,7 @@
  */
 import * as fs from "fs";
 import { join, resolve } from "path";
-import { classifyDispatchName, noteDispatchNames, rewriteSubagentInput } from "./subagentNames";
+import { noteDispatchNames } from "./subagentNames";
 
 /** 读一个 agents 目录的注册名（frontmatter name: 行；YAML 剥引号/行内注释，复杂标量不做） */
 export function agentNamesFromDir(dir: string | null): string[] {
@@ -80,13 +80,15 @@ export function makeSubagentNameGuard(sdk: any, cwd: string): { name: string; fa
       pi.on("tool_call", (event: any) => {
         if (!event || event.toolName !== "subagent" || !event.input || typeof event.input !== "object") return;
         const input = event.input as Record<string, unknown>;
-        // 先记台账（原名），再归位改写——顺序反了台账里就是分类名了
+        // 台账（原名）依旧记：历史记录/老帧的展示名回退靠它
         noteDispatchNames(input);
-        const valid = validNamesFor(input.agentScope, sdk, cwd);
-        // 内置 worker 兜底（2026-10-30）：词表为空的新项目也归位到内置 worker
-        // （harness agents.ts BUILTIN_AGENTS），否则直通 Unknown agent「找不到子 agent」
-        const fallback = valid.includes("worker") ? "worker" : (valid[0] ?? "worker");
-        rewriteSubagentInput(input, (n) => classifyDispatchName(n, valid, fallback));
+        // 【2026-11-02 不再归位】原实现在此处把未注册名改写成默认分类（worker）——但它
+        // 抹掉了调用方自取的名字，导致「职务 · 随机代号」只能拼出「工程师 · x」而不是
+        // 「前端检查员 · x」。改由 harness 侧兜底（未注册名 → 按 worker 定义跑、保留原名，
+        // 见 harness/subagent/index.ts displayAgentName 处注释）：harness 内置随插件分发、
+        // 版本门保证同步，比在面板侧盲改写更可靠（子进程才是最终解释者）。
+        // 保留 validNamesFor/classifyDispatchName 纯逻辑与用例（供旧数据/诊断用），不再调用。
+        void validNamesFor; void input;
       });
     },
   };

@@ -236,8 +236,10 @@ function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean)
   if (typeof r.agent !== "string") return null;
   const { items, total } = itemsFromMessages(r.messages, itemTail, full);
   return {
-    // 显示名两层分离（2026-09-24）：调用方给的名字优先（随便取），回退分类名
-    agent: (typeof r.task === "string" && displayNameLookup ? displayNameLookup(r.task) : undefined) ?? r.agent,
+    // 显示名：harness 给的 agent 字段优先（2026-11-02「职务 · 随机代号」就是它写的，
+    // 如「工程师 · 云雀」）；台账查表只当兜底（老记录/字段缺失时回退调用方原名/分类名）。
+    // 早期是 lookup 优先，但 harness 现在主动写可读名，再让 lookup 盖掉就退回英文分类名了
+    agent: r.agent || (typeof r.task === "string" && displayNameLookup ? displayNameLookup(r.task) : undefined) || "?",
     task: typeof r.task === "string" ? (full ? capText(r.task, 2000) : oneLine(r.task, TASK_MAX)) : "",
     status: taskStatus(r),
     step: typeof r.step === "number" ? r.step : undefined,
