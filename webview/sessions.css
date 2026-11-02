@@ -161,3 +161,45 @@ body {
   font-size: 12px;
   opacity: .55;
 }
+
+/* 子会话折叠组（2026-11-02 用户拍板「左侧列表也列子会话」）：子会话绝不混进主列表
+   （混排 = 调子 agent 后列表被刷的原始投诉），单独一组放底部、默认折叠。
+   子行左侧缩进 + 弱化色，视觉上从属于主列表；无删除钮（目录守卫只认会话库根） */
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 4px 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--pi-border, rgba(128, 128, 128, .18));
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--pi-fg-dim, var(--vscode-descriptionForeground));
+}
+
+.group-head:hover {
+  color: var(--pi-fg);
+}
+
+.g-caret {
+  width: 10px;
+  flex: none;
+  text-align: center;
+}
+
+.g-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row.sub {
+  padding-left: 22px;
+  opacity: .9;
+}
+
+.row.sub .r-label {
+  color: var(--pi-fg-dim, var(--vscode-descriptionForeground));
+}

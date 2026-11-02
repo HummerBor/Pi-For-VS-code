@@ -52,7 +52,7 @@ export type PiSessionProjection = Pick<PiSessionEntry, "path" | "cwd" | "name" |
  *  【这不是记录副本】不落盘、不留派生真相——只是查询应答；TTL 窗口内不重复问 pi，
  *  已知变更（删会话）显式失效。早前的错误是把派生数据落盘 + 自研第二套扫描器 */
 const LIST_MEMO_TTL_MS = 3000;
-const memo = new Map<string, { at: number; result: PiSessionProjection[] }>();
+const memo = new Map<string, { at: number; result: PiSessionProjection[]; subs: PiSessionProjection[] }>();
 /** 已知变更处立即失效（删除会话后列表不能再拖 10s 旧账） */
 export function invalidateListMemo(): void {
   memo.clear();
@@ -78,8 +78,7 @@ export function configuredSessionDir(): string | undefined {
 /** 子会话（harness 每单落 sessions/subagents/<handle>/）不进主列表（2026-11-02 用户
  *  实测「调用子 agent 后一堆会话历史被刷」）：回看走子 agent 浮窗台账行，列表保干净；
  *  后续如需分组展示再做「子智能体」折叠组（需求文档 P0-2），先过滤止血 */
-const isMainSession = (e: PiSessionEntry): boolean => !/[\\/]subagents[\\/]/.test(e.path);
-const project = (x: PiSessionEntry): PiSessionProjection => ({
+const isMainSession = (e: PiSessionEntry): boolean => !/[\\/]subagents[\\/]/.test(e.path);const project = (x: PiSessionEntry): PiSessionProjection => ({
   path: x.path,
   cwd: x.cwd,
   name: x.name,
@@ -124,7 +123,10 @@ export function listNative(
         ? await sdk.SessionManager.list(cwd, sessionDir, progress)
         : await sdk.SessionManager.listAll(sessionDir, progress)) as PiSessionEntry[];
       const result: PiSessionProjection[] = entries.filter(isMainSession).map(project);
-      memo.set(key, { at: Date.now(), result });
+      // 子会话单独一份（2026-11-02 用户拍板「左侧列表也列子会话」）：同一趟扫描顺手分组，
+      // 不额外扫盘；展示层分折叠组，不让它们混进主列表（混排 = 调用子 agent 后列表被刷）
+      const subsProj: PiSessionProjection[] = entries.filter((e) => !isMainSession(e)).map(project);
+      memo.set(key, { at: Date.now(), result, subs: subsProj });
       return result;
     } finally {
       inFlight.delete(key);
@@ -173,6 +175,24 @@ export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null
   const hit = memo.get((cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? ""));
   if (!hit) return null;
   return toSessionInfos(hit.result, cwd, limit);
+}
+
+/** 子会话列表（2026-11-02 用户拍板：左侧列表也列，但走折叠组不混主列表）。
+ *  数据源 = 同一次 listNative 扫描的子会话半边（memo 命中则不重扫）；没有就回空数组。
+ *  子会话的 cwd 记在 jsonl 头里，toSessionInfos 的 cwd 过滤能筛出本项目的。 */
+export async function listSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
+  const proj = await listNative(cwd);
+  const key = (cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? "");
+  const subs = memo.get(key)?.subs ?? [];
+  void proj; // listNative 的返回是主会话半边，这里只要它跑完（memo 已写含 subs）
+  return toSessionInfos(subs, cwd, limit);
+}
+
+/** 子会话秒出（同 peekListSessions 口径） */
+export function peekSubagentSessions(cwd?: string, limit = 50): SessionInfo[] | null {
+  const hit = memo.get((cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? ""));
+  if (!hit) return null;
+  return toSessionInfos(hit.subs, cwd, limit);
 }
 
 /** 列出历史会话，按最近使用排序；传 cwd 只列该项目的会话。数据源 = pi 原生（见头注释）。

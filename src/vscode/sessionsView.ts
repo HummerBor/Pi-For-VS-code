@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { listSessions, peekListSessions } from "./sessionCache";
+import { listSessions, peekListSessions, listSubagentSessions, peekSubagentSessions } from "./sessionCache";
 import { ChatPanelProvider } from "./panel";
 import { bb } from "../core/i18n";
 import { getSessionsHtml } from "./webview-html";
@@ -101,7 +101,8 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     if (!view) return;
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const cached = peekListSessions(cwd);
-    if (cached) void view.webview.postMessage({ type: "svItems", items: toItemMsgs(cached) });
+    const cachedSubs = peekSubagentSessions(cwd);
+    if (cached) void view.webview.postMessage({ type: "svItems", items: toItemMsgs(cached), subs: toItemMsgs(cachedSubs ?? []) });
     // 渐进上屏（与 ⏱ 选择器同款，2026-10-22「2比1加载慢」定案）：原来 await 全量才发，
     // 死等 1.2~2s（宿主拥堵下 22~30s）期间侧栏空白——partial 首批 ~19ms 就有货，
     // picker 先修了这里漏了。有缓存时不再上屏 partial（秒出已兜底，真值到达原地替换）；
@@ -116,7 +117,9 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       lastProgressAt = now;
       void view.webview.postMessage({ type: "svItems", items: toItemMsgs(partial) });
     }).catch(() => []);
-    void view.webview.postMessage({ type: "svItems", items: toItemMsgs(sessions) });
+    // 子会话（折叠组）：与主会话同一趟扫描（sessionCache memo 命中不重扫），列表不混排
+    const subs = await listSubagentSessions(cwd).catch(() => []);
+    void view.webview.postMessage({ type: "svItems", items: toItemMsgs(sessions), subs: toItemMsgs(subs) });
   }
 
   /** 主题切换广播（panel.pickTheme 全实例广播的补充——本 provider 不是 ChatPanelProvider，

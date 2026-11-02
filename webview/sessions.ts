@@ -21,6 +21,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   /** 全量条目（宿主 svItems 唯一事实源）；sel = 选中下标（键盘导航），渲染即过滤 */
   let items: { file: string; label: string; time: string }[] = [];
+  /** 子会话（折叠组，2026-11-02 用户拍板）：不混主列表（混排 = 调子 agent 后列表被刷），
+   *  单独一折叠组放底部；展开态是 webview 内存态，重建即回折叠（低频入口，不值得持久化） */
+  let subs: { file: string; label: string; time: string }[] = [];
+  let subsOpen = false;
   let sel = -1;
 
   /** feather 风格线性图标（currentColor 描边，随主题文字色）。网格约定：viewBox 固定 24，
@@ -57,7 +61,13 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   function render() {
     const list = filtered();
-    listEl.innerHTML = list
+    const q = qEl.value.trim().toLowerCase();
+    const subsShown = subs.filter(
+      (s) => !q || s.label.toLowerCase().indexOf(q) >= 0 || s.file.toLowerCase().indexOf(q) >= 0
+    );
+    // 搜索有命中则自动展开（不然搜不到实感）；无搜索时尊重用户手动的展开态
+    const open = q ? subsShown.length > 0 : subsOpen;
+    const rowsHtml = list
       .map(
         (it) =>
           `<div class="row${it.idx === sel ? " sel" : ""}" data-idx="${it.idx}" data-file="${esc(it.file)}">` +
@@ -67,7 +77,26 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           `</div>`
       )
       .join("");
-    emptyEl.style.display = list.length ? "none" : "block";
+    // 子会话组：组头可点开合；子行不给删除钮（删除链路的目录守卫只认会话库根，
+    // 子会话目录不在白名单内，给了按钮只会报错——需要清理时用浮窗/台账侧的口径）
+    const groupHtml = subs.length
+      ? `<div class="group-head" data-group="sub">` +
+        `<span class="g-caret">${open ? "▾" : "▸"}</span>` +
+        `<span class="g-label">${esc(L.svSubGroup)} (${subsShown.length})</span></div>` +
+        (open
+          ? subsShown
+              .map(
+                (it) =>
+                  `<div class="row sub" data-file="${esc(it.file)}">` +
+                  `<span class="r-label">${esc(it.label)}</span>` +
+                  `<span class="r-time">${esc(it.time)}</span>` +
+                  `</div>`
+              )
+              .join("")
+          : "")
+      : "";
+    listEl.innerHTML = rowsHtml + groupHtml;
+    emptyEl.style.display = list.length || subsShown.length ? "none" : "block";
     const cur = listEl.querySelector(".row.sel") as HTMLElement | null;
     if (cur) cur.scrollIntoView({ block: "nearest" });
   }
@@ -75,10 +104,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 点击行 = 打开；点删除钮 = 删除（stopPropagation 防穿到打开）
   listEl.addEventListener("click", (e) => {
     const del = (e.target as HTMLElement).closest(".r-del") as HTMLElement | null;
+    const head = (e.target as HTMLElement).closest(".group-head") as HTMLElement | null;
+    if (head) { subsOpen = !subsOpen; render(); return; } // 组头开合
     const row = (e.target as HTMLElement).closest(".row") as HTMLElement | null;
     if (!row) return;
     const file = row.getAttribute("data-file") || "";
     if (del) { vscode.postMessage({ type: "svDelete", file }); return; }
+    if (row.classList.contains("sub")) {
+      // 子会话行：直接开会话页签（与浮窗行同链路：openOrFocusSession → 另开页签）
+      const hit = subs.find((s) => s.file === file);
+      vscode.postMessage({ type: "svOpen", file, label: hit ? hit.label : undefined });
+      return;
+    }
     const ridx = parseInt(row.getAttribute("data-idx") || "-1", 10);
     sel = ridx;
     render();
@@ -114,9 +151,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 宿主→webview：svItems 唯一事实源（全量重发，本地零影子状态——与聊天 tabs 同纪律）；
   // svTheme = 主题广播（body[data-theme] 就地换，与聊天面板同款 token）
   window.addEventListener("message", (ev: MessageEvent) => {
-    const m = ev.data as { type: string; items?: { file: string; label: string; time: string }[]; name?: string };
+    const m = ev.data as { type: string; items?: { file: string; label: string; time: string }[]; subs?: { file: string; label: string; time: string }[]; name?: string };
     if (m.type === "svItems") {
       items = m.items || [];
+      subs = m.subs || [];
       if (sel >= items.length) sel = -1;
       render();
     } else if (m.type === "svTheme") {
