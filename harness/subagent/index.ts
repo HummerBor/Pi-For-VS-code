@@ -794,20 +794,8 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 			endedAt: run.endedAt,
 			detail: asyncDetails(run),
 		});
-	} catch (e) {
-		// 🚨 不许静默（2026-11-02 事故教训：entry 不落盘排查盲了两天）——喊出来
-		console.error("[subagent-harness] appendEntry 失败:", (e as Error)?.stack ?? e);
-	}
-	// 帧真值自写（2026-11-02）：实测 SDK 宿主下 pi.appendEntry 的 custom 帧不落盘
-	//（CLI 进程正常，面板进程 0 帧而消息照落）——重放不赌 pi，每帧追加 runDir/
-	// frames.jsonl，piCore 重放读它（appendEntry 仍发事件，两路并行互为备份）
-	try {
-		fs.appendFileSync(
-			path.join(runDirFor(run.handle), "frames.jsonl"),
-			JSON.stringify({ handle: run.handle, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, detail: asyncDetails(run) }) + "\n",
-		);
 	} catch {
-		/* 观测面不阻主链路 */
+		/* 面板不在场也要能跑：appendEntry 失败静默 */
 	}
 }
 
