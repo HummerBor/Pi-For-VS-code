@@ -2056,7 +2056,14 @@ export class PiCore {
           // running 任务就是异步壳，伪装成最终结果；真进度走 sa-n 句柄行，壳行必须删。
           // 同步调用 end 时不可能有 running，零回归。首版幽灵修复只拦「end 后无收尾」，
           // 没验返回值载荷形状，故有第二轮（教训：归因不停在机制第一层）
-          const isAsyncShell = !!finalSnap && finalSnap.tasks.some((t) => t.status === "running");
+          // 句柄收口（2026-11-02 双胞胎行/疑似失联双案同根）：冻结壳自带 exitCode:0，
+          // 「快照里有 running 任务」判壳被它骗过（任务误判完成 → 壳行不删，与 sa-n 句柄行
+          // 同单双影；壳快照冻结在派发瞬间 → 下钻详情拿它构建 → running+超时翻「疑似失联」）。
+          // 改吃回执句柄：抓到 sa-n = 异步派发（真进度/终态都归句柄行），壳行无条件关；
+          // 终态归位句柄行仅在句柄行尚无留存时——entry 终帧是真值，不许壳快照幂等覆盖它。
+          // 抓不到句柄 = 同步调用，旧行为零改动（判壳旧式保留为兑底）
+          const hm = extractText(e.result?.content).match(/\bsa-\d+\b/);
+          const isAsyncShell = !!hm || (!!finalSnap && finalSnap.tasks.some((t) => t.status === "running"));
           if (finalSnap && !isAsyncShell) {
             const rec = this.trackSubagentRun(e.toolCallId, e.result?.details);
             rec.endAt = Date.now();
@@ -2069,6 +2076,19 @@ export class PiCore {
               endAt: rec.endAt,
             });
           } else {
+            if (finalSnap && hm && !this.subagentRuns.has(hm[0])) {
+              // entry 帧没来的边角：终态归位句柄行（有 entry 留存时不动，终帧是真值）
+              const rec = this.trackSubagentRun(hm[0], e.result?.details);
+              rec.endAt = Date.now();
+              this.post({
+                type: "subagentUpdate",
+                id: hm[0],
+                snapshot: finalSnap,
+                final: true,
+                startAt: rec.startAt,
+                endAt: rec.endAt,
+              });
+            }
             // 异步派发壳：无 details，或 details 全 running（异步返回值载荷）——壳行关掉
             this.post({
               type: "subagentUpdate",
