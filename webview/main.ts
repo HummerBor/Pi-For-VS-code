@@ -2446,6 +2446,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       renderSubDock();
       return;
     }
+    // 心跳应答（2026-11-02 幽灵面板事故）：扩展宿主重启后部分编辑器面板不被重新序列化，
+    // 扩展侧 provider 实例丢失而 webview 界面还活着——之前的表现是「打字零反应、点击零反应、
+    // 零提示」，用户只能猜。pong 到达 = 宿主有人在听；超时挂横幅明示（见文件尾 pingTick）
+    if (m.type === 'pong') { lastPongAt = Date.now(); hideConnLost(); return; }
     // 鸭子换图是页面级（图源与页签无关），不过路由
     if (m.type === 'duck') { applyDuck(m.uri); return; }
     // 刀3 编辑器面板：tabKey 存进 webview state 快照（VS Code 序列化面板时捕获，
@@ -2465,5 +2469,30 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）
   vscode.postMessage({ type: 'webviewReady' });
+
+  // ── 心跳探活 + 断连横幅（2026-11-02 幽灵面板事故，用户「信息发不出去、只能终端沟通」）──
+  // 病根在 VS Code：扩展宿主重启（装/更新扩展）后，部分编辑器面板不被重新序列化——
+  // p203 被 deserialize 恢复、p226 零装配日志（埋点实证）——扩展侧 provider 实例丢失，
+  // webview 界面却因 retainContextWhenHidden 保活照旧。于是：界面在、能打字、消息全进虚空。
+  // VS Code 没有「扩展接管孤儿 panel」的 API，唯一出路是用户重开标签；本机制只负责把
+  // 「已断开」变成看得见的提示，绝不让消息静默消失。
+  // 阈值：3s 一问、12s（4 次）无答应 = 断连——宿主正常时 pong 往返 <5ms，误报风险极低
+  var lastPongAt = Date.now();
+  var connLostEl: HTMLElement | null = null;
+  function showConnLost() {
+    if (connLostEl) return;
+    connLostEl = el('div', 'conn-lost');
+    connLostEl.textContent = L.connLost;
+    connLostEl.title = L.connLostHint;
+    document.body.appendChild(connLostEl);
+  }
+  function hideConnLost() {
+    if (!connLostEl) return;
+    connLostEl.remove(); connLostEl = null;
+  }
+  setInterval(function () {
+    try { vscodeApi.postMessage({ type: 'ping', t: Date.now() }); } catch (e) { /* 通道彻底坏 */ }
+    if (Date.now() - lastPongAt > 12000) showConnLost();
+  }, 3000);
 })();
 

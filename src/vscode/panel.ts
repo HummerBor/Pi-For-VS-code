@@ -586,6 +586,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     dbgLog("[装配] attachView wiring"); // 此行之后无「in」= 消息死在 webview→接线之间
     view.webview.onDidReceiveMessage((m: WebviewToHostTagged) => {
+      // 心跳应答（2026-11-02 幽灵面板事故）：必须在此层直接回，不进 core——断连是
+      // panel 级事故，core 层不关心。webview 侧 12s 无 pong 挂断连横幅（见 main.ts）
+      if (m.type === "ping") {
+        this.post({ type: "pong", t: m.t });
+        return;
+      }
       // A 刀诊断日志：panel 级拦截消息（webviewReady/tab*）不进 core.onWebviewMessage，
       // 这里补留痕——否则 in 时间线有盲区（清单核对教训：漏一条就少一个锚点）
       if (m.type === "webviewReady" || m.type === "tabNew" || m.type === "tabSwitch" || m.type === "tabClose")

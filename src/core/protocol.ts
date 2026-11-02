@@ -141,7 +141,12 @@ export interface WvErrorMsg {
   line?: number;
   stack?: string;
 }
+export interface WvPingMsg {
+  type: "ping";
+  t: number;
+}
 export type WebviewToHost =
+  | WvPingMsg
   | WvReadyMsg
   | WvPromptMsg
   | WvAbortMsg
@@ -439,6 +444,14 @@ export interface PanelInfoMsg {
   type: "panelInfo";
   tabKey: string;
 }
+/** 心跳应答（2026-11-02 幽灵面板事故）：扩展宿主重启后部分编辑器面板不被重新序列化，
+ *  扩展侧 provider 实例丢失而 webview 界面还活着——用户打字零反应且零提示。
+ *  VS Code 没有让扩展接管孤儿 panel 的 API，唯一出路是用户重开标签；本对只负责把
+ *  「已经断开」变成看得见的提示，不再让消息静默消失 */
+export interface HvPongMsg {
+  type: "pong";
+  t: number;
+}
 /** 工单十五刀2：标签栏全量状态（宿主是唯一事实源，webview 只渲染；标题/busy 由宿主从
  *  各核心的 state/busy 消息记账）。webview 本地另叠 dirty 未读点（后台标签完成亮提示） */
 export interface TabInfo {
@@ -571,6 +584,7 @@ export type HostToWebview =
   | ThemeMsg
   | DuckMsg
   | PanelInfoMsg
+  | HvPongMsg
   | BannerMsg
   | ChangesListMsg
   | TabsMsg
