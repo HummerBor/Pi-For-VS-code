@@ -178,19 +178,20 @@ export function peekListSessions(cwd?: string, limit = 50): SessionInfo[] | null
 }
 
 /** 子会话列表（2026-11-02 用户拍板：左侧列表也列，但走折叠组不混主列表）。
- *  数据源 = 同一次 listNative 扫描的子会话半边（memo 命中则不重扫）；没有就回空数组。
- *  子会话的 cwd 记在 jsonl 头里，toSessionInfos 的 cwd 过滤能筛出本项目的。 */
+ *  数据源必须用 listNative(undefined) 即 pi 的 listAll：list(cwd) 只扫项目目录，
+ *  subagents/ 不在 cwd 映射里——用 list(cwd) 时 subs 恒为空（折叠组永不出现的事故）。
+ *  listAll 本来就会扫到 subagents（当初 isMainSession 过滤就是因为它被扫进来了）。
+ *  cwd 过滤交给 toSessionInfos：子会话 jsonl 头里记的就是派发方项目路径。 */
 export async function listSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
-  const proj = await listNative(cwd);
-  const key = (cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? "");
+  await listNative(undefined); // listAll；memo 命中则不重扫
+  const key = "all|dir:" + (configuredSessionDir() ?? "");
   const subs = memo.get(key)?.subs ?? [];
-  void proj; // listNative 的返回是主会话半边，这里只要它跑完（memo 已写含 subs）
   return toSessionInfos(subs, cwd, limit);
 }
 
 /** 子会话秒出（同 peekListSessions 口径） */
 export function peekSubagentSessions(cwd?: string, limit = 50): SessionInfo[] | null {
-  const hit = memo.get((cwd ? "cwd:" + cwd : "all") + "|dir:" + (configuredSessionDir() ?? ""));
+  const hit = memo.get("all|dir:" + (configuredSessionDir() ?? ""));
   if (!hit) return null;
   return toSessionInfos(hit.subs, cwd, limit);
 }
