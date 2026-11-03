@@ -16,6 +16,7 @@ import { PiClient } from "../pi/piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
 import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
 import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
+import { samePath } from "../domain/pathKey";
 import { readLedgerRows } from "./subagentLedger";
 import { toolDetail } from "../domain/toolDetail";
 import type { HostCapabilities } from "./hostCapabilities";
@@ -765,6 +766,28 @@ export class PiCore {
       this.dbg(`[subagent-replay] skip 已重放过 handles=${this.subagentHandles.size} tab=${this.tabKey}`);
       return;
     }
+    // 【台账索引 = 主源 2026-11-03 债2】本会话该有哪些 handle，真值是 harness 亲手写的台账
+    // （runs/<handle>.json 的 parentSession）——会话文件可能还没落盘/是幽灵/读不出，台账不会。
+    // 路径比较必走 pathKey：台账里是小写 `--d--`、磁盘是 `--D--`，严格相等命中 0 条。
+    // pi 内核没有任何「父会话 → 子会话」查询（子 agent 在 pi 侧就是个示例扩展，CLI 也没
+    // --parent-session），所以这张索引只能我们自己维护——那就用最不脆的那份数据。
+    const agentDir = this.caps.getAgentDir?.();
+    const ledgerHit = new Map<string, string | undefined>(); // handle → sessionDir（帧目录）
+    if (agentDir) {
+      try {
+        for (const row of readLedgerRows(agentDir)) {
+          if (undone.some((c) => samePath(row.parentSession, c))) ledgerHit.set(row.handle, row.sessionDir);
+        }
+      } catch {
+        /* 台账不可读：退回会话文件扫描 */
+      }
+      for (const h of ledgerHit.keys()) this.subagentHandles.add(h);
+    }
+    const frameDirOfLedger = (): Map<string, string> => {
+      const m = new Map<string, string>();
+      for (const [h, d] of ledgerHit) if (d) m.set(h, d);
+      return m;
+    };
     // 落盘状态先探清：失败/空文件**不落标记**（0.1.107 的教训：标记提前落地 = 一次空窗
     // 把本会话的重放机会永久烧掉）。stat 错误不再 .catch 吞掉——留 code + 全路径取证。
     let file: string | null = null;
@@ -782,7 +805,18 @@ export class PiCore {
         this.dbg(`[subagent-replay] stat-FAIL ${err?.code ?? err?.message ?? err} file=${c} cur=${this.currentSessionFile ?? "-"} tab=${this.tabKey}`);
       }
     }
-    if (!file) return;
+    if (!file) {
+      // 会话文件读不到（幽灵路径/0 字节/空窗）——只要台账命中，就把运行行重放出来：
+      // detail 从各单自己的 frames.jsonl 拿（harness 亲写，不依赖 pi 会不会落 custom entry）。
+      if (agentDir && ledgerHit.size) {
+        this.dbg(`[subagent-replay] 会话文件不可读→走台账帧重放 handles=${ledgerHit.size} tab=${this.tabKey}`);
+        this.replayFramesFromDisk(agentDir, frameDirOfLedger());
+        this.subagentHistoryReplayedFor = undone[0];
+        this.pushLedger();
+        this.dbg(`[subagent-replay] done(台账路) handles=${this.subagentHandles.size} tab=${this.tabKey}`);
+      }
+      return;
+    }
     this.dbg(`[subagent-replay] start size=${size} handles=${this.subagentHandles.size} file=${file} tab=${this.tabKey}`);
     // 台账推送（段 3）：重放即同步全局台账（跨会话历史 + 在册状态）
     this.pushLedger();
@@ -863,61 +897,18 @@ export class PiCore {
         // 与 entry 帧双路并存，同 id 覆盖写（updateSubRun 幂等）不双份。
         // 【为何不能只读 entry 帧】cli 进程能落 5/5、面板（SDK 进程内）0 帧——不赌 pi 的
         // appendEntry 装配，帧渠道自己写（harness 侧同款注释）
-        const agentDir = this.caps.getAgentDir?.();
         if (agentDir) {
-          // 【帧文件定位 2026-11-03】v8 按项目分桶后帧落在 <台账 sessionDir>/frames.jsonl，
-          // 这里原来写死旧平铺路径 subagents/<handle>/frames.jsonl——新单一帧都读不到，
-          // 于是「切到有子 agent 的会话，右侧列表空了」（entry 帧在 SDK 宿下不落盘，只剩这条）。
-          // 台账记着 sessionDir，优先用它；旧平铺布局继续兜底
-          const frameDir = new Map<string, string>();
+          // 帧目录：台账命中的优先（parentSession 已对上），其余按 handle 补——
+          // v8 分桶后帧在 <台账 sessionDir>/frames.jsonl，旧平铺布局继续兜底
+          const frameDir = frameDirOfLedger();
           try {
             for (const row of readLedgerRows(agentDir)) {
-              if (row.sessionDir) frameDir.set(row.handle, row.sessionDir);
+              if (row.sessionDir && !frameDir.has(row.handle)) frameDir.set(row.handle, row.sessionDir);
             }
           } catch {
             /* 台账不可读：走旧路径兜底 */
           }
-          for (const h of this.subagentHandles) {
-            try {
-              const candidates: string[] = [];
-              const dir = frameDir.get(h);
-              if (dir) candidates.push(path.join(dir, "frames.jsonl"));
-              candidates.push(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"));
-              let text: string | null = null;
-              for (const p of candidates) {
-                try {
-                  text = fs.readFileSync(p, "utf8");
-                  break;
-                } catch {
-                  /* 试下一个布局 */
-                }
-              }
-              if (text === null) continue;
-              const lines2 = text.split("\n");
-              let last: { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown } | null = null;
-              for (const ln of lines2) {
-                if (!ln.trim()) continue;
-                try { last = JSON.parse(ln); } catch { /* 截断半条跳过 */ }
-              }
-              const snap2 = last ? subagentSnapshot(last.detail) : null;
-              // 只收终态帧：运行中的帧留给 live 流，重放旧 running 会造「永久处理中」假行
-              if (snap2 && !snap2.tasks.some((t) => t.status === "running")) {
-                const rec2 = this.trackSubagentRun(h, last!.detail);
-                if (typeof last!.startedAt === "number") rec2.startAt = last!.startedAt;
-                if (typeof last!.endedAt === "number") rec2.endAt = last!.endedAt;
-                this.post({
-                  type: "subagentUpdate",
-                  id: h,
-                  snapshot: snap2,
-                  final: last!.status !== "running",
-                  startAt: rec2.startAt,
-                  endAt: rec2.endAt,
-                });
-              }
-            } catch {
-              /* 无帧文件（老运行/纯 entry 路）：静默跳过 */
-            }
-          }
+          this.replayFramesFromDisk(agentDir, frameDir);
         }
         this.dbg(`[subagent-replay] scanned handles=${this.subagentHandles.size} entryFrames=${finals.size}`);
         this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
@@ -945,6 +936,54 @@ export class PiCore {
     } catch (err: any) {
       // 会话文件不可读（新建未落盘/切换中）静默——但留痕（replay 静默返回是「面板消失」的头号嫌疑）
       this.dbg(`[subagent-replay] FAIL ${err?.message ?? err}`);
+    }
+  }
+
+  /** 按 handle 集从 frames.jsonl 重放（从 replaySubagentHistoryInner 抽出 2026-11-03）：
+   *  会话文件可读/不可读两条路都要跑它——后者就是「幽灵会话文件」的免疫路：
+   *  台账 parentSession 已经指明本会话有哪些单，detail 从各单 sessionDir/frames.jsonl 拿。
+   *  帧文件定位：优先 <台账 sessionDir>/frames.jsonl（v8 分桶），旧平铺布局继续兜底。 */
+  private replayFramesFromDisk(agentDir: string, frameDir: Map<string, string>): void {
+    for (const h of this.subagentHandles) {
+      try {
+        const candidates: string[] = [];
+        const dir = frameDir.get(h);
+        if (dir) candidates.push(path.join(dir, "frames.jsonl"));
+        candidates.push(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"));
+        let text: string | null = null;
+        for (const p of candidates) {
+          try {
+            text = fs.readFileSync(p, "utf8");
+            break;
+          } catch {
+            /* 试下一个布局 */
+          }
+        }
+        if (text === null) continue;
+        const lines = text.split("\n");
+        let last: { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown } | null = null;
+        for (const ln of lines) {
+          if (!ln.trim()) continue;
+          try { last = JSON.parse(ln); } catch { /* 截断半条跳过 */ }
+        }
+        const snap = last ? subagentSnapshot(last.detail) : null;
+        // 只收终态帧：运行中的帧留给 live 流，重放旧 running 会造「永久处理中」假行
+        if (snap && !snap.tasks.some((t) => t.status === "running")) {
+          const rec = this.trackSubagentRun(h, last!.detail);
+          if (typeof last!.startedAt === "number") rec.startAt = last!.startedAt;
+          if (typeof last!.endedAt === "number") rec.endAt = last!.endedAt;
+          this.post({
+            type: "subagentUpdate",
+            id: h,
+            snapshot: snap,
+            final: last!.status !== "running",
+            startAt: rec.startAt,
+            endAt: rec.endAt,
+          });
+        }
+      } catch {
+        /* 无帧文件（老运行/纯 entry 路）：静默跳过 */
+      }
     }
   }
 

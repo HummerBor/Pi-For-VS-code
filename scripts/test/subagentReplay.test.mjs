@@ -27,6 +27,9 @@
  * ③ 幽灵 lastSessionFile + 认领真文件（p283 现场）→ 用认领的那个重放
  * ④ 同一文件重复调用不重复投（防切页签反复重放）
  * ⑤ 只认派单回执：`subagent_list` 回执里的同形状 details 不许凭空造行
+ * ⑥ 并发重入（postUiState 连发）：只扫一遍
+ * ⑦ 会话文件**根本不存在**、但台账 parentSession 命中（且大小写不同）→ 仍从 frames.jsonl 重放
+ *    （债2 验收：索引主源换成 harness 自己的台账，不再赌 pi 报的会话文件路径）
  */
 import assert from "node:assert";
 import fs from "node:fs";
@@ -91,6 +94,23 @@ fs.writeFileSync(path.join(runsDir, "sa-7.json"), JSON.stringify(ledger("sa-7", 
 fs.writeFileSync(path.join(runsDir, "sa-8.json"), JSON.stringify(ledger("sa-8", "审查", "completed", 3000)));
 // sa-99 不在本会话 handle 集里：台账必须按 handle 集过滤，不许串会话
 fs.writeFileSync(path.join(runsDir, "sa-99.json"), JSON.stringify(ledger("sa-99", "别的会话", "completed", 5000)));
+
+// ⑦ 只用台账索引的运行：会话文件永远不会存在，帧照样齐全
+const runDir77 = path.join(tmp, "run-sa-77");
+fs.mkdirSync(runDir77, { recursive: true });
+fs.writeFileSync(
+  path.join(runDir77, "frames.jsonl"),
+  JSON.stringify({ handle: "sa-77", status: "completed", startedAt: 7000, endedAt: 8000, detail: details("sa-77", "台账里的单") }) + "\n",
+);
+const ghostSession = path.join(tmp, "sess", "ghost-only-in-ledger.jsonl"); // 故意不创建
+fs.writeFileSync(
+  path.join(runsDir, "sa-77.json"),
+  JSON.stringify({
+    ...ledger("sa-77", "台账里的单", "completed", 7000, runDir77),
+    // 大小写故意与真实路径不一致（真机事故：台账写 `--d--`、磁盘是 `--D--`，严格相等命中 0 条）
+    parentSession: ghostSession.toUpperCase(),
+  }),
+);
 
 const sessDir = path.join(tmp, "sess");
 fs.mkdirSync(sessDir, { recursive: true });
@@ -228,6 +248,17 @@ const lastLedgerRows = (posts) => {
     posts.filter((m) => m.type === "subagentUpdate").length,
     3,
   );
+}
+
+/* ⑦ 会话文件不存在（幽灵/未落盘），台账 parentSession 命中的运行照样重放 */
+{
+  const posts = [];
+  const core = newCore(posts);
+  ok("⑦ 前提：会话文件确实不存在", !fs.existsSync(ghostSession));
+  core.lastSessionFile = ghostSession;
+  await core.replaySubagentHistory();
+  await new Promise((r) => setTimeout(r, 50));
+  eq("⑦ 台账 parentSession 命中（大小写不同也算）→ 从 frames 重放", uniqIds(posts), ["sa-77"]);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

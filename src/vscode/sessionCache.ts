@@ -34,14 +34,12 @@ export interface SessionInfo {
 }
 
 /** 路径相等判断（忽略大小写和分隔符差异，Windows 友好）。
- *  类型守卫：菜单/命令参数可能误传对象（2026-10-19 deleteSession 传入 SessionItem →
- *  p.replace is not a function），非字符串一律不等，不炸调用方 */
-export function samePath(a?: unknown, b?: unknown): boolean {
-  if (typeof a !== "string" || typeof b !== "string" || !a || !b) return false;
-  const norm = (p: string) =>
-    p.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
-  return norm(a) === norm(b);
-}
+ *  实现归位 domain/pathKey.ts（2026-11-03 债2）：core 层（台账 parentSession 对账）也要用，
+ *  而 core 不许 import 宿主层。类型守卫保留原语义：菜单/命令参数可能误传对象
+ *  （2026-10-19 deleteSession 传入 SessionItem → p.replace is not a function），
+ *  非字符串一律不等，不炸调用方 */
+import { samePath } from "../domain/pathKey";
+export { samePath };
 
 /** pi 的 SessionInfo 类型（内联 import：零运行时依赖，类型参考的正确做法） */
 type PiSessionEntry = import("@earendil-works/pi-coding-agent").SessionInfo;
