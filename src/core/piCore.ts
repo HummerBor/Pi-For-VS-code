@@ -107,6 +107,9 @@ export class PiCore {
   /** 本会话见过的子 agent 句柄（重放 + 实时 entry 累积）：台账行按它收口——没派过
    *  子 agent 的会话一行台账都不给（2026-11 用户实测「没有子 agent 的会话莫名其妙有了」） */
   private subagentHandles = new Set<string>();
+  /** 转录页已推送条数（事件流去重，2026-11-03）：harness 每帧带「累计 messages」，
+   *  这里只取超出上一次的部分推给页面——不读盘、不轮询、不重写页面 */
+  private transcriptSent = new Map<string, number>();
   /** 提前认领的会话文件（跨实例双开守卫的「提前量」，2026-10-22 用户实测同一会话
    *  开两份）：真值 lastSessionFile 要等 refreshState 回填才有值，boot 链上这段空窗
    *  长达数秒（services 扫描）——期间 findHolder 失明，别的实例点同一会话就开出第二份
@@ -167,8 +170,11 @@ export class PiCore {
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
   private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number }>();
-  /** 历史重放已消费的会话文件（债务④）：每文件只放一次，此后 live 事件接管，
-   *  防切页签 uiState 反复重放同帧覆写 webview 较新状态 */
+  /** 历史重放**已成功扫完**的会话文件（债务④）：每文件只放一次，此后 live 事件接管，
+   *  防切页签 uiState 反复重放同帧覆写 webview 较新状态。
+   *  【0.1.108 修订】标记只在扫完之后落——0.1.107 的埋点证明真实 boot 两次都死在
+   *  「文件还没落盘/还是 0 字节」的静默 return 上，而标记已提前落地 → 同一 core 永不再试，
+   *  浮窗整块空（用户 2026-11-03 报「关了重开就没子智能体面板」）。失败不落标记即自然重试。 */
   private subagentHistoryReplayedFor: string | null = null;
   /** 已终结的 subagent 工具调用 id。异步派发的同步壳在 end 之后还会收到 onUpdate 流（后台
    *  每个回合边界 emitUpdate，pi 照发 tool_execution_update），不拦的话 webview 会重建
@@ -199,15 +205,45 @@ export class PiCore {
    *  final:true 原子回放并回填 subagentRuns（下钻视图重载后仍有全量 details）。
    *  异步壳（end 时仍全 running，工单25）与活跑同口径剔除；endAt 用工具结果消息的
    *  时间戳，浮窗「x分钟前」对齐聊天真实时序 */
+  /** 子 agent 转录增量推送（2026-11-03 用户拍板：事件流，不轮询）。
+   *  harness 在子进程每来一条 message_end 就推一帧上来（同步路走 tool_execution_update 的
+   *  partialResult.details，异步路走 entry_appended 的 data.detail），两处形状都是
+   *  details.results[].messages = 累计消息。这里按 handle 记住已推条数，只把新增的递过去；
+   *  条数变少（重连/换会话）视为重置，下一帧全量重推。 */
+  private pushTranscriptDelta(handle: string, details: unknown): void {
+    if (!this.caps.pushSubagentTranscript) return;
+    const d = details as { results?: Array<{ messages?: unknown[] }> } | null;
+    const msgs = d?.results?.[0]?.messages;
+    if (!Array.isArray(msgs) || !msgs.length) return;
+    const sent = this.transcriptSent.get(handle) ?? 0;
+    if (msgs.length <= sent) {
+      if (msgs.length < sent) this.transcriptSent.set(handle, 0); // 收缩=重置
+      else return;
+    }
+    const start = msgs.length < sent ? 0 : sent;
+    this.transcriptSent.set(handle, msgs.length);
+    // 带上绝对起点：页面用它跟「打开时读到的文件历史」对账去重（两者顺序同构：都不含 system）
+    this.caps.pushSubagentTranscript(handle, msgs.slice(start), start);
+  }
+
   private replaySubagentRuns(msgs: unknown[]): void {
     for (const msg of msgs) {
       const m = msg as
-        | { role?: string; toolCallId?: string; details?: unknown; timestamp?: unknown }
+        | { role?: string; toolName?: string; toolCallId?: string; content?: unknown; details?: unknown; timestamp?: unknown }
         | null;
       if (!m || m.role !== "toolResult" || !m.toolCallId) continue;
+      // 【只回放派单回执 2026-11-03】subagent_list / subagent_collect / steer / kill 的回执
+      // 也带 details（同样是 runs 形状）—— 当成一单回放就会凭空长出行（实测：一次 list+collect
+      // 在重载后各多一行，旧单的 call_xxx 双胞胎就是这么来的）。只有派单工具产生运行
+      if (m.toolName !== "subagent") continue;
       const snap = subagentSnapshot(m.details);
       if (!snap || snap.tasks.some((t) => t.status === "running")) continue;
-      const rec = this.trackSubagentRun(m.toolCallId, m.details);
+      // 句柄优先（2026-11-03 双胞胎行第三案）：实时/结束两条路 2026-11-02 已改成「快照带 sa-N
+      // 就用句柄当行 id」，唯独回放这条路漏了——重载/换页签重放历史上那单时按 toolCallId 落键，
+      // 于是同一单在浮窗里变两行（call_xxx 实时行 + sa-N 台账行各一），且台账去重（按 handle 比
+      // 行键）也失效。三路同一个口径：有句柄就用句柄
+      const rid = snap.tasks.find((t) => t.handle)?.handle ?? m.toolCallId;
+      const rec = this.trackSubagentRun(rid, m.details);
       const ts =
         typeof m.timestamp === "number"
           ? m.timestamp
@@ -217,7 +253,7 @@ export class PiCore {
       if (isFinite(ts)) rec.endAt = ts;
       this.post({
         type: "subagentUpdate",
-        id: m.toolCallId,
+        id: rid,
         snapshot: snap,
         final: true,
         startAt: rec.startAt,
@@ -693,15 +729,64 @@ export class PiCore {
     }
   }
 
+  /** 重放重入锁（2026-11-03 真机日志发现）：0.1.110 把「落标记」从函数开头挪到扫完之后，
+   *  顺手丢了它原来的隐式重入保护——`postUiState` 会在 4ms 内连发两次，第二次在第一次
+   *  `await stat` 期间溜进去，同一份会话文件被扫两遍（日志里 start 两条、scanned/done 成对）。
+   *  后果轻微（多付 ~50ms 扫描 + 重复 post，webview 按 id 幂等），但白干活就是债。
+   *  并发合并：第一次在飞时第二次直接返回——失败不落标记，下一次 postUiState 仍会重试。 */
+  private subagentReplayInflight = false;
   private async replaySubagentHistory(): Promise<void> {
-    const file = this.lastSessionFile;
-    if (!file || file === this.subagentHistoryReplayedFor) return;
-    this.subagentHistoryReplayedFor = file;
+    if (this.subagentReplayInflight) return;
+    this.subagentReplayInflight = true;
+    try {
+      await this.replaySubagentHistoryInner();
+    } finally {
+      this.subagentReplayInflight = false;
+    }
+  }
+
+  private async replaySubagentHistoryInner(): Promise<void> {
+    // 【候选源 2026-11-03 实测】关标签重开时 pi 会先建一个**新会话文件**（只登记、不写盘），
+    // switchSession 之后 `getState().sessionFile` 仍可能报那个幽灵文件（日志铁证：
+    // `stat-FAIL ENOENT file=<幽灵> cur=<真文件>`，两者长度同为 144 字符——所以之前一直没发现）。
+    // 真文件就是打开时认领的那个（claimedFile）——候选按「认领优先、lastSessionFile 兜底」
+    // 逐个 stat，第一个真落盘的就用它；否则浮窗整块空（重启 VSC 走恢复链，lastSessionFile
+    // 就是真文件，所以那条链一直是好的）。
+    const cands: string[] = [];
+    if (this.claimedFile) cands.push(this.claimedFile);
+    if (this.lastSessionFile && this.lastSessionFile !== this.claimedFile) cands.push(this.lastSessionFile);
+    // [replay 埋点 2026-11-03] 这条链静默返回的地方太多，先留痕再定位（命中哪个 guard、stat 结果、读到几条帧）
+    if (!cands.length) {
+      this.dbg(`[subagent-replay] skip 无会话文件（boot 空窗，等 refreshState 回填后重试） tab=${this.tabKey}`);
+      return;
+    }
+    const undone = cands.filter((c) => c !== this.subagentHistoryReplayedFor);
+    if (!undone.length) {
+      this.dbg(`[subagent-replay] skip 已重放过 handles=${this.subagentHandles.size} tab=${this.tabKey}`);
+      return;
+    }
+    // 落盘状态先探清：失败/空文件**不落标记**（0.1.107 的教训：标记提前落地 = 一次空窗
+    // 把本会话的重放机会永久烧掉）。stat 错误不再 .catch 吞掉——留 code + 全路径取证。
+    let file: string | null = null;
+    let size = 0;
+    for (const c of undone) {
+      try {
+        const st = await fs.promises.stat(c);
+        if (st.size > 0) {
+          file = c;
+          size = st.size;
+          break;
+        }
+        this.dbg(`[subagent-replay] stat-空文件 size=${st.size} file=${c} cur=${this.currentSessionFile ?? "-"} tab=${this.tabKey}`);
+      } catch (err: any) {
+        this.dbg(`[subagent-replay] stat-FAIL ${err?.code ?? err?.message ?? err} file=${c} cur=${this.currentSessionFile ?? "-"} tab=${this.tabKey}`);
+      }
+    }
+    if (!file) return;
+    this.dbg(`[subagent-replay] start size=${size} handles=${this.subagentHandles.size} file=${file} tab=${this.tabKey}`);
     // 台账推送（段 3）：重放即同步全局台账（跨会话历史 + 在册状态）
     this.pushLedger();
     try {
-      const stat = await fs.promises.stat(file).catch(() => null);
-      if (!stat || stat.size === 0) return;
       const buf = await fs.promises.readFile(file);
       const lines = buf.toString("utf8").split("\n");
         const finals = new Map<string, { frame: { detail: unknown; final: boolean; startAt?: number; endAt?: number }; order: number }>();
@@ -737,10 +822,14 @@ export class PiCore {
             // 是全量正本。空壳防御：results 空或首任务 messages 为 0 = 异步返回值的冻结壳，跳过
             const m = rec.message as Record<string, unknown> | undefined;
             if (!m || m.role !== "toolResult") continue;
+            // 【只认派单回执 2026-11-03】list/collect/steer/kill 的回执也带 runs 形状的 details，
+            // 全当运行回放就会凭空长行（老单 call_xxx 双胞胎的元凶）
+            if (m.toolName !== "subagent") continue;
             // 段 3 修正（2026-11-02）：subagent 工具回执里的句柄 = 本会话的运行——
             // 台账行收口与 frames 重放都靠它（entry 帧 SDK 宿下不落盘，见 harness 注）
+            let hm: RegExpMatchArray | null = null;
             if (m.toolName === "subagent") {
-              const hm = extractText(m.content).match(/\bsa-\d+\b/g);
+              hm = extractText(m.content).match(/\bsa-\d+\b/g);
               if (hm) for (const x of hm) this.subagentHandles.add(x);
             }
             const det = m.details as Record<string, unknown> | undefined;
@@ -751,7 +840,16 @@ export class PiCore {
             if (!results || results.length === 0) continue;
             const msgs = results[0]?.messages as unknown[] | undefined;
             if (!msgs || msgs.length === 0) continue;
-            h = typeof m.id === "string" ? m.id : null;
+            // 【行键取句柄 2026-11-03】原来拿 m.id（entry 的随机 id）当键——同一单在浮窗里
+            // 必然多出一行（和 sa-N 实时行/台账行对不上）。v11 起 details 里带 handle，优先它；
+            // 老数据（v11 前派发，载荷没句柄）退到回执正文里的 sa-N（单任务才无歧义），
+            // 最后才 toolCallId / entry id——不这样的话历史单重放又会在浮窗里长回双胞胎
+            const hInDetail = results[0]?.handle;
+            const hInText = results.length === 1 && hm?.length === 1 ? hm[0] : null;
+            h =
+              typeof hInDetail === "string" && /^sa-\d+$/.test(hInDetail)
+                ? hInDetail
+                : hInText ?? (typeof m.toolCallId === "string" ? m.toolCallId : typeof m.id === "string" ? m.id : null);
             if (!h) continue;
             frame = { detail: det, final: true, ...(rec.timestamp ? { endAt: Date.parse(rec.timestamp as string) || undefined } : {}) };
           }
@@ -767,9 +865,35 @@ export class PiCore {
         // appendEntry 装配，帧渠道自己写（harness 侧同款注释）
         const agentDir = this.caps.getAgentDir?.();
         if (agentDir) {
+          // 【帧文件定位 2026-11-03】v8 按项目分桶后帧落在 <台账 sessionDir>/frames.jsonl，
+          // 这里原来写死旧平铺路径 subagents/<handle>/frames.jsonl——新单一帧都读不到，
+          // 于是「切到有子 agent 的会话，右侧列表空了」（entry 帧在 SDK 宿下不落盘，只剩这条）。
+          // 台账记着 sessionDir，优先用它；旧平铺布局继续兜底
+          const frameDir = new Map<string, string>();
+          try {
+            for (const row of readLedgerRows(agentDir)) {
+              if (row.sessionDir) frameDir.set(row.handle, row.sessionDir);
+            }
+          } catch {
+            /* 台账不可读：走旧路径兜底 */
+          }
           for (const h of this.subagentHandles) {
             try {
-              const lines2 = fs.readFileSync(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"), "utf8").split("\n");
+              const candidates: string[] = [];
+              const dir = frameDir.get(h);
+              if (dir) candidates.push(path.join(dir, "frames.jsonl"));
+              candidates.push(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"));
+              let text: string | null = null;
+              for (const p of candidates) {
+                try {
+                  text = fs.readFileSync(p, "utf8");
+                  break;
+                } catch {
+                  /* 试下一个布局 */
+                }
+              }
+              if (text === null) continue;
+              const lines2 = text.split("\n");
               let last: { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown } | null = null;
               for (const ln of lines2) {
                 if (!ln.trim()) continue;
@@ -795,6 +919,7 @@ export class PiCore {
             }
           }
         }
+        this.dbg(`[subagent-replay] scanned handles=${this.subagentHandles.size} entryFrames=${finals.size}`);
         this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
         for (const [h, { frame }] of ordered) {
@@ -814,8 +939,12 @@ export class PiCore {
             endAt: rec.endAt,
           });
         }
-    } catch {
-      // 会话文件不可读（新建未落盘/切换中）静默
+        // 收口：扫完才落标记（失败不落，下一拍 refreshState 自然重试）
+        this.subagentHistoryReplayedFor = file;
+        this.dbg(`[subagent-replay] done handles=${this.subagentHandles.size} entryFrames=${finals.size}`);
+    } catch (err: any) {
+      // 会话文件不可读（新建未落盘/切换中）静默——但留痕（replay 静默返回是「面板消失」的头号嫌疑）
+      this.dbg(`[subagent-replay] FAIL ${err?.message ?? err}`);
     }
   }
 
@@ -1116,8 +1245,20 @@ export class PiCore {
             .filter((f) => f.endsWith(".jsonl") && f !== "frames.jsonl")
             .map((f) => ({ f, t: fs.statSync(path.join(subDir, f)).mtimeMs }))
             .sort((a, b) => b.t - a.t);
-          if (cands.length) this.caps.openSessionInTab?.(path.join(subDir, cands[0].f), tabTitle);
-          else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
+          if (!cands.length) {
+            this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
+            break;
+          }
+          const live = path.join(subDir, cands[0].f);
+          // 子会话一律走单独页面（2026-11-03 用户拍板「页面也分开」）：只读 Markdown 预览，
+          // 不建 SessionManager、不写会话文件、与主会话聊天页零共享。运行中由页面自己跟随刷新
+          // （台账翻终态自动停）。宿主没接这个能力才退回「另开页签」老路
+          const running = ledgerRow?.status === "running";
+          if (this.caps.openSubagentTranscript) {
+            this.caps.openSubagentTranscript(live, tabTitle, running);
+          } else {
+            this.caps.openSessionInTab?.(live, tabTitle);
+          }
         } catch (err) {
           this.post({ type: "notice", text: this.L.openSessionFileFail + String((err as Error)?.message ?? err) });
         }
@@ -1141,7 +1282,13 @@ export class PiCore {
             const task = String(row?.task ?? "").replace(/\s+/g, " ").trim();
             const snip = Array.from(task).slice(0, 20).join("");
             const t = (row?.agent || "") + (snip ? " · " + (Array.from(task).length > 20 ? snip + "…" : snip) : "");
-            this.caps.openSessionInTab?.(path.join(dir, cands[0].f), t || undefined);
+            // 子会话统一走单独页面（同 subagentOpenHandle 口径）：台账行也不套主会话聊天页。
+            // 运行中/孤儿行 webview 不会点过来，这里 runStatus 仅用于跟随开关
+            if (this.caps.openSubagentTranscript) {
+              this.caps.openSubagentTranscript(path.join(dir, cands[0].f), t || undefined, true);
+            } else {
+              this.caps.openSessionInTab?.(path.join(dir, cands[0].f), t || undefined);
+            }
           }
           else this.post({ type: "notice", text: this.L.openSessionFileFail + "(no session file)" });
         } catch (err) {
@@ -2126,6 +2273,7 @@ export class PiCore {
             const rid = snap.tasks.find((t) => t.handle)?.handle ?? e.toolCallId;
             const rec = this.trackSubagentRun(rid, e.partialResult?.details);
             this.post({ type: "subagentUpdate", id: rid, snapshot: snap, final: false, startAt: rec.startAt });
+            this.pushTranscriptDelta(rid, e.partialResult?.details); // 转录页增量（事件驱动）
           }
         }
         break;
@@ -2134,6 +2282,15 @@ export class PiCore {
         // A2+B：异步子 agent 后台进度——subagent 扩展 appendEntry("subagent-async") 推送，
         // 不进 LLM 上下文的旁路事件流；异步工具已返回，没有 tool_execution_update 可蹭，
         // 浮窗直播全靠这条。id 用句柄（sa-n）非 toolCallId——浮窗按 tab 缓存单例，无需对齐
+        // delta 级流式（2026-11-03）：与主会话 message_update 同口径，只在插件宿主才有
+        // （harness 侧 PI_HOST 门控）。直接转给转录页，不进快照/不落状态
+        if (e.entry?.type === "custom" && e.entry?.customType === "subagent-async-stream") {
+          const sd = e.entry.data as { handle?: string; kind?: string; text?: string } | undefined;
+          if (sd?.handle && sd.text && (sd.kind === "text" || sd.kind === "thinking")) {
+            this.caps.pushSubagentStream?.(sd.handle, sd.kind, sd.text);
+          }
+          break;
+        }
         if (e.entry?.type === "custom" && e.entry?.customType === "subagent-async") {
           const data = e.entry.data as
             | { handle?: string; status?: string; detail?: unknown; startedAt?: number; endedAt?: number }
@@ -2153,6 +2310,7 @@ export class PiCore {
               startAt: rec.startAt,
               endAt: rec.endAt,
             });
+            this.pushTranscriptDelta(data!.handle, data!.detail); // 转录页增量（事件驱动）
             // 终态 → 左侧列表刷新（2026-11-02：主会话下多一行子会话，不刷就看不见）
             if (data!.status !== "running") this.caps.onSubagentSettled?.();
           }

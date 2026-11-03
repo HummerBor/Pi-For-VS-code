@@ -43,7 +43,18 @@ if (!existsSync(join(srcBundle, "index.js"))) {
 
 const dst = join(repoRoot, "vendor", "pi");
 mkdirSync(join(dst, "dist"), { recursive: true });
+// 【先清空再拷 2026-11-03】cpSync 是合并语义，不清目的目录：pi 换版本后 chunk 文件名带 hash
+// 全变了，旧版的 chunk 全留在 vendor 里一起进 vsix（1.4.0→1.5.0 实测遗留 38 个死文件，
+// 包从 3.4MB 肿到 4.7MB）；硬依赖同理（pi 有一天去掉 jiti/photon，旧目录会留着）
+rmSync(join(dst, "dist", "bundle"), { recursive: true, force: true });
+rmSync(join(dst, "node_modules"), { recursive: true, force: true });
 cpSync(srcBundle, join(dst, "dist", "bundle"), { recursive: true });
+// 拷完核对文件数：少拷比多拷更危险（多拷只是肿，少拷是运行期缺 chunk 才炸）
+const countJs = (dir) => readdirSync(dir, { recursive: true }).filter((f) => String(f).endsWith(".js")).length;
+if (countJs(srcBundle) !== countJs(join(dst, "dist", "bundle"))) {
+  console.error("[vendor-pi] 拷贝后文件数与源不一致（预期 " + countJs(srcBundle) + "，实际 " + countJs(join(dst, "dist", "bundle")) + "）");
+  process.exit(1);
+}
 
 // bundle 的硬外部依赖（2026-10-26 实锤：0.85 需要 @earendil-works/chord，1.4 不再引用）
 // 随 pi 版本变，不写死清单：扫 bundle 里的 @earendil-works/* 静态引用，有引用才拷，

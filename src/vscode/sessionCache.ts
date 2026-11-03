@@ -193,27 +193,38 @@ async function scanSubagentSessions(): Promise<PiSessionProjection[]> {
   const agentDir: string | undefined = sdk.getAgentDir?.();
   if (!agentDir) return [];
   const base = join(agentDir, "sessions", "subagents");
-  let names: string[];
   try {
-    names = fs.readdirSync(base);
+    fs.readdirSync(base);
   } catch {
     return []; // 还没派过子 agent
   }
   const out: PiSessionProjection[] = [];
   // 两种布局共存（2026-11-02 按项目分桶）：新 `subagents/<项目slug>/<handle>/`，
-  // 旧 `subagents/<handle>/` 继续可读——老单不迁移（文件是审计真值，不动）
+  // 旧 `subagents/<handle>/` 继续可读——老单不迁移（文件是审计真值，不动）。
+  // 递归找（2026-11-03）：分桶名曾经带反斜杠，真的建成多层目录（--d-/work/docs/…/sa-11），
+  // 只扫一层就整段看不见。桶层级不限深度，认目录名 sa-N 即可
   const handleDirs: string[] = [];
-  for (const n of names) {
-    const p = join(base, n);
-    if (/^sa-\d+$/.test(n)) handleDirs.push(p);
-    else if (n.startsWith("--")) {
-      try {
-        for (const h of fs.readdirSync(p)) if (/^sa-\d+$/.test(h)) handleDirs.push(join(p, h));
-      } catch {
-        /* 空桶/权限：跳过 */
-      }
+  const collect = (dir: string, depth: number): void => {
+    if (depth > 6) return; // 深度护栏：别被奇怪的深浅目录拖死
+    let names2: string[];
+    try {
+      names2 = fs.readdirSync(dir);
+    } catch {
+      return;
     }
-  }
+    for (const n of names2) {
+      if (n === "runs") continue; // 台账目录：不是会话
+      const p = join(dir, n);
+      try {
+        if (!fs.statSync(p).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      if (/^sa-\d+$/.test(n)) handleDirs.push(p);
+      else collect(p, depth + 1);
+    }
+  };
+  collect(base, 0);
   for (const dir of handleDirs) {
     let cands: { f: string; t: number }[];
     try {
@@ -290,10 +301,12 @@ export async function subagentParentMap(): Promise<Map<string, string>> {
   return out;
 }
 
-/** 从子会话文件路径反推句柄（.../subagents/[<slug>/]sa-9/xxx.jsonl → sa-9，
- *  兼容 2026-11-02 按项目分桶后的两层布局） */
+/** 从子会话文件路径反推句柄（.../subagents/[<slug>/]<handle>/xxx.jsonl → sa-N）。
+ *  【深度不设上限 2026-11-03】原来只容一层桶。projectSlug 当时没换反斜杠，Windows 上
+ *  真实落盘是 subagents/--d-/work/docs/…/sa-11/ 这种多级嵌套——正则匹配不上，句柄取不到，
+ *  左侧父子归属直接失效。桶层级爱多深多深，只要路径里有 sa-N 就行 */
 export function handleFromSubPath(file: string): string | undefined {
-  const m = /[\\/]subagents[\\/](?:[^\\/]+[\\/])?(sa-\d+)[\\/]/.exec(file);
+  const m = /[\\/]subagents[\\/](?:[^\\/]+[\\/])*(sa-\d+)[\\/]/.exec(file);
   return m?.[1];
 }
 

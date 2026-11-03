@@ -73,7 +73,15 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       else if (m.type === "svRefresh") void this.sendItems();
       else if (m.type === "svNew") void vscode.commands.executeCommand("piChat.openInEditor");
       else if (m.type === "svMore") ChatPanelProvider.moreFromList(); // ⚡ 菜单（2026-10-20 图2：中间区 ✳ 移列）
-      else if (m.type === "svOpen" && m.file) void ChatPanelProvider.openOrFocusSession(m.file, m.label);
+      else if (m.type === "svOpen" && m.file) {
+        // 子会话走单独页面（2026-11-03 用户拍板「页面也分开」）：只读转录预览，
+        // 绝不把子会话套进主会话聊天页（那要建 SessionManager，会往子进程正在写的文件里写）
+        if (/[\/]subagents[\/]/.test(m.file)) {
+          ChatPanelProvider.openTranscriptFor(m.file, m.label);
+        } else {
+          void ChatPanelProvider.openOrFocusSession(m.file, m.label);
+        }
+      }
       else if (m.type === "svDelete" && m.file) {
         // 守卫/确认/落盘复用 panel.deleteSessionFile 单一真相（跨实例双开保护同款）；
         // 结果码 → 原生通知（双语 bb，同原树删除按钮口径）

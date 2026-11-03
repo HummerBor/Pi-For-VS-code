@@ -8,6 +8,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "../pi/piClient";
 import { getAgentDirSync } from "../pi/piSdk";
+import { openTranscriptTab, pushTranscript, pushTranscriptStream } from "./transcriptTab";
 import { displayNameFor } from "../domain/subagentNames";
 import { setDisplayNameLookup } from "../domain/subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
@@ -314,6 +315,66 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     ChatPanelProvider.factories.openEditorTab?.(file, label);
   }
 
+  /** 子 agent 转录 tab（2026-11-03 用户拍板「新建复制主会话页面」）：
+   *  同一份 getHtml + main.js 的另一个实例，只读、独立 tabId，不牵动本实例的会话 */
+  private openTranscript(file: string, title?: string): void {
+    const kind = vscode.window.activeColorTheme.kind;
+    const theme = this.globalState.get<string>("piChat.theme") ?? "midnight";
+    const floorColor =
+      theme === "midnight"
+        ? "#0b1220"
+        : theme === "cc-dark"
+          ? "#0a0a0c"
+          : kind === vscode.ColorThemeKind.Light
+            ? "#f3f3f3"
+            : kind === vscode.ColorThemeKind.HighContrast
+              ? "#000000"
+              : "#1f1f1f";
+    openTranscriptTab({
+      file,
+      title,
+      theme,
+      duckUri: this.duckUri,
+      floorColor,
+      bgImage: "",
+      bgOpacity: 0.35,
+      lang: this.lang,
+      // 开在宿主当前编辑器组 = 与聊天页并排的标签，不再新开分屏（2026-11-03 用户反馈）
+      viewColumn: this.bestViewColumn(),
+      // 标签图标与主会话一致（鸭子），不再是 VS Code 默认文件图标
+      iconPath: vscode.Uri.joinPath(this.extensionUri, "media", "source", "pi-icon-small.svg"),
+    });
+  }
+
+  /** 标签图标（鸭子）：主会话编辑器标签、转录 tab 共用同一份 svg */
+  static tabIconUri(): vscode.Uri | undefined {
+    const p = ChatPanelProvider.lastActiveEditor ?? ChatPanelProvider.sidebar;
+    if (p) return vscode.Uri.joinPath(p.extensionUri, "media", "source", "pi-icon-small.svg");
+    const ext = vscode.extensions.getExtension("hummerbor.pi-for-vscode");
+    return ext ? vscode.Uri.joinPath(ext.extensionUri, "media", "source", "pi-icon-small.svg") : undefined;
+  }
+
+  /** 左侧列表点子会话行用：借任意可用实例拿主题/语言参数（没有实例就用默认值） */
+  static openTranscriptFor(file: string, title?: string): void {
+    const p = ChatPanelProvider.lastActiveEditor ?? ChatPanelProvider.sidebar;
+    if (p) {
+      p.openTranscript(file, title);
+      return;
+    }
+    openTranscriptTab({
+      file,
+      title,
+      theme: "midnight",
+      duckUri: "",
+      floorColor: "#1f1f1f",
+      bgImage: "",
+      bgOpacity: 0.35,
+      lang: "zh",
+      viewColumn: vscode.window.tabGroups.activeTabGroup?.viewColumn ?? vscode.ViewColumn.One,
+      iconPath: ChatPanelProvider.tabIconUri(),
+    });
+  }
+
   /** 列表齿轮按钮（2026-10-20 图2 拍板：中间区 ✳ 菜单移到左侧列表）：⚡ 命令菜单开在
    *  最近激活的编辑器标签上，副栏兑底（列表点击改回新页签后，齿轮仍看 lastActiveEditor） */
   static moreFromList(): void {
@@ -384,6 +445,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       getAgentDir: () => getAgentDirSync(),
       // 子 agent 展开回看另开页签（2026-11 用户反馈）：不顶当前会话
       openSessionInTab: (file, title) => void ChatPanelProvider.openOrFocusSession(file, title),
+      // 子 agent 转录页（2026-11-03 用户拍板「页面也分开」）：只读 Markdown 预览，
+      // 不建会话/不写文件、与主会话聊天页零共享；运行中由页面自己跟随刷新
+      // 子 agent 转录：新建一个主会话页面副本（同模板/同产物/同渲染），只读
+      openSubagentTranscript: (file, title) => this.openTranscript(file, title),
+      // 实时增量（事件流，不是轮询）：只递给已打开的转录页
+      pushSubagentTranscript: (handle, messages, from) => pushTranscript(handle, messages, from),
+      pushSubagentStream: (handle, kind, text) => pushTranscriptStream(handle, kind, text),
       // 子 agent 终态 → 左侧列表刷新（嵌套行/未归属组随之更新，2026-11-02）
       onSubagentSettled: () => notifySessionsChanged(),
       showQuickPick: async <T extends HostQuickItem>(items: T[], placeHolder?: string): Promise<T | undefined> =>
@@ -649,8 +717,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 后台页签的流式事件要写进它们自己的隐藏树，没有历史底子就会从半截开始累积
         for (const [, c] of this.cores) void c.postUiState();
         // 工单十三二刀-3：后台预热 listSessions → 填 mtime 缓存，首次点击也毫秒级出列。
-        // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发
-        void listSessions().catch(() => { });
+        // fire-and-forget（不 await）+ 错误静默：预热失败不影响面板，pi 包提前加载更早触发。
+        // 【0.1.112 启动慢实锤】这里原来不传 cwd = pi `listAll()`：本机实测 8.0–9.0s
+        // （414 个会话 / 1247MB——`SessionInfo` 带 `allMessagesText`，等于把整库读完），
+        // 全压在扩展宿主线程上，把 boot 链一起堵死（同一窗口里 prewarm 的 mr-create 被
+        // 算成 2721ms、1MB 会话重放扫描被算成 2.6s——都不是它们自己慢）。
+        // 改两处：① 只预热本 cwd（实测 1.6s，side bar 的 sessionsView 本来就是这个口径）
+        //         ② 推迟到首帧之后，别跟 boot 抢线程（prewarm services / 重放都在这一拍）
+        // 与 sessionsView.sendItems 同一 cwd 口径（同一个 memo key，预热直接给侧栏用）
+        const prewarmCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        setTimeout(() => void listSessions(prewarmCwd).catch(() => { }), 1500);
       }
       // webview 红字落盘（2026-10-19）：页面级错误不过核心路由，直接进 debug log——
       // 排查者自己看（webview 控制台要 Developer: Open Webview Developer Tools，不是 F12，

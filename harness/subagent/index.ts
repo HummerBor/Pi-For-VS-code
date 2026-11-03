@@ -45,6 +45,13 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
+/** 【子 agent 禁用孙 agent 2026-11-03 用户拍板：只有主会话能操作子 agent】
+ *  做法走 pi 原生 --exclude-tools，而不是在扩展里跑时判断/摘工具：子进程从启动起
+ *  就没有这几只工具，与主会话零共享逻辑——主会话那条路一行都没动，不存在「改这里
+ *  把主会话写坏」的面。清单要跟本扩展注册的五个工具名同步（改名就改这里）。
+ *  （pi 文档 cli.md：--exclude-tools 对内置与扩展工具一视同仁） */
+const CHILD_EXCLUDE_TOOLS = "subagent,subagent_list,subagent_collect,subagent_steer,subagent_kill";
+
 /** 职务中文名（2026-11-02 用户拍板「职务 + 随机名字」）：pi 注册分类是英文的
  *  worker/planner/...，展示层要中文职务 —— 一层映射，不碰 pi 注册表。
  *  未注册名（调用方自取的名字）本身就当职务用，不再二次翻译。 */
@@ -315,6 +322,17 @@ function getPiInvocation(args: string[], startDir: string): { command: string; a
 		return { command: process.execPath, args: [currentScript, ...args] };
 	}
 
+	// 【宿主指路契约 2026-11-03】插件宿主已经定位到包根，用 env 把内置 pi 的 cli 入口递下来
+	// （piSdk.ts「宿主指路契约」那一半，此前只有写没有读：约定成了死线）。必须排在下面的
+	// 向上找 / PATH 兜底之前——宿主内置就是「用户免装 pi」的那一份，优先级高于全局安装；
+	// 宿主里 execPath 是 VS Code 的 Code.exe，不能拿去跑 cli.js，只有 node/bun 才是真运行时
+	const envEntry = process.env.PI_CLI_ENTRY;
+	if (envEntry && fs.existsSync(envEntry)) {
+		const execName = path.basename(process.execPath).toLowerCase();
+		const command = /^(node|bun)(\.exe)?$/.test(execName) ? process.execPath : "node";
+		return { command, args: [envEntry, ...args] };
+	}
+
 	// bun 单文件编译产物：execPath 本身就是 pi 二进制（argv[1] 指向虚拟 FS 时才成立）
 	if (isBunVirtualScript) {
 		const execName = path.basename(process.execPath).toLowerCase();
@@ -406,6 +424,7 @@ async function runSingleAgent(
 		args.push("--thinking", dispatchDefaults.thinkingLevel);
 	}
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	args.push("--exclude-tools", CHILD_EXCLUDE_TOOLS); // 孙 agent 封禁（见 CHILD_EXCLUDE_TOOLS 注释）
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -600,10 +619,12 @@ interface AsyncRun {
 	endedAt?: number;
 	status: "running" | "completed" | "failed" | "killed";
 	error?: string;
-	/** 主会话心跳节流（heartbeatIfDue）：上次推「进行中」摘要的时刻 */
-	lastHeartbeatAt?: number;
 	result: SingleResult;
 	proc: ChildProcess;
+	/** 流式增量缓冲（2026-11-03：与主会话同口径的逐字体验）：子进程的 message_update 是
+	 *  delta-only，攒 ~120ms 打一包推给宿主；只在插件宿主（PI_HOST=pi-vscode）下开——
+	 *  这条通道走 appendEntry，CLI 宿主会把它落进父会话文件，逐 delta 会撑爆转录 */
+	streamBuf?: { kind: "text" | "thinking"; text: string; timer: NodeJS.Timeout | null };
 	/** rpc 请求通道（startAsyncRun 装配）：递话/查询走它；进程关闭后调用返回 success:false */
 	request?: (cmd: Record<string, unknown>) => Promise<any>;
 }
@@ -721,6 +742,21 @@ function startAsyncRun(
 				stopAsyncProc(run); // proc close 另行触发，那里只做 quiet 收尾防双重回传
 				continue;
 			}
+			// 【心跳已删除 2026-11-03 用户拍板「多余」】原实现每隔 5 分钟往主会话注入一条
+			// `[子 agent sa-N 进行中] …` 的 user 消息。实测：①终态本来就有 reportBackToMain
+			// 自动回传（完成 followUp / 失败 steer），②实时进度看浮窗行与 subagent_list 就够，
+			// ③它往会话里写 user 消息，既算 token 又污染转录（用户截图问「多余吧」）。
+			// 别再加回轮询/心跳类机制——要状态就查台账/浮窗，不要往对话里灌。
+			// 流式增量（2026-11-03）：与主会话同口径——子进程 message_update 是 delta-only，
+			// 按 kind 攒批后走 appendEntry（只在插件宿主开，见 hostWantsStream 注释）
+			if (evt.type === "message_update" && evt.assistantMessageEvent) {
+				const ae = evt.assistantMessageEvent as { type?: string; delta?: string };
+				if (typeof ae.delta === "string" && ae.delta) {
+					if (ae.type === "text_delta") pushStreamDelta(pi, run, "text", ae.delta);
+					else if (ae.type === "thinking_delta") pushStreamDelta(pi, run, "thinking", ae.delta);
+				}
+				continue;
+			}
 			if (evt.type === "message_end" && evt.message) {
 				// 与同步 json 路径同一套累积口径（runSingleAgent processLine），面板快照形状一致
 				const msg = evt.message as Message;
@@ -740,8 +776,7 @@ function startAsyncRun(
 					if (msg.stopReason) run.result.stopReason = msg.stopReason;
 					if (msg.errorMessage) run.result.errorMessage = msg.errorMessage;
 				}
-				// 主会话监听心跳（2026-10-23）：进度摘要攒批不吵主会话，见 heartbeatIfDue
-				heartbeatIfDue(pi, run);
+				flushStream(pi, run); // 该条消息收尾：残余 delta 立刻冲掉
 				emitAsyncProgress(pi, run);
 			}
 		}
@@ -855,27 +890,40 @@ function reportBackToMain(pi: ExtensionAPI, run: AsyncRun): void {
 	}
 }
 
-/** 主会话监听心跳（2026-10-23 用户拍板「主会话不能纯手工问」）：运行中的子 agent 每 5 分钟
- *  最多推一条「进行中」摘要，deliverAs:"nextTurn" 攒批——不唤醒空闲主会话（steer/followUp
- *  在空闲态会触发整轮，心跳不值这个价），下次任何唤醒（用户提问/终态回灌）随批带上，
- *  主会话开口即见新鲜进度，不必 subagent_list 手工查。终态实时性由 reportBackToMain 保障
- * （失败 steer 插队/完成 followUp）；完整活动流仍归浮窗下钻，上下文增量控制在一行摘要。 */
-function heartbeatIfDue(pi: ExtensionAPI, run: AsyncRun): void {
-	if (run.status !== "running") return;
-	const now = Date.now();
-	if (run.lastHeartbeatAt && now - run.lastHeartbeatAt < 5 * 60_000) return;
-	run.lastHeartbeatAt = now;
-	const msgs = run.result.messages;
-	const last = msgs[msgs.length - 1];
-	const tail = last ? getResultOutput({ ...run.result, messages: [last] }).slice(0, 120) : "";
-	const mins = Math.max(1, Math.round((now - run.startedAt) / 60_000));
+/** 插件宿主标记（piSdk 加载时设）：只有插件里才转发 delta 级流式，CLI/TUI 保持按条——
+ *  转发通道是 appendEntry，CLI 会落盘，逐 delta 会把父会话撑成几十 MB。 */
+function hostWantsStream(): boolean {
+	return process.env.PI_HOST === "pi-vscode";
+}
+
+/** 攒批转发子进程的 delta（与主会话 webview 的 'delta'/'thinking' 同一口径） */
+function pushStreamDelta(pi: ExtensionAPI, run: AsyncRun, kind: "text" | "thinking", text: string): void {
+	if (!text || !hostWantsStream()) return;
+	if (!run.streamBuf) run.streamBuf = { kind, text: "", timer: null };
+	const buf = run.streamBuf;
+	// 换类型（text ↔ thinking）先把手里的冲掉，保证页面顺序不乱
+	if (buf.kind !== kind && buf.text) flushStream(pi, run);
+	buf.kind = kind;
+	buf.text += text;
+	if (buf.timer) return;
+	buf.timer = setTimeout(() => flushStream(pi, run), 120);
+	if (buf.timer.unref) buf.timer.unref();
+}
+
+function flushStream(pi: ExtensionAPI, run: AsyncRun): void {
+	const buf = run.streamBuf;
+	if (!buf) return;
+	if (buf.timer) {
+		clearTimeout(buf.timer);
+		buf.timer = null;
+	}
+	const text = buf.text;
+	buf.text = "";
+	if (!text) return;
 	try {
-		void pi.sendUserMessage(
-			`[子 agent ${run.handle} 进行中] ${mins}分钟/${run.result.usage.turns}轮${tail ? "，最新：" + tail : ""}`,
-			{ deliverAs: "nextTurn" }
-		);
+		pi.appendEntry("subagent-async-stream", { handle: run.handle, kind: buf.kind, text });
 	} catch {
-		/* 主会话不可达（关闭中）时静默 */
+		/* 通道不可用时静默：流式只是体验，不许影响任务 */
 	}
 }
 
@@ -1072,6 +1120,12 @@ export default function (pi: ExtensionAPI) {
 				// 写进 run/result/会话名——台账与帧都落这个值，重载后不会变
 				const displayName = displayAgentName(requestedName);
 				const handle = `sa-${++asyncSeq}`;
+				// 【TDZ 修复 2026-11-03】本单会话目录必须在下面 run 字面量之前算：v8 按项目分桶重构
+				// 把 `const runDir` 挪到了字面量之后，而字面量里要 `runDir`——async 派单 100% 抛
+				// "Cannot access 'runDir' before initialization"（同步单走另一个函数，不受影响；
+				// harness 不在 tsc 工程里，编译器也看不见这个错，只能等运行时爆）
+				const runDir = runDirFor(handle, params.cwd ?? ctx.cwd); // 按项目分桶（2026-11-02）
+				try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 目录失败在 spawn 侧暴露 */ }
 				const run: AsyncRun = {
 					handle,
 					agent: displayName,
@@ -1086,6 +1140,11 @@ export default function (pi: ExtensionAPI) {
 					result: {
 						agent: displayName,
 						agentSource: agent.source,
+						// 【句柄随载荷走 2026-11-03】同步单从 v6 就带 handle，异步单漏了：快照没有句柄，
+						// 面板三条上报路就全退回 toolCallId 当行 id（带 sa-N 的 entry 帧另算一个）——
+						// 一次 async 派单在浮窗里变成两行，会话重载回放 toolResult.details 时再各造一行
+						// （实测 3 行同单，pi-chat-debug.log 05:22:18 三条 call_00_ET_* 铁证）
+						handle,
 						task: params.task!,
 						exitCode: 0,
 						messages: [],
@@ -1109,13 +1168,12 @@ export default function (pi: ExtensionAPI) {
 						cliArgs.push("--thinking", dispatchDefaults.thinkingLevel);
 				}
 				if (agent.tools && agent.tools.length > 0) cliArgs.push("--tools", agent.tools.join(","));
+				cliArgs.push("--exclude-tools", CHILD_EXCLUDE_TOOLS); // 孙 agent 封禁（同同步路）
 				// 可读会话名（同 runSingleAgent 处注释）：异步单同样要能在面板/pi Resume 里认出任务
 				cliArgs.push("--name", sessionLabel(displayName, params.task ?? ""));
 				// 会话落盘（P0-1，2026-10-30）：每单独立 --session-dir，handle ↔ 子会话目录
 				// 一一对应（台账记指针）——子 agent 记录不再绑父会话，「新开项目找不到
 				// 子 agent」的治本。禁 --no-session 红线见 runSingleAgent 处注释。
-				const runDir = runDirFor(handle, params.cwd ?? ctx.cwd); // 按项目分桶（2026-11-02）
-				fs.mkdirSync(runDir, { recursive: true });
 				cliArgs.push("--session-dir", runDir);
 				let tmpPromptDir: string | null = null;
 				let tmpPromptPath: string | null = null;

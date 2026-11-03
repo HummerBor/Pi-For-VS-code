@@ -278,7 +278,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     thinkEl.addEventListener('click', function () { vpost({ type: 'pickThinking' }); });
     modeBadge.addEventListener('click', function () { vpost({ type: 'pickMode' }); });
     codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChipAll(); });
-    input.addEventListener('input', function () { histIdx = -1; histDraft = ''; updateSuggest(); autoSize(); }); // 用户一编辑即退出回溯（程序化赋值不触发 input，不影响 histNav）
+    // 用户一编辑即退出回溯（程序化赋值不触发 input，不影响 histNav）
+    // 全角归一（2026-11-03 用户报「输入法切到全角，输入框里英文变成 ｓ ｓ ｓ 大间距」）：
+    // 组字中不动，上屏后立刻转半角，见 toHalfWidth 注释
+    input.addEventListener('input', function (e) {
+      histIdx = -1; histDraft = '';
+      if (!(e as any).isComposing) normalizeInputWidth();
+      updateSuggest(); autoSize();
+    });
+    // Chrome 里 compositionend 早于最终 input 落字，补一刀跟着归一（幂等，重复调用无副作用）
+    input.addEventListener('compositionend', function () { setTimeout(normalizeInputWidth, 0); });
     input.addEventListener('keydown', inputKeydown);
     input.disabled = false; // V 刀：按键已绑才放开输入框（模板里 disabled，消灭死窗口）
     input.addEventListener('paste', inputPaste);
@@ -1399,7 +1408,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return true;
   }
   function send() {
-    var t = input.value.trim();
+    var t = toHalfWidth(input.value).trim(); // 兜底再归一：组字中途 Enter 上屏的全角也不许按全角发给 pi
     if (!t && !pendingImages.length && !pendingFiles.length) return;
     var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
     var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
@@ -1448,6 +1457,29 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (e.key === 'Escape' && !sgOpen && !e.isComposing) { vpost({ type: 'abort' }); }
     // isComposing 守门：中文输入法取消候选词也是 Esc，不拦的话打字打到一半就把运行中的任务中断了
     // （2026-09-18 事故：用户没点停止却见“已中断当前任务”）
+  }
+  // ── 全角 ASCII 归一 ──
+  // 2026-11-03 用户报：输入法切全角时，输入框里的英文成了「ｓ ｓ ｓ」——字形窄、字宽占满一个汉字位，
+  // 视觉上像每个字母之间空了一大格。这不是插件样式的锅（#input 没有 letter-spacing），是全角字符本身。
+  // 射程只有「全角数字/字母 + 表意空格」：！？（），；： 这些**不转**——全角标点和全角英数是输入法里
+  // 两个独立开关（微软拼音 Ctrl+. 切标点），中文句子里的「你好，世界」是用户真要写的中文标点，
+  // 一并转成半角就是篡改正文；而 . 、句号。这些本来就没全角形态问题。映射 1 字符对 1 字符，
+  // 长度不变，故光标/选区偏移原样可用。
+  function toHalfWidth(s: string): string {
+    return s.replace(/[\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A\u3000]/g, function (c) {
+      return c === '\u3000' ? ' ' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    });
+  }
+  // 就地归一：只在真有全角字符时才写 value。直接赋 value 会清掉 textarea 的 undo 栈
+  // （浏览器不给程序化写值留历史），所以代价只落在「真的打了全角」的那几次按键上；
+  // 半角态打字根本不进这里，Ctrl+Z 行为不受影响。
+  function normalizeInputWidth() {
+    var v = input.value;
+    var half = toHalfWidth(v);
+    if (half === v) return;
+    var selS = input.selectionStart, selE = input.selectionEnd;
+    input.value = half;
+    try { input.setSelectionRange(selS, selE); } catch (e) { /* 选区越界忽略 */ }
   }
   function filesFromClipboard(items) {
     var out = [];
@@ -2186,6 +2218,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         : (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : ''))
       : ((row.rec.endAt || row.rec.startAt) ? fmtRel(row.rec.endAt || row.rec.startAt) : '');
     if (time) rowEl.appendChild(el('span', 'sm-time', time));
+    // 实时明细入口（2026-11-03）：行点击改成「开会话页 / 运行中快照」后，下钻归这个按钮
+    var drillBtn = el('span', 'sm-drill', '⋯');
+    drillBtn.title = L.smDetail;
+    drillBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openSubDetail(row.runId, row.ti);
+    });
+    rowEl.appendChild(drillBtn);
     // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
     // stopPropagation：别点穿成下钻
     if (stale) {
@@ -2201,14 +2241,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       rowEl.appendChild(delBtn);
     }
     // 点行去向（2026-11-02 用户拍板）：终态句柄行 → 直接在会话页面打开（另开页签，pi 原生
-    // 渲染转录）；运行中行 / 同步调用（call_* 无独立子会话）→ 浮窗下钻看活动流。
-    // 运行中禁开：写者只有子进程，接管写 = 双写者红线（需求文档 P0-2）
+    // 渲染转录）；无句柄的老行/同步调用 → 浮窗下钻看活动流。
+    // 【运行中也开 2026-11-03 用户质疑「禁开不如禁写」】——对：现在宿主侧对运行中的单开
+    // 「转录快照」（拷一份 jsonl 去开），真身只有子进程在写，双写者红线不被破。
+    // 拷不了快照（罕见）就退回真身，不把人挡在门外。
     rowEl.addEventListener('click', function () {
       // 句柄优先（2026-11-02：同步单现在也落独立会话，快照带 handle）：异步/同步统一走
       // 「开页签」。无句柄 = v6 之前的存量行 → 按显示名回找文件（subagentOpenLabel，
-      // 宿主侧扫 session_info.name），不再只能浮窗下钻；运行中仍禁开（双写者红线）
+      // 宿主侧扫 session_info.name）
       var openId = (/^sa-\d+$/.test(String(t.handle || ''))) ? String(t.handle) : row.runId;
-      if (/^sa-\d+$/.test(openId) && t.status !== 'running') {
+      if (/^sa-\d+$/.test(openId)) {
         vscode.postMessage({ type: 'subagentOpenHandle', handle: openId });
         return;
       }

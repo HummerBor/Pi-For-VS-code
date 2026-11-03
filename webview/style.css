@@ -943,6 +943,24 @@ details.think.compaction-flash>summary {
   opacity: .8;
 }
 
+/* 行内下钻按钮（2026-11-03）：行点击改成「开会话页/快照」后，实时明细要留个入口 */
+.sm-drill {
+  flex: none;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 4px;
+  color: var(--vscode-charts-blue, #4a9eff);
+}
+
+.sm-row:hover .sm-drill {
+  opacity: .8;
+}
+
+.sm-drill:hover {
+  color: var(--vscode-foreground, #ddd);
+}
+
 .sm-del:hover {
   color: var(--vscode-errorForeground, #f66);
 }

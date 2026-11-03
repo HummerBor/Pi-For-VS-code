@@ -1,4 +1,4 @@
 {
-  "version": 8,
-  "note": "v8: 子会话按项目分桶 subagents/<项目slug>/<handle>/（与 pi 的 sessions/<slug>/ 同规则，老单旧路径继续可读）。v7: 台账记 parentSession。v6: 同步单落独立会话+台账+handle。v5: 职务·随机代号。v4: 未注册名 worker 兜底。v3: --name 会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才覆盖已安装副本。"
+  "version": 17,
+  "note": "v17: 转发子进程 message_update（delta 级），与主会话同口径的逐字流式——只在插件宿主（PI_HOST=pi-vscode）开，CLI 下仍按条（那条通道会落盘）。v16: 删除「进行中」心跳注入（每 5 分钟往主会话塞一条 user 消息）——终态有自动回传、实时进度看浮窗/台账就够，心跳只污染转录并算 token（用户拍板「多余」）。v15: 心跳耗时口径改秒级（原来 <1 分钟一律报「1分钟」，9 秒的单也显示 1 分钟）。v14: 子 agent 禁用孙 agent（只有主会话能操作子 agent）——派单时给子进程加 pi 原生 --exclude-tools，子会话从启动起就没有 subagent_* 工具，不在扩展里跑时判断（主会话路径零改动）。v12: projectSlug 把 `\\\\` 也换成 `-`（原来只换 : 与 /，Windows 上真的建出了多层嵌套目录，左侧列表扫不到子 agent、handleFromSubPath 也认不出）。v11: 异步单 result 补 handle（快照带句柄）。v10: 修 async 派单 TDZ。v9: getPiInvocation 先读 PI_CLI_ENTRY。v8: 子会话按项目分桶 subagents/<项目slug>/<handle>/。v7: 台账记 parentSession。v6: 同步单落独立会话+台账+handle。v5: 职务·随机代号。v4: 未注册名 worker 兜底。v3: --name 会话名。v2: frames.jsonl 自写。源码归属 pi-vscode 仓 harness/subagent/，改动 bump version 才覆盖已安装副本。"
 }

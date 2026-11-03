@@ -74,6 +74,9 @@ async function doLoad(): Promise<any> {
   // 而不是让扩展自己摸 PATH。env 会被子进程继承，嵌套派发同样命中
   const cliEntry = join(root, "dist", "bundle", "cli.js");
   if (existsSync(cliEntry)) process.env.PI_CLI_ENTRY = cliEntry;
+  // 宿主标记（2026-11-03）：subagent 扩展靠它决定要不要转发 delta 级流式——
+  // 转发走 appendEntry，CLI 宿主会落盘（逐 delta 撑爆父会话），插件里不落盘且转录页要逐字
+  process.env.PI_HOST = "pi-vscode";
   let sdk: any;
   try {
     sdk = await dynamicImport(pathToFileURL(entry).href);

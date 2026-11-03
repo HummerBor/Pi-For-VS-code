@@ -69,7 +69,13 @@ function takeServices(sdk: any, cwd: string): Promise<any> {
 const servicesChain = new Map<string, Promise<void>>();
 function createServices(sdk: any, cwd: string): Promise<any> {
   const prev = servicesChain.get(cwd) ?? Promise.resolve();
+  // 【真机打点 2026-11-03】离线实测 services 本身只有 200ms（冷 1.3s），但真机日志出现过
+  // `[boot] services +9215ms (单跳9197ms)`——差一个数量级，所以把这几段分开计时，定位是
+  // 「排队等前一个 cwd 的 services」还是「createAgentSessionServices 自己」。
+  // 纯 Date.now，**不许带 IO/定时器**：探针自己插进服务闸会污染被测对象（2026-09-23 教训）。
+  const tQ = Date.now();
   const p: Promise<any> = prev.then(async () => {
+    const t0 = Date.now();
   // 【探针清场 2026-09-23】S/X/Y/Z2/Z3 五把计时探针（bench/io 逐项掋表/位置×读法矩阵/
   // 哨兵）已拆除——判案结论见 交接-启动慢战役.md：慢在服务通道排队过闸，不在内核/文件/位置。
   // 血泪教训：这些探针自己会往同一条服务闸插异步 IO（Z3 每 400ms 三笔、Z2 一轮 24 笔），
@@ -79,6 +85,7 @@ function createServices(sdk: any, cwd: string): Promise<any> {
     //（①ModelRuntime.create 在扩展宿主里的真实耗时），并全进程共享（它只是模型目录，
     // 选择权在 session 上）。剩余（ctor+reload+refresh）= services 单跳减本行
     const modelRuntime = await getSharedModelRuntime(sdk);
+    const tMr = Date.now();
     // 显示名/分类归位钩子（subagentNames.ts 头注释）：resourceLoaderOptions.extensionFactories
     // 是 SDK 给宿主的内联扩展口（sdk.md「Extensions」）——pi 内容零改动，调用名在工具执行前
     // 归位 pi 注册分类，展示名走台账（2026-09-24 两层分离拍板）
@@ -89,11 +96,16 @@ function createServices(sdk: any, cwd: string): Promise<any> {
     } catch {
       /* 观测面不阻会话创建 */
     }
-    return sdk.createAgentSessionServices({
+    const tH = Date.now();
+    const result = await sdk.createAgentSessionServices({
       cwd,
       modelRuntime,
       resourceLoaderOptions: { extensionFactories: [makeSubagentNameGuard(sdk, cwd)] },
     });
+    dbg(
+      "[boot-svc] 排队=" + (t0 - tQ) + "ms mr=" + (tMr - t0) + "ms harness=" + (tH - tMr) + "ms create=" + (Date.now() - tH) + "ms 合计=" + (Date.now() - tQ) + "ms",
+    );
+    return result;
   });
   servicesChain.set(cwd, p.then(() => undefined, () => undefined));
   return p;

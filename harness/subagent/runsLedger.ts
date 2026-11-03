@@ -59,9 +59,13 @@ export function runDirFor(handle: string, cwd?: string): string {
 	return path.join(subagentsBase(), projectSlug(cwd), handle);
 }
 
-/** 项目分桶名（与 pi 的 sessions/<slug>/ 同规则） */
+/** 项目分桶名（与 pi 的 sessions/<slug>/ 同规则）。
+ *  【必须把 `\` 也换掉 2026-11-03】原正则只换 `:` 和 `/`——Windows 上 path.resolve 给的是
+ *  反斜杠，于是 slug 里留着 `\`，`join()` 真正建出了嵌套目录（subagents/--d-/work/docs/…/sa-11）：
+ *  一层桶扫不到、handleFromSubPath 也认不出，左侧列表就「没有子 agent」。pi 自己的会话桶
+ *  是全 `-` 的单层目录（sessions/--d--work-...--），这里必须与之对齐 */
 export function projectSlug(cwd: string): string {
-	return "--" + path.resolve(cwd).replace(/[:\/]/g, "-") + "--";
+	return "--" + path.resolve(cwd).replace(/[:\\/]/g, "-") + "--";
 }
 
 function runsDir(): string {
