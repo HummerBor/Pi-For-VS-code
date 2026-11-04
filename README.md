@@ -27,6 +27,17 @@
 
 ![左侧 Hot Duck 热搜榜 + 右侧 Pi 面板](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-2.png)
 
+## 面板白屏 / 报 `Could not register service worker`
+
+VS Code **刚更新过**的第一个窗口里偶尔会这样：面板白屏，或者弹一句
+`Error loading webview ... Could not register service worker: InvalidStateError ... The document is in an invalid state`。
+这既不是插件崩了也不是会话坏了——是 VS Code 自己给 webview 用的 service worker 缓存还是上一个版本的，
+新版本没能注册成功，于是 webview 压根没起来（会话都在磁盘上，一条都没丢）。
+
+**修法**：命令面板搜 `pi: 修复 webview 缓存（退出 VS Code 后生效）` 执行，然后**自己退出 VS Code**（三分钟内），退出后缓存会被自动清掉，再手动打开 VS Code 即可。
+（插件启动时也会自己检测并提示；它不会自己关你的窗口。）
+手动等价操作：完全退出 VS Code → 删掉配置目录下的 `Service Worker` 和 `Cache` 两个文件夹 → 重新打开。
+
 ## 用它开发它自己
 
 它的每个版本都是在自己的面板里做出来的：打开项目 → 跟 pi 说「把欢迎页的鸭子换个姿势」→ 它改源码、编译、打包出新 `.vsix` → 装上重载——**它就更新了它自己**，包括你现在看的这段 README。

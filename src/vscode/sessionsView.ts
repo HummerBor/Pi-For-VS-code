@@ -4,6 +4,7 @@ import { listSessions, peekListSessions, listSubagentSessions, peekSubagentSessi
 import { ChatPanelProvider } from "./panel";
 import { bb } from "../core/i18n";
 import { getSessionsHtml } from "./webview-html";
+import { markWebviewAttached } from "./webviewGuard";
 
 /** 列表条目（宿主→webview svItems 的形状；本地零影子状态，宿主全量重发）。
  *  subs（2026-11-02 用户拍板「主会话加收放按钮，展开是对应的子智能体」）：
@@ -68,6 +69,7 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
     this.view = view;
     view.webview.options = { enableScripts: true };
     this.applyHtml();
+    markWebviewAttached(); // webview 自检打点（webviewGuard.ts）：会话列表也是 webview，它起来就说明 SW 链路是通的
     view.webview.onDidReceiveMessage(async (m: { type: string; file?: string; label?: string }) => {
       if (m.type === "svReady") void this.sendItems();
       else if (m.type === "svRefresh") void this.sendItems();

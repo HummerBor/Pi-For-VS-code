@@ -458,6 +458,15 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     caAuthNotify: "已授权插件「{n}」接入 piChat 控制面",
     caRevokeNotify: "已撤销插件「{n}」的 piChat 接入授权",
     caExtMissing: "未找到该扩展，拒绝授权",
+    // ── webview 自检 / 一键修复（2026-11-04 VS Code 更新后 SW 库陈旧事故）──
+    swRepairMsg: "Pi For VSC：面板没能加载。",
+    swRepairNow: "修复",
+    swRepairLater: "稍后",
+    swRepairQuitting: "正在关闭 VS Code，退出后自动清理。",
+    swRepairNext: "已就位：退出 VS Code 后生效，再打开即可。",
+    swRepairUnsupported:
+      "只支持 Windows 自动修复。手动：退出 VS Code，删掉配置目录下的 Service Worker 与 Cache 文件夹。",
+    swRepairFailed: "脚本没能启动。手动：退出 VS Code，删掉配置目录下的 Service Worker 与 Cache 文件夹。",
   },
 
   en: {
@@ -888,6 +897,15 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     caAuthNotify: "Authorized \"{n}\" for piChat control-plane access",
     caRevokeNotify: "Revoked piChat access for \"{n}\"",
     caExtMissing: "Extension not found; authorization denied",
+    // ── webview self-check / one-click repair (2026-11-04 stale webview SW store after a VS Code update) ──
+    swRepairMsg: "Pi For VSC: panel failed to load.",
+    swRepairNow: "Fix",
+    swRepairLater: "Later",
+    swRepairQuitting: "Closing VS Code; cache is cleared on exit.",
+    swRepairNext: "Ready: quit VS Code, then reopen it.",
+    swRepairUnsupported:
+      "Automatic repair is Windows-only. Manual: quit VS Code, delete the Service Worker and Cache folders in your profile directory.",
+    swRepairFailed: "Script did not start. Manual: quit VS Code, delete the Service Worker and Cache folders in your profile directory.",
   },
 };
 

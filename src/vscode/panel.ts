@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "../pi/piClient";
 import { getAgentDirSync } from "../pi/piSdk";
 import { openTranscriptTab, pushTranscript, pushTranscriptStream } from "./transcriptTab";
+import { markWebviewAttached } from "./webviewGuard";
 import { displayNameFor } from "../domain/subagentNames";
 import { setDisplayNameLookup } from "../domain/subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
@@ -632,6 +633,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true };
     this.applyHtml();
     dbgLog("[装配] attachView html set");
+    markWebviewAttached(); // webview 自检：本窗口起来过就不再报「面板白屏」（webviewGuard.ts）
     // 背景图/透明度配置变更 → 重置 webview（webviewReady 握手会自动重绘历史）
     const bgWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("piChat.backgroundImage") || e.affectsConfiguration("piChat.backgroundOpacity")) {

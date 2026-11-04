@@ -15,6 +15,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getHtml } from "./webview-html";
+import { markWebviewAttached } from "./webviewGuard";
 import type { Lang } from "../core/i18n";
 
 interface Tab {
@@ -231,6 +232,7 @@ export function openTranscriptTab(opts: OpenTranscriptOptions): void {
       "</head>",
       READONLY_CSS + "</head>"
     );
+  markWebviewAttached(); // webview 自检打点（webviewGuard.ts）：转录页也是同模板 webview
   panel.webview.onDidReceiveMessage((m: { type?: string }) => {
     if (m?.type === "webviewReady") {
       tab.ready = true;

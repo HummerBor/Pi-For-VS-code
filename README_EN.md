@@ -27,6 +27,18 @@ One window, three columns: session list in the sidebar, code in the editor, pi i
 
 ![Hot Duck trending in the sidebar + Pi panel on the right](https://raw.githubusercontent.com/HummerBor/Pi-For-VS-code/main/media/hotduck-2.png)
 
+## Blank panel / `Could not register service worker`
+
+Rarely happens in the first window after **VS Code itself was updated**: the pi panel is blank, or you get
+`Error loading webview ... Could not register service worker: InvalidStateError ... The document is in an invalid state`.
+Nothing is broken in the extension and no conversation is lost — VS Code's own service-worker cache for
+webviews still belongs to the previous build, the new build never got registered, so the webview never loaded.
+
+**Fix**: run `pi: 修复 webview 缓存（退出 VS Code 后生效）` from the Command Palette, then **quit VS Code yourself** within three minutes —
+the cache is cleared as soon as it exits, reopen VS Code afterwards (the extension also detects this on startup and offers
+the same fix; it never closes your window for you). Manual equivalent: quit VS Code, delete the
+`Service Worker` and `Cache` folders in the profile directory, start VS Code again.
+
 ## Built with itself
 
 Every version of this extension was built inside its own panel: open the project → tell pi "change the duck's pose on the welcome page" → it edits the source, compiles, packages a new `.vsix` → install and reload — **it updates itself**, including the README you're reading.
