@@ -123,3 +123,25 @@
 7. 不变式四条（错一条翻车）：单写者 adopt 不新建 / settle 桥 / 同名拒收 / 会话落盘审计
    红线（--no-session 焊死在 piClient）。验证 gate：compile 全绿 + 全套 test:* 回归 +
    三探针 + 拆除零残留 grep。
+
+## 六、待签发需求（用户直令留痕，等总监立单）
+
+### 需求：气泡级「↺ 回到这里」按钮（2026-11-04 用户原话「在上下文把这段删除」）
+
+- **诉求**：误发/聊茬的消息希望能从上下文里去掉。用户提出「做一个在上下文把这段删除的按钮」。
+- **结论（先查 pi 原生 → 不做自研删除）**：不做「删中间一条」，做「从这条分叉」。
+  `vendor/pi/dist/bundle` 实查：只有 `runtime.fork(entryId)`，**没有** deleteEntry /
+  removeEntry / truncateAfter / rewindTo / editMessage。会话是 append-only 树（entry 带
+  parent 链），中间删一条会断开 tool_call ↔ tool_result 配对、破坏回放与审计红线
+  （AGENTS.md「会话必须落盘」）。pi 原生 fork 的语义正好是「这点之后从活跃链上丢弃」，
+  旧分支仍留在 jsonl 里可审计。
+- **现状已通**：`panel.forkToMessage()` = `getForkMessages()` → `client.fork(entryId)` →
+  `render` 重绘 + notice 提示；入口只有命令面板 `pi: 从历史消息分叉 (fork)…` / `/fork`
+  外加一个 QuickPick。本需求 = 把入口搬到气泡上。
+- **实现要点（待施工时核对）**：
+  1. webview：user 气泡 hover 出「↺ 回到这里」，确认文案必须写清「将丢弃该条之后的 N 条」；
+  2. 气泡→entryId 映射：`getUserMessagesForForking()` 返回顺序与渲染的 user 气泡同序，
+     渲染时把 index 存进 dataset，回宿主取同列表 entryId 并比文本防错位；
+  3. 新协议 `forkTo{ index }` 三处同步（发送方 / 接收方 / protocol.ts）；
+  4. 复用 `panel.forkToMessage()` 的既有链路，仅去掉 QuickPick 分支。
+- **注**：DIRECTOR.md 当前是只读（r--r--r--，工单区归总监），故本需求记在此处，待总监立单/裁决。

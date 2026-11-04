@@ -39,6 +39,7 @@ export interface SessionInfo {
  *  （2026-10-19 deleteSession 传入 SessionItem → p.replace is not a function），
  *  非字符串一律不等，不炸调用方 */
 import { samePath } from "../domain/pathKey";
+import { dbgAppend } from "../core/piCore";
 export { samePath };
 
 /** pi 的 SessionInfo 类型（内联 import：零运行时依赖，类型参考的正确做法） */
@@ -269,7 +270,12 @@ async function scanSubagentSessions(): Promise<PiSessionProjection[]> {
 }
 
 export async function listSubagentSessions(cwd?: string, limit = 50): Promise<SessionInfo[]> {
+  // B3 刀：这里的扫描全程同步 fs 递归 + 每 handle 一次 256KB 头部读，宿主主线程上跑——
+  // 慢就落日志（≥100ms），与 [lag] 探针对齐定位启动窗口里的抢占者
+  const t0 = Date.now();
   const subs = await scanSubagentSessions().catch(() => []);
+  const ms = Date.now() - t0;
+  if (ms >= 100) dbgAppend("[sessions] scan-subagents +" + ms + "ms found=" + subs.length);
   return toSessionInfos(subs, cwd, limit);
 }
 
@@ -326,13 +332,22 @@ export async function listSessions(
   onProgress?: (loaded: number, total: number, partial?: SessionInfo[]) => void
 ): Promise<SessionInfo[]> {
   return toSessionInfos(
-    await listNative(
-      cwd,
-      onProgress
-        ? (loaded, total, partial) =>
-            onProgress(loaded, total, partial ? toSessionInfos(partial, cwd, limit) : undefined)
-        : undefined
-    ),
+    await (async () => {
+      // B3 刀（2026-11-04 启动慢战役）：列表扫描是启动期最大的嫌疑之一（pi listAll 会解析
+      // 几百 MB 会话文件，在宿主主线程上与 services 创建抢线程）。只记慢调用（≥300ms），
+      // 正常点击不刷日志；与 extension.ts 的 [lag] 卡顿探针对齐看能得到「卡在哪一跳」。
+      const t0 = Date.now();
+      const r = await listNative(
+        cwd,
+        onProgress
+          ? (loaded, total, partial) =>
+              onProgress(loaded, total, partial ? toSessionInfos(partial, cwd, limit) : undefined)
+          : undefined
+      );
+      const ms = Date.now() - t0;
+      if (ms >= 300) dbgAppend("[sessions] list cwd=" + (cwd ?? "(all)") + " +" + ms + "ms count=" + r.length);
+      return r;
+    })(),
     cwd,
     limit
   );

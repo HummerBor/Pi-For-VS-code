@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.44",
+  "version": "0.1.114",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -90,6 +90,16 @@
         "title": "pi: 新建会话（编辑器标签）",
         "category": "pi",
         "icon": "media/source/pi-icon-small.svg"
+      },
+      {
+        "command": "piChat.repairWebview",
+        "title": "pi: 修复 webview 缓存（退出 VS Code 后生效）",
+        "category": "pi"
+      },
+      {
+        "command": "piChat.swGuardPreview",
+        "title": "pi: 预览 webview 修复提示（测试用）",
+        "category": "pi"
       }
     ],
     "menus": {

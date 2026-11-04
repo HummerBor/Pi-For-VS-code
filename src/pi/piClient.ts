@@ -76,6 +76,17 @@ function createServices(sdk: any, cwd: string): Promise<any> {
   const tQ = Date.now();
   const p: Promise<any> = prev.then(async () => {
     const t0 = Date.now();
+    // B4 刀（2026-11-04）：宿主内 **同步 IO 基准**。隔离探针里同一个 readFileSync 只需几 ms，
+    // 宿主里 mr-create 却 4.4s（离线 21ms）——先把「读这两个 2.5KB 小文件」的耗时量出来：
+    // 慢在文件过滤（杀软/加密客户端）还是慢在事件循环层，靠这两行区分。
+    try {
+      const tIO = Date.now();
+      const b1 = fs.readFileSync(join(sdk.getAgentDir(), "models.json"));
+      const b2 = fs.readFileSync(join(sdk.getAgentDir(), "auth.json"));
+      dbg("[boot] io-read models=" + b1.length + "B auth=" + b2.length + "B +" + (Date.now() - tIO) + "ms");
+    } catch (e: any) {
+      dbg("[boot] io-read FAIL " + (e?.code ?? e?.message ?? e));
+    }
   // 【探针清场 2026-09-23】S/X/Y/Z2/Z3 五把计时探针（bench/io 逐项掋表/位置×读法矩阵/
   // 哨兵）已拆除——判案结论见 交接-启动慢战役.md：慢在服务通道排队过闸，不在内核/文件/位置。
   // 血泪教训：这些探针自己会往同一条服务闸插异步 IO（Z3 每 400ms 三笔、Z2 一轮 24 笔），
@@ -114,8 +125,13 @@ function createServices(sdk: any, cwd: string): Promise<any> {
    *  W 刀：顺带全量预载 bundle 懒加载 chunks（首次 import = 模块加载+杀软扫描，
    *  唯一未排除的冷载卡顿嫌疑；提前到激活期全付掉，不命中也无害） */
 export function prewarmPiServices(cwd: string): void {
+  // B3 刀：预热链自己的时间锚点（原先只有 chunks-preload 和 boot-svc 两行，中间
+  // 「什么时候开始、load-pkg 卡了多久」是盲区，无法与 [lag] 卡顿行对齐）
+  const tPrewarm = Date.now();
+  dbg("[boot] prewarm start");
   void loadPiSdk()
     .then((sdk: any) => {
+      dbg("[boot] prewarm load-pkg +" + (Date.now() - tPrewarm) + "ms");
       try {
         const { findPiPackageRoot } = require("./piSdk");
         const { pathToFileURL } = require("url");

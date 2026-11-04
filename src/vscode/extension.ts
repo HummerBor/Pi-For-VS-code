@@ -9,6 +9,7 @@ import { prewarmPiServices } from "../pi/piClient";
 import { bb, Lang, STRINGS } from "../core/i18n";
 import { dbgAppend } from "../core/piCore";
 import { ClientAuth } from "./clientAuth";
+import { startWebviewGuard, runWebviewRepair, previewRepairNotice } from "./webviewGuard";
 
 /** openSession 命令入参 file/name 解析（file 优先；name 兜底扫列表 name 字段——`--name`
  *  写进 session_info 的那个名）。解析不出返回 null。存疑记录：name 匹配用精确相等（外部
@@ -28,11 +29,65 @@ async function resolveSessionFile(args: { file?: string; name?: string } | undef
   }
 }
 
+/** 启动期事件循环卡顿探针（B3 刀，2026-11-04 启动慢战役第四段）。
+ *
+ *  为什么要它：离线实测同一调用 ModelRuntime.create = 21~27ms、createAgentSessionServices
+ *  = 220ms（scripts/probe/probe-cold-services.mjs 三种顺序都试过），真机宿主里却是
+ *  mr=3506ms / create=6931ms——差 33~167 倍。这不是算法成本，是「调用在排队」：
+ *  单步计时只能告诉你“慢”，卡顿探针才能告诉你“什么时候被谁按住了”。
+ *
+ *  做法：100ms 定时器量漂移，只记真卡顿（>250ms），卡顿时把相对 activate 的时刻写进
+ *  debug log——与其他日志行的墙钟时间对齐，就能看出卡顿落在哪一跳（装配/HTML/
+ *  sessions 扫描/外部扩展）。守窗口 = activate 后 90s（启动慢只发生在这里），
+ *  之后自毁，不给常驻运行留定时器。 */
+function startBootLagMonitor(durationMs = 90_000): void {
+  const t0 = Date.now();
+  const tickMs = 100;
+  let last = t0;
+  let maxLag = 0;
+  let lastCpu = process.cpuUsage();
+  let ioN = 0;
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const drift = now - last - tickMs;
+    last = now;
+    // B4 刀判别器：卡顿期间本进程吃了多少 CPU——
+    //   drift 450ms / cpu 400ms = 线程真在跑 JS（吞吐被自身工作占满）
+    //   drift 450ms / cpu 50ms  = 线程被挂起或等同步 IO（外部抢占 / 文件过滤 / 阻塞 syscall）
+    // 只靠漂移量分不出这两种，而它们的修法完全不同。
+    const cpu = process.cpuUsage(lastCpu);
+    const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
+    lastCpu = process.cpuUsage();
+    if (drift > maxLag) maxLag = drift;
+    if (drift > 250) dbgAppend("[lag] +" + drift + "ms cpu=" + cpuMs + "ms at +" + (now - t0) + "ms");
+    // B4 刀：每 2s 打一发异步 stat 测量——只量不写盘（stat 本身零副作用）。
+    // 若这条也慢（>200ms），说明宿主里「连最简单的异步 IO 都要排很久」：问题在事件循环/IO 层，
+    // 不在我们某个具体函数——两种修法（拆同步活 vs 换 IO 方式）不能猜。
+    if (++ioN % 20 === 0) {
+      const ti = Date.now();
+      void fs.promises
+        .stat(process.execPath)
+        .then(() => {
+          const ms = Date.now() - ti;
+          if (ms > 200) dbgAppend("[lag] io-stat +" + ms + "ms at +" + (now - t0) + "ms");
+        })
+        .catch(() => {});
+    }
+    if (now - t0 >= durationMs) {
+      clearInterval(timer);
+      dbgAppend("[lag] monitor stop max=" + maxLag + "ms at +" + (now - t0) + "ms");
+    }
+  }, tickMs);
+  // 不阻宿主退出（定时器不能成为进程保活的理由）
+  (timer as unknown as { unref?: () => void }).unref?.();
+}
+
 export function activate(ctx: vscode.ExtensionContext): void {
   // 诊断锚点（2026-10-19）：扩展宿主重启 = webview 重建的头号嫌疑，但此前日志里
   // 没有它的名字（只看到 webviewReady/boot 重跑）——「面板莫名重建」无从判因。
   // activate/deactivate 各留一行，重启在日志里一眼可辨
-  dbgAppend("=== extension activate v" + String(ctx.extension.packageJSON.version));  // Q 刀②（2026-09-23）：激活即后台预热 services——resourceLoader 全树扫描（冷 5~10s）
+  dbgAppend("=== extension activate v" + String(ctx.extension.packageJSON.version));
+  startBootLagMonitor(); // 启动期事件循环卡顿探针（见函数头注释）  // Q 刀②（2026-09-23）：激活即后台预热 services——resourceLoader 全树扫描（冷 5~10s）
   // 藏进「开面板之前」的空窗；失败静默（boot 时还会再试）
   const ws0 = vscode.workspace.workspaceFolders?.[0];
   if (ws0) prewarmPiServices(ws0.uri.fsPath);
@@ -197,6 +252,25 @@ export function activate(ctx: vscode.ExtensionContext): void {
   statusItem.command = noSecondary ? "piChat.view.focus" : "piChat.viewSecondary.focus";
   statusItem.show();
   ctx.subscriptions.push(statusItem);
+
+  // webview 自检 / 修复（2026-11-04 事故，背景与边界见 webviewGuard.ts 头注释）：
+  // VS Code 更新后 webview 的 SW 库陈旧 → 每个 webview 壳页注册失败 → VS Code 不调
+  // resolveWebviewView，面板白屏且我们一行日志都打不出。自检在版本变化时跑一次 +
+  // 下面这个手动入口供用户自己找（命令面板搜「pi」；README FAQ 同款文案）。
+  // 【不弹确认框、不动 VS Code】——这条命令只写一个待命脚本 + 告诉你下一步怎么做，
+  // 上一版弹 modal + 自动 quit + 自动重启，用户只点了一下命令就被重启了（2026-11-04 事故）。
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand("piChat.repairWebview", async () => {
+      dbgAppend("[sw-guard] 命令面板入口被调用");
+      await runWebviewRepair(lang0);
+    }),
+    // 测试入口（2026-11-04 用户「我怎么测一版」）：不弄坏机器也能看到用户会碰到的那条提示。
+    // 点「稍后」不会把真正的自检静默掉；点主按钮才会真关 VS Code 清缓存。
+    vscode.commands.registerCommand("piChat.swGuardPreview", async () => {
+      await previewRepairNotice(ctx, lang0);
+    })
+  );
+  startWebviewGuard(ctx, lang0);
 }
 
 export function deactivate(): void {
