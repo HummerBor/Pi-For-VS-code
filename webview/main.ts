@@ -447,6 +447,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 同款串写残留（2026-09-20 事故教训）。宿主侧 boot phase=… 分段计时与本表互为印证。
   var bootTickTimer: any = 0;
   var bootTickStart = 0;
+  /** B 刀：本页签是否处在「启动占位帧」阶段（uiState.booting）——真值帧到达才置回 false。
+   *  占位存在期间，任何空闲态渲染（setBusy(false)/切回页签 refreshBusy）都不许碰状态行，
+   *  否则会三次擦掉「pi 后台启动中…」提示（见 applyState / renderBusyUi 两处守卫）。 */
+  var bootPending = false;
   function startBootTick(base) {
     stopBootTick();
     bootTickStart = Date.now();
@@ -546,7 +550,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       busyTimer = myTimer;
     } else {
       statusEl.classList.remove('busy');
-      statusEl.textContent = '';
+      // B 刀：占位期不清状态行（否则 setBusy(false) 会把「pi 后台启动中… Ns」刷掉，
+      // 与 applyState 的守卫成对——漏一道就还是 6 秒零反馈）
+      if (!bootPending) statusEl.textContent = '';
       if (compacting) {
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
         statusEl.classList.add('busy');
@@ -1175,8 +1181,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
     //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
     // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
-    stopBootTick(); // N 刀：首帧状态到达 = 启动结束，秒表收表（文本由下方清理）
-    if (!compacting && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
+    // B 刀（2026-11-04 用户报「提示消失后是灰状态、等一会模型才有」）：占位帧（booting）
+    // 不是终值——页脚来自模型记忆/快路径缓存，模型名和标题还得等 pi init 完。这种帧不许
+    // 收秒表、不许清状态行，否则 boot 空窗（真机日志实测 6.4s，mr-create 单项 5.3s）里
+    // 用户只看到全空页脚 + 「⚡ Auto」，零反馈。收表权只给真值帧（booting 缺省/false）。
+    // （uiState 分支已在 setBusy 之前置过同一标记，这里是 'state' 消息的入口；赋值幂等）
+    bootPending = m.booting === true;
+    if (!bootPending) {
+      stopBootTick(); // N 刀：首帧真值状态到达 = 启动结束，秒表收表（文本由下方清理）
+      if (!compacting && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
+    }
     // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
     modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
     modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
@@ -1571,6 +1585,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // （webview 重载后全量重建、压缩/换会话真相推送都走这里）。每页签一棵 DOM 后
       // 「慢到的旧页签快照覆盖新页签内容」这类竞态整类消失：快照只覆盖它自己的树
       built = true;
+      // B 刀：标记必须赶在 setBusy 之前落——uiState 分支的顺序是 setBusy → applyState，
+      // 而 setBusy(false) 内部会走 renderBusyUi 的空闲分支。若等 applyState 才置 bootPending，
+      // 首帧（booting=true 的第一帧）就已经把「pi 后台启动中…」擦掉了，守卫形同虚设。
+      bootPending = m.booting === true;
       // 状态栏排队计数随快照同页签对齐（原 queueN 是上个页签的 queue_update 残留值）
       queueN = (m.queued || []).length;
       banner = m.banner;

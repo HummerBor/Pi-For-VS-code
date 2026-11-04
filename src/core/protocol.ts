@@ -505,6 +505,11 @@ export interface UiStateMsg {
   sessionFile?: string | null;
   sessionName?: string | null;
   stats?: { contextPercent?: number | null; cost?: number } | null;
+  /** B 刀（2026-11-04）：**启动期占位帧**标记——页脚/历史来自快路径缓存或模型记忆，
+   *  pi 内核（services/modelRuntime）还没 init 完，model/标题都还不是真值。
+   *  webview 见 true 不收启动秒表、不清「pi 后台启动中…」提示（真值帧才收）。
+   *  缺省/undefined = 真值帧（老 webview 兼容：undefined 走原行为）。 */
+  booting?: boolean;
 }
 /** 工单七：单个变更文件的 webview 展示信息（还原/diff 所需细节留在宿主，不进 webview） */
 export interface ChangesFileInfo {

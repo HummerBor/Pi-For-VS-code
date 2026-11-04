@@ -93,8 +93,11 @@ setTimeout(() => {
   void core.postUiState().then(() => { switchLatency = Date.now() - t; });
 }, 200);
 
-// —— 收集 3.5s 后判卷（init 未完也有 4s pendingPrompt 兜底在跑，process.exit 统一收口）——
-setTimeout(() => {
+// —— 判卷时机：等真值帧到（render + state）或 20s 兜底 ——
+// 原先固定 3.5s：宿主高负载时 boot 链尾 render 3.5s 还没到，① 直接用「缺帧」判红 =
+// 假失败（实测在跑探针的机器上必现）。改成条件等待：有 render 且已有 state 即判卷，
+// 上限 20s（真·挂死仍是红的，只是不再冤枉慢机器）。
+const finish = () => {
   const uiStates = posts.filter((p) => p.m.type === "uiState");
   const renders = posts.filter((p) => p.m.type === "render");
   const busies = posts.filter((p) => p.m.type === "busy");
@@ -127,7 +130,30 @@ setTimeout(() => {
     !!(expected >= 0 && typeof lastBusy.m.elapsedMs === "number" && lastBusy.m.elapsedMs >= expected - 100),
     "agent_start elapsed=" + String(lastBusy && lastBusy.m.elapsedMs) + "ms，锚点差=" + expected + "ms");
 
+  // ⑥ B 刀（2026-11-04）：启动期首帧必须带 booting 标记——它是 webview 不收启动秒表/不清
+  // 「pi 后台启动中…」的唯一依据。不带 = boot 空窗（真机 6.4s）又变成零反馈（可证伪：
+  // 删掉 postUiState 里的 ...(booting ? {booting:true}:{}) 本判据必红）。
+  check("⑥ 启动期首帧 uiState 带 booting 标记",
+    !!(first && first.m.booting === true),
+    first ? "booting=" + String(first.m.booting) : "无首帧");
+  // ⑦ 真值帧不带标记（带了 = 秒表永不收、状态行永久「启动中 Ns」）。窗口内还没等到
+  // 真值帧就记 skip（不拿恒红指标当验收依据）
+  const truthStates = posts.filter((p) => p.m.type === "state");
+  const lastUi = uiStates[uiStates.length - 1];
+  check("⑦ 真值帧不带 booting 标记（占位帧之外必能收表）",
+    truthStates.length === 0 || !!(lastUi && lastUi.m.booting !== true),
+    truthStates.length === 0 ? "skip：窗口内未到真值帧" : "真值 state=" + truthStates.length + " 帧，末帧 booting=" + String(lastUi && lastUi.m.booting));
+
   const fail = results.some((r) => !r.ok);
   console.log(fail ? "\n冒烟 FAIL" : "\n冒烟 PASS");
   process.exit(fail ? 1 : 0);
-}, 3500);
+};
+
+let judged = false;
+const judge = () => { if (judged) return; judged = true; finish(); };
+const poll = setInterval(() => {
+  const hasRender = posts.some((p) => p.m.type === "render");
+  const hasState = posts.some((p) => p.m.type === "state");
+  if (hasRender && hasState) { clearInterval(poll); judge(); }
+}, 100);
+setTimeout(() => { clearInterval(poll); judge(); }, 20000);

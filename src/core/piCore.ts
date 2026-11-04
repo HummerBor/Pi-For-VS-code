@@ -671,6 +671,12 @@ export class PiCore {
         sessionName: foot?.sessionName ?? null,
         sessionFile: foot?.sessionFile ?? null,
         stats: foot?.stats ?? null,
+        // B 刀（2026-11-04 用户报「提示消失后是灰状态，等一会模型才有」）：占位帧必须自带
+        // 「还不是真值」标记——上面 foot 走的是 lastFoot/模型记忆，msg 走的是快路径缓存，
+        // pi init 未翻真。webview 见到 booting 就不收启动秒表、不清「pi 后台启动中…」。
+        // 事故背景：占位帧无条件擦状态行 = boot 空窗（真机日志 6.4s，mr-create 单项 5.3s）
+        // 全空页脚零反馈，用户以为插件挂了。
+        ...(booting ? { booting: true } : {}),
       });
       // 浮窗历史重放（债务④）：webview 重载后内存账本清零，从会话文件回填——
       // 空闲时才放：busy 说明 live 事件正在流，重放帧可能用旧纪元同句柄的终态覆写运行中行。
@@ -1744,11 +1750,17 @@ export class PiCore {
   }
   /** 启动占位页脚（无 lastFoot 时）：用本标签的模型/思考记忆合成——记忆正是 applyModelMemory
    *  随后要恢复的值，boot 期先显示它才是真话；boot 完成后真值（含友好名）覆盖。
-   *  记忆不存显示名，model.name 给 id（webview 端 name||id 自然回退，终值会换成真名） */
+   *
+   *  【2026-11-04 改正：半真值禁止】原条件 `!mem && !think` 放行「只有模型记忆、没有思考记忆」的
+   *  合成——真机启动 5.6s 空窗里用户看到的是「⚡ deepseek-flash / 思考 —」（模型是 id 不是显示名，
+   *  思考档空着），一眼就是坏数据（用户原话「这他妈啥」）。两条记忆必须**都齐**才出合成，缺一就
+   *  整块退占位（— / 思考 —），让状态行的「启动中 Ns」当唯一信息源；真值一次填满。
+   *  注：思考记忆只在用户手动改过档位时才写，默认会话往往两条不齐 → 占位多走「整块 —」分支
+   *  （这正是想要的：宁可不显，不显假的）。lastFoot（同进程上次真值）优先于本函数，不受影响。 */
   private footFromMemory(): FootData | null {
     const mem = this.lastModelFor();
     const think = this.lastThinkingFor();
-    if (!mem && !think) return null;
+    if (!mem || !think) return null;
     return {
       ver: this.version,
       model: mem ? { name: mem.id, provider: mem.provider, id: mem.id } : null,
@@ -2665,15 +2677,37 @@ export function sessionMemoryFor(
  *  （见 panel.post 的 noisy 过滤：delta/thinking/toolCallDelta 占行数 96%，全是碎片）。 */
 const DBG_LOG_PATH = process.env.PI_CHAT_DEBUG_LOG || path.join(os.homedir(), ".pi", "agent", "pi-chat-debug.log");
 const DBG_LOG_MAX = 2 * 1024 * 1024;
+/** 日志文件句柄常驻（B2 刀）：null = 未开口；size 自记（不每条 stat） */
+let dbgFd: number | null = null;
+let dbgSize = 0;
 export function dbgAppend(msg: string): void {
+  const line = new Date().toISOString() + " " + msg + String.fromCharCode(10);
+  // 【B2 刀（2026-11-04 启动慢战役）：fd 常驻 + 自记 size】旧实现每条日志 = statSync +
+  // appendFileSync 两次同步 syscall，且流式/工具事件一轮能刷上千条——这些同步小 IO
+  // 全压在扩展宿主主线程上，正是「异步链（mr-create/createServices）莫名其妙 10s」的
+  // 一类候选（实测：离线下同一调用 21ms vs 宿主 3506ms）。语义完全等价：
+  // 超限轮转一次、轮转后 size 归零、任何异常关 fd 走旧路兜底（不递归、不丢行）。
   try {
-    // 轮转：超限改名保留一代（rename 比截断简单，不用读盘；再超限覆盖新文件，诊断日志可重放）
-    try {
-      const s = fs.statSync(DBG_LOG_PATH);
-      if (s.size > DBG_LOG_MAX) fs.renameSync(DBG_LOG_PATH, DBG_LOG_PATH + ".1");
-    } catch { /* 不存在/无权限则跳过 */ }
-    fs.appendFileSync(DBG_LOG_PATH, new Date().toISOString() + " " + msg + String.fromCharCode(10));
-  } catch { /* ignore */ }
+    if (dbgFd === null) {
+      dbgFd = fs.openSync(DBG_LOG_PATH, "a");
+      try { dbgSize = fs.statSync(DBG_LOG_PATH).size; } catch { dbgSize = 0; }
+    }
+    if (dbgSize > DBG_LOG_MAX) {
+      // 轮转：超限改名保留一代（rename 比截断简单，不用读盘）
+      try { fs.closeSync(dbgFd); } catch { /* ignore */ }
+      dbgFd = null;
+      fs.renameSync(DBG_LOG_PATH, DBG_LOG_PATH + ".1");
+      dbgFd = fs.openSync(DBG_LOG_PATH, "a");
+      dbgSize = 0;
+    }
+    fs.writeSync(dbgFd, line);
+    dbgSize += Buffer.byteLength(line);
+  } catch {
+    try { if (dbgFd !== null) fs.closeSync(dbgFd); } catch { /* ignore */ }
+    dbgFd = null;
+    dbgSize = 0;
+    try { fs.appendFileSync(DBG_LOG_PATH, line); } catch { /* ignore */ }
+  }
 }
 
 export function msgBrief(m: unknown): string {
