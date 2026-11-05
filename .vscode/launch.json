@@ -12,6 +12,20 @@
         "${workspaceFolder}/out/**/*.js"
       ],
       "preLaunchTask": "watch all (tsc + vite webview)"
+    },
+    {
+      // 兑底：不走 watcher，先整包 compile 一次再拉起宿主。
+      // watch all 就绪信号卡住過（2026-11-05：preLaunchTask 永远停在 watch:webview）时用这个。
+      "name": "运行扩展 (Run Extension, 先 compile)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile"
     }
   ]
 }

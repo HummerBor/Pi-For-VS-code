@@ -15,15 +15,27 @@
     {
       "type": "npm",
       "script": "watch:webview",
-      "problemMatcher": [],
       "isBackground": true,
-      "label": "npm: watch:webview"
+      "label": "npm: watch:webview",
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^(?:vite|Error:)\\s+(.*)$",
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "building client environment",
+          "endsPattern": "watching for file changes"
+        }
+      }
     },
     {
       "label": "watch all (tsc + vite webview)",
       "dependsOrder": "parallel",
       "dependsOn": ["npm: watch", "npm: watch:webview"],
-      "problemMatcher": []
+      "problemMatcher": [],
+      "group": "build"
     },
     {
       "type": "npm",
