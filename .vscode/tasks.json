@@ -20,7 +20,7 @@
       "problemMatcher": {
         "owner": "vite",
         "pattern": {
-          "regexp": "^(?:vite|Error:)\\s+(.*)$",
+          "regexp": "^\\$\\$vite-never-matches\\$\\$(.*)$",
           "message": 1
         },
         "background": {
