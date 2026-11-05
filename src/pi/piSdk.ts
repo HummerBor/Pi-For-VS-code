@@ -107,6 +107,43 @@ async function doLoad(): Promise<any> {
   return sdk;
 }
 
+/** 在 PATH 里找可执行文件（Windows 多试 .exe/.cmd/.bat，POSIX 不带扩展名） */
+function findOnPath(name: string): string | null {
+  const pathEnv = process.env.PATH ?? process.env.Path ?? "";
+  const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = join(dir, name + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * 跑内置 CLI 用的 node 运行时：null = 本机没有。
+ *
+ * 实测坑（2026-11-05 沙箱，node-pty 直接验过了三条路）：
+ * - 用 `process.execPath`（Code.exe）+ env ELECTRON_RUN_AS_NODE=1 当 node：**终端里不生效**。
+ *   VS Code 终端的自定义 env 传不进 pty（同样的 spawn 而不经终端就生效），实测那一刻是
+ *   GUI 的 Code.exe 被拉起来——症状是点「订阅登录」莫名弹出新 VS Code 窗口。
+ * - 改让 `.cmd` 启动器自己 set 再跑：能跑（`cli.js --version` → 1.5.0），但 **stdin 不是
+ *   TTY**（Electron 当 node 时 process.stdin 绑的是管道），pi 的 TUI 需要 stdin TTY，
+ *   于是静默进入又退出。
+ * - 真 node + 内置 cli.js：TUI 正常渲染并持续运行 —— 这是唯一能承载 TUI 的组合。
+ * 远端/纯 node 宿主里 process.execPath 本身就是 node，直接用。
+ */
+export function findNodeRuntime(): string | null {
+  if (!process.versions.electron) return process.execPath;
+  return findOnPath("node");
+}
+
+/** PATH 上有没有已装的 pi（老用户的环境，登录能用它） */
+export function findPiOnPath(): string | null {
+  return findOnPath("pi");
+}
+
 /**
  * 内置 pi 的 CLI 入口（vendor/pi/dist/bundle/cli.js）；插件包不完整时 null。
  *

@@ -68,14 +68,19 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   **随便**，不参与递增纪律。并行发布流（`chore: release` 提交）会按市场线改写 package.json
   版本——看到本地版本号「变小/跳号」是发布流正常现象，**不是事故、不要再排查**；施工会话只
   交代码，版本/发版归 ship 所在会话管。
-- **登录免装：走内置 CLI，不许再 sendText("pi")（2026-11-05）**：内置 pi 管的是 SDK
-  （对话），TUI 专属的 /login（订阅 OAuth）只有真 CLI 能做。老实现 `term.sendText("pi")`
-  走用户 PATH——没装 pi 的用户点「订阅登录」直接 command not found，等于把内置承诺在登录
-  这一步作废。现路径：`piSdk.findBundledPiCli()` 拿 vendor/pi/dist/bundle/cli.js，终端用
-  `shellPath: process.execPath + shellArgs:[cli] + env.ELECTRON_RUN_AS_NODE=1` 直接跑（宿主
-  自己就是 node v24 运行时）。**别改回 sendText 拼引号**：实测 PowerShell 把 `"exe" "cli"`
-  当字符串表达式报「意外的标记」（cmd/bash 又能过），跳过 shell 才跨终端一致。同理首屏
-  「pi 可用吗」判定看内置 `bundledPiVersion()`，不看 PATH 探测。
+- **登录：TUI 只能由真 node 承载（2026-11-05 沙箱实测，别重走三条死路）**：pi 的
+  `/login` 是 TUI 专属命令，SDK 里没有、`pi auth` 也只有读/校验（无 login）。内置 pi 只
+  解决了 SDK 侧（对话），登录终端必须找**真 node**：`piSdk.findNodeRuntime()`（桌面宿主
+  是 Electron → 扫 PATH 找 node；远端/纯 node 宿主直接用 `process.execPath`）+ 内置
+  `vendor/pi/dist/bundle/cli.js`，即 `shellPath: node, shellArgs: [cli]`；没有 node 则退
+  PATH 上的 `pi`；两者都无 → 明确告知并引导装 Node.js（API key 方式始终零安装）。
+  三条已死的路（重测一次就是复蹈覆车）：① 终端 `env: {ELECTRON_RUN_AS_NODE:"1"}` 把
+  Code.exe 当 node —— **VS Code 终端的自定义 env 传不进 pty**，结果是 GUI 的 Code.exe
+  被拉起、弹出新窗口（用户实际撞过的症状）；② `.cmd` 启动器里自己 set 能跑
+  （`cli.js --version` → 1.5.0），但 Electron 当 node 时 **stdin 不是 TTY**，TUI 静默退出；
+  ③ `sendText('"exe" "cli"')` 拼引号 —— PowerShell 当字符串表达式报「意外的标记」
+  （cmd/bash 又能过），且 node-pty 会把内层引号转义掉。首屏「pi 可用吗」同理看内置
+  `bundledPiVersion()`，不看 PATH 探测。
 - **协议同步**：新增/修改跨边界消息时三处同步——发送方、接收方、protocol.ts。
 - **子 agent 显示名/调用分类两层分离（2026-09-24 用户拍板）**：展示层显示调用方给的名字
   （随便取，subagentNames 台账），实际调用归 pi 注册分类（subagentNameGuard 在 tool_call

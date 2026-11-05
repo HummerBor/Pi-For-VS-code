@@ -291,6 +291,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     loginBtn: "订阅登录 /login",
     loginTermName: "pi 订阅登录",
     loginNotice: "已在下方终端启动插件内置的 pi（无需另装）：输入 /login 选择订阅授权（浏览器完成），完成后重载窗口（Ctrl+Shift+P → Reload Window）让面板使用新凭证",
+    loginNeedNode: "订阅登录需要在终端跑 pi 的交互界面，而它必须由本机 node 启动（插件内置的 pi 是 node 程序，Electron 不能代替）：装了 Node.js 后重试，或改用「配置 API key」（不需额外安装）",
     pickProvider: "选择 API key 所属服务商",
     providerZai: "Z.ai（GLM，全球）",
     providerZaiCn: "Z.ai（GLM，中国区）",
@@ -738,6 +739,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     loginBtn: "Subscription login /login",
     loginTermName: "pi subscription login",
     loginNotice: "Started the extension's bundled pi in the terminal below (nothing to install): type /login to authorize a subscription (browser flow), then reload the window (Ctrl+Shift+P → Reload Window) so the panel picks up the new credentials",
+    loginNeedNode: "Subscription login runs pi's interactive UI in a terminal, which needs a local node runtime (the bundled pi is a node program and Electron can't stand in for it). Install Node.js and retry, or use \"Configure API key\" instead (no extra install).",
     pickProvider: "Pick the provider for this API key",
     providerZai: "Z.ai (GLM, Global)",
     providerZaiCn: "Z.ai (GLM, China)",
@@ -970,6 +972,7 @@ export const NATIVE_KEYS: Set<string> = new Set([
   "sSessionDirPrompt", "sOpenCfgDir", "sEditSettings", "on", "off", "settingsPh",
   // 凭证 / 安装 / API key
   "keyReady", "configNow", "later", "noAuthDetected", "configKeyBtn", "loginBtn", "loginTermName",
+  "loginNeedNode",
   "npmMissing", "installFail", "pickProvider", "providerZai", "providerZaiCn", "providerQwen", "providerXiaomi",
   "enterKey", "authPicker", "authDetail", "delAuthAsk", "delete",
   // 模型 / 思考 / pi 扩展 UI 请求
