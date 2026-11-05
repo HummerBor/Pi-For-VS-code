@@ -1869,38 +1869,44 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 职责：webview 只渲染与收集输入，读写 ~/.pi/agent/auth.json 全在宿主（piSetup）；
   // 密钥不留在 webview 状态里（提交即清空输入框，列表只显示「已配置」）。
   function renderAuthProviders(list: any[]) {
-    var apRows = document.getElementById('ap-rows');
-    if (!apRows) return;
-    apRows.innerHTML = '';
-    for (var i = 0; i < list.length; i++) {
+    var sel = document.getElementById('ap-provider') as HTMLSelectElement | null;
+    var rows = document.getElementById('ap-rows');
+    if (!rows) return;
+    // 下拉：所有服务商（已配置的标个勾，方便换 key）；列表：只列已配置的
+    if (sel) {
+      var cur = sel.value;
+      sel.innerHTML = '';
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        var o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = (p.kind ? '✔ ' : '') + (p.label || p.id);
+        sel.appendChild(o);
+      }
+      if (cur) sel.value = cur;
+    }
+    rows.innerHTML = '';
+    var any = false;
+    for (var j = 0; j < list.length; j++) {
+      var q = list[j];
+      if (!q.kind) continue;
+      any = true;
       (function (p: any) {
-        var row = el('div', 'ap-row');
+        var row = el('div', 'ap-item');
         var name = el('div', 'ap-name', p.label || p.id);
         name.appendChild(el('span', 'ap-id', p.id));
-        var state = el('span', 'ap-state' + (p.kind ? ' ok' : ''), p.kind ? '\u2714 ' + (p.kind === 'oauth' ? L.authOauth : L.authKey) : L.authNone);
-        var input = document.createElement('input');
-        input.type = 'password';
-        input.className = 'ap-input';
-        input.placeholder = L.authKeyPh;
-        var save = el('button', 'ap-btn', L.authSaveBtn);
-        save.onclick = function () {
-          var v = input.value.trim();
-          if (!v) { input.focus(); return; }
-          vscode.postMessage({ type: 'authSave', provider: p.id, key: v });
-          input.value = ''; // 明文不留在页面里
-        };
+        var state = el('span', 'ap-badge', p.kind === 'oauth' ? L.authOauth : L.authKey);
         var del = el('button', 'ap-btn ap-del', L.authDeleteBtn);
         del.onclick = function () { vscode.postMessage({ type: 'authDelete', provider: p.id }); };
-        if (!p.kind) del.style.display = 'none';
         row.appendChild(name);
         row.appendChild(state);
-        row.appendChild(input);
-        row.appendChild(save);
         row.appendChild(del);
-        apRows.appendChild(row);
-      })(list[i]);
+        rows.appendChild(row);
+      })(q);
     }
+    if (!any) rows.appendChild(el('div', 'ap-empty', L.authEmpty));
   }
+  /** 打开配置页：先展示旧数据（无闪屏），再向宿主要 auth.json 真值 */
   function showAuthPanel() {
     var apEl = document.getElementById('authpanel');
     if (!apEl) return;
@@ -1918,6 +1924,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     });
     var login = document.getElementById('ap-login');
     if (login) login.onclick = function () { vscode.postMessage({ type: 'authLogin' }); };
+    // API key 表单：选服务商 → 粘 key → 保存（提交即清空输入框，明文不留在页面）
+    var saveBtn = document.getElementById('ap-save');
+    if (saveBtn) saveBtn.onclick = function () {
+      var sel = document.getElementById('ap-provider') as HTMLSelectElement | null;
+      var keyEl = document.getElementById('ap-key') as HTMLInputElement | null;
+      if (!sel || !keyEl) return;
+      var v = keyEl.value.trim();
+      if (!v) { keyEl.focus(); return; }
+      vscode.postMessage({ type: 'authSave', provider: sel.value, key: v });
+      keyEl.value = '';
+    };
   })();
   // ── 子 agent 监控：浮窗（codex 风格）——概览列表 + 点击下钻（工单 A，对齐 Codex 交互）──
   // 概览 = 已开启/完成 分组行（每任务一行：状态图标/名称/处理中/相对时间），点击行下钻

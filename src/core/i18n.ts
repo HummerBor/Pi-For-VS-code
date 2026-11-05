@@ -297,6 +297,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     // 凭证配置页（2026-11-05）
     authTitle: "模型凭证配置",
     authSub: "在这里填 API key（只保存在本机 ~/.pi/agent/auth.json），存完直接对话；订阅登录（Claude Pro / ChatGPT 等）点下方按钮，在终端完成浏览器授权后重载窗口。",
+    authSecLogin: "订阅登录",
+    authSecKey: "API key",
+    authSecKeyHint: "只写入本机 ~/.pi/agent/auth.json；保存后左侧列表会显示已配置",
+    authConfigured: "已配置",
+    authEmpty: "还没有配置任何凭证",
     authKeyPh: "粘贴 API key",
     authSaveBtn: "保存",
     authDeleteBtn: "删除",
@@ -758,6 +763,11 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     // Credential panel (2026-11-05)
     authTitle: "Model credentials",
     authSub: "Paste an API key here (stored only in your local ~/.pi/agent/auth.json) — you can chat right after saving. For subscription login (Claude Pro / ChatGPT etc.) use the button below: it authorizes in a browser via the terminal, then reload the window.",
+    authSecLogin: "Subscription",
+    authSecKey: "API key",
+    authSecKeyHint: "Written only to your local ~/.pi/agent/auth.json; configured providers appear in the list below",
+    authConfigured: "Configured",
+    authEmpty: "No credentials configured yet",
     authKeyPh: "Paste API key",
     authSaveBtn: "Save",
     authDeleteBtn: "Delete",
@@ -994,6 +1004,7 @@ export const NATIVE_KEYS: Set<string> = new Set([
   // 凭证配置页（2026-11-05）
   "authTitle", "authSub", "authKeyPh", "authSaveBtn", "authDeleteBtn", "authNone",
   "authKey", "authOauth", "authClose", "authLoginBtn", "authLoginHint", "sAuthPanel",
+  "authSecLogin", "authSecKey", "authSecKeyHint", "authConfigured", "authEmpty",
   "sInstall", "sInstallDetail", "sMode", "sModeDetail", "sSteering", "sFollowUp", "sAutoCompact",
   "sSteeringAll", "sSteeringOne", "sSteeringDetail", "sFollowUpDetail", "sAutoCompactDetail",
   "sAutoRetry", "sAutoRetryDetail", "sAutoRetryPicker", "sSessionMode", "sSessionModeDetail",

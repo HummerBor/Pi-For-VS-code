@@ -18,8 +18,10 @@ import type { HostToWebviewTagged } from "../core/protocol";
 export interface PiSetupHost {
   post(msg: HostToWebviewTagged, tabId?: string): void;
   getL(): Record<string, any>;
+  /** 单语字典（不套 bb）：webview 自己渲染的文案用，避免出现「中文 / English」双节 */
+  getLraw(): Record<string, any>;
   getCore(): PiSetupCore;
-  /** 打开集成终端跑内置 pi 的 /login（面板侧实现：靠宿主可执行文件当 node，见 panel.openTerminalLogin） */
+  /** 打开集成终端跑内置 pi 的 /login（面板侧实现：靠真 node 跑内置 cli，见 panel.openTerminalLogin） */
   openLoginTerminal(): void;
 }
 /** client 生命周期窄接口（仅 ensureClient/disposeClient/clientRef，PiCore 公共成员满足） */
@@ -62,30 +64,14 @@ export class PiSetup {
     }
   }
 
-  /** 还没有模型凭证时引导用户去配 key（force=安装完立即弹） */
+  /** 还没有模型凭证时引导用户配置（force=安装完立即弹）。
+   *  2026-11-05：不再弹原生 QuickPick 提示，直接开面板内的凭证配置页——
+   *  原生弹窗只能选一个动作、关掉就找不回来，而配置页里 API key 与订阅登录同屏。 */
   async maybeOfferKeyConfig(force: boolean): Promise<void> {
     if (this.hasAuthConfig()) return;
-    if (force) {
-      const pick = await vscode.window.showInformationMessage(
-        this.L.keyReady,
-        this.L.configNow,
-        this.L.later
-      );
-      if (pick === this.L.configNow) await this.configApiKey();
-    } else if (!this.authOfferShown) {
-      this.authOfferShown = true; // 每次窗口只提醒一次，不反复打扰
-      const pick = await vscode.window.showInformationMessage(
-        this.L.noAuthDetected,
-        this.L.configKeyBtn,
-        this.L.loginBtn,
-        this.L.later
-      );
-      if (pick === this.L.configKeyBtn) await this.configApiKey();
-      else if (pick === this.L.loginBtn) {
-        // 订阅 OAuth 只能由真 CLI 做（SDK 里没有 /login）——交给面板开终端跑内置 pi。
-        // 旧实现在这里 c.prompt("/login")：SDK 路径不认这个 TUI 命令，用户白等
-        this.host.openLoginTerminal();
-      }
+    if (force || !this.authOfferShown) {
+      this.authOfferShown = true; // 每次窗口只自动弹一次，不反复打扰
+      this.post({ type: "authPanelOpen" });
     }
   }
 
@@ -165,19 +151,20 @@ export class PiSetup {
     });
   }
 
-  /** 配置页用的服务商清单（id = auth.json 键） */
+  /** 配置页用的服务商清单（id = auth.json 键；文案走单语字典，不套 bb） */
   providers(): AuthProviderDef[] {
+    const S = this.host.getLraw();
     return [
-      { id: "zai", label: this.L.providerZai },
-      { id: "zai-coding-cn", label: this.L.providerZaiCn },
+      { id: "zai", label: S.providerZai },
+      { id: "zai-coding-cn", label: S.providerZaiCn },
       { id: "openrouter", label: "OpenRouter" },
       { id: "anthropic", label: "Anthropic" },
       { id: "openai", label: "OpenAI" },
       { id: "deepseek", label: "DeepSeek" },
       { id: "google", label: "Google Gemini" },
       { id: "kimi-coding", label: "Kimi For Coding" },
-      { id: "qwen-token-plan-cn", label: this.L.providerQwen },
-      { id: "xiaomi", label: this.L.providerXiaomi },
+      { id: "qwen-token-plan-cn", label: S.providerQwen },
+      { id: "xiaomi", label: S.providerXiaomi },
     ];
   }
 

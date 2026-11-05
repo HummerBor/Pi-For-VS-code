@@ -135,6 +135,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private piSetup = new PiSetup({
     post: (msg, tabId) => this.post(msg, tabId),
     getL: () => this.L,
+    getLraw: () => this.getLraw(),
     getCore: () => this.core,
     openLoginTerminal: () => this.openTerminalLogin(),
   });
@@ -528,6 +529,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         return NATIVE_KEYS.has(key) ? bb(key) : (STRINGS[lang][key] ?? bb(key));
       },
     });
+  }
+
+  /** 单语字典（不套 bb 双语）：webview 自己按语言渲染的文案走这里，
+   *  否则会把「中文 / English」两节一起塞进面板（凭证配置页第一版就这么丑过） */
+  private getLraw(): Record<string, any> {
+    return STRINGS[this.lang] as unknown as Record<string, any>;
   }
 
   /** 按当前语言/主题/背景重生成 webview HTML（语言切换、背景变更共用） */
