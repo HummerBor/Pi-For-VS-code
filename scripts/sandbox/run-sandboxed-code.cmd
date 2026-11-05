@@ -5,6 +5,9 @@ rem
 rem Usage (from repo root):
 rem   scripts\sandbox\run-sandboxed-code.cmd            mode 1: node present, pi absent
 rem   scripts\sandbox\run-sandboxed-code.cmd fresh      mode 1 + EMPTY home (true first install)
+rem   scripts\sandbox\run-sandboxed-code.cmd install [vsix]  fresh + install the vsix into throwaway
+rem                                                user-data/extensions dirs, then open the window
+rem                                                (no vsix arg = newest *.vsix in repo root)
 rem   scripts\sandbox\run-sandboxed-code.cmd no-node    mode 2: neither node nor pi
 rem   scripts\sandbox\run-sandboxed-code.cmd probe       only prepare + print, no VS Code
 rem
@@ -73,12 +76,17 @@ rem fresh mode: isolate pi's agent dir (auth.json + sessions) with an empty home
 rem pi uses os.homedir(); on Windows that is USERPROFILE. APPDATA is left alone so
 rem VS Code itself keeps functioning (--user-data-dir is passed separately).
 set "USERDATA_ARG="
-if /i not "%MODE%"=="fresh" goto :launch
+set "EXTDIR_ARG="
+set "FRESH="
+if /i "%MODE%"=="fresh" set "FRESH=1"
+if /i "%MODE%"=="install" set "FRESH=1"
+if not defined FRESH goto :launch
 set "SANDBOXHOME=%SBROOT%\home"
 if not exist "%SANDBOXHOME%" mkdir "%SANDBOXHOME%" >nul 2>&1
 set "USERPROFILE=%SANDBOXHOME%"
 set "HOME=%SANDBOXHOME%"
 set "USERDATA_ARG=--user-data-dir=%SBROOT%\vscode-user-data"
+set "EXTDIR_ARG=--extensions-dir=%SBROOT%\vscode-extensions"
 echo [sandbox] USERPROFILE=%USERPROFILE%
 if exist "%SANDBOXHOME%\.pi\agent\auth.json" echo [sandbox] WARNING: sandbox home still has auth.json
 echo [sandbox] ~/.pi/agent =
@@ -100,6 +108,25 @@ if not defined CODEBIN (
   exit /b 1
 )
 
+if /i "%MODE%"=="install" (
+  set "VSIX=%~2"
+  if not defined VSIX (
+    for /f "delims=" %%i in ('dir /b /o-d "%~dp0..\..\*.vsix" 2^>nul') do if not defined VSIX set "VSIX=%~dp0..\..\%%i"
+  )
+  if not defined VSIX (
+    echo [sandbox] install mode: no vsix found, run "npm run release" first
+    endlocal
+    exit /b 1
+  )
+  echo [sandbox] installing: !VSIX!
+  call "%CODEBIN%" %USERDATA_ARG% %EXTDIR_ARG% --install-extension "!VSIX!" --force
+  if errorlevel 1 (
+    echo [sandbox] install failed
+    endlocal
+    exit /b 1
+  )
+)
+
 echo [sandbox] launching: %CODEBIN%
-call "%CODEBIN%" --new-window %USERDATA_ARG% "%~dp0..\.."
+call "%CODEBIN%" --new-window %USERDATA_ARG% %EXTDIR_ARG% "%~dp0..\.."
 endlocal
