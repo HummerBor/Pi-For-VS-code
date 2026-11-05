@@ -7,7 +7,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "../pi/piClient";
-import { getAgentDirSync } from "../pi/piSdk";
+import { getAgentDirSync, findBundledPiCli } from "../pi/piSdk";
 import { openTranscriptTab, pushTranscript, pushTranscriptStream } from "./transcriptTab";
 import { markWebviewAttached } from "./webviewGuard";
 import { displayNameFor } from "../domain/subagentNames";
@@ -136,6 +136,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     post: (msg, tabId) => this.post(msg, tabId),
     getL: () => this.L,
     getCore: () => this.core,
+    openLoginTerminal: () => this.openTerminalLogin(),
   });
 
   constructor(
@@ -1509,11 +1510,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** /login 是 pi 终端内置命令，RPC 模式不可用 → 打开集成终端跑交互式 pi 完成 OAuth */
+  /**
+   * /login 是 pi 终端内置命令（SDK 模式没有）→ 打开集成终端跑交互式 pi 完成 OAuth。
+   *
+   * 内置 pi（2026-11-05）：不再靠 PATH 上的 `pi` 命令——用户机上没装 pi/node 是常态，
+   * 那会把「内置免装」恰好丢在登录这一步（实测市场用户撞的就是 command not found）。
+   * 这里拿宿主自己的可执行文件当 node 跑 vendor/pi 的 cli.js（实测 Code.exe → node v24，
+   * `cli.js --version` → 1.5.0）。cli 缺失（插件包损坏）才回落到老行为 `pi`。
+   */
   private openTerminalLogin(): void {
-    const term = vscode.window.createTerminal({ name: this.L.loginTermName });
-    term.show();
-    term.sendText("pi");
+    const cli = findBundledPiCli();
+    if (cli) {
+      // 关键：把终端本身做成 pi 进程（shellPath=宿主可执行文件），**不经过用户 shell**。
+      // 试过的错路（2026-11-05 实测）：sendText('"exe" "cli"') 在 cmd/bash 下能跑，
+      // PowerShell 当字符串表达式解析、直接报「意外的标记」（PS 要用 & 调用符）——
+      // 与其按 shell 猜测号方言，不如跳过 shell：无引号、无方言、跨平台一致。
+      // process.execPath 在桌面版是 Code.exe（env 已带 ELECTRON_RUN_AS_NODE=1，见
+      // piSdk.findBundledPiCli 头注释），远程/其他宿主里本身就是 node，两种都成立。
+      const term = vscode.window.createTerminal({
+        name: this.L.loginTermName,
+        shellPath: process.execPath,
+        shellArgs: [cli],
+        env: { ELECTRON_RUN_AS_NODE: "1" },
+      });
+      term.show();
+    } else {
+      // 插件包损坏（vendor/pi 缺失）：回落老行为；用户自装过 pi 的话仍能用
+      const term = vscode.window.createTerminal({ name: this.L.loginTermName });
+      term.show();
+      term.sendText("pi");
+    }
     this.post({
       type: "notice",
       text: this.L.loginNotice,
@@ -1871,12 +1897,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         await this.piSetup.manageAuth();
       },
     });
-    items.push({
-      label: this.L.sInstall,
-      run: async () => {
-        await this.piSetup.installPi();
-      },
-    });
+    // 「安装 / 更新 pi」只在插件包损坏（vendor/pi 缺失）时才出现：内置之后，全局
+    // npm 装 pi 对 SDK 路径毫无作用（findPiPackageRoot 内置优先），留着只会误导用户
+    // 以为登录/对话失败要去 npm 装东西（2026-11-05）
+    if (!findBundledPiCli()) {
+      items.push({
+        label: this.L.sInstall,
+        run: async () => {
+          await this.piSetup.installPi();
+        },
+      });
+    }
     items.push({
       label: this.L.sMode,
       run: async () => {

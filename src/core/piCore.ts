@@ -1024,6 +1024,9 @@ export class PiCore {
           break;
         }
         const tuiOnly: Record<string, string> = {
+          // /login 是终端 TUI 专属（OAuth 需要真 CLI）——在输入框里敲它不该漏给模型，
+          // 直接指路齿轮菜单（2026-11-05：内置 pi 后该菜单不再要求用户装 pi）
+          "/login": this.L.tuiLogin,
           "/hotkeys": this.L.tuiHotkeys,
           "/help": this.L.tuiHelp,
           "/copy": this.L.tuiCopy,

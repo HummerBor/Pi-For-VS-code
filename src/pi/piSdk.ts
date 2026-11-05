@@ -108,6 +108,38 @@ async function doLoad(): Promise<any> {
 }
 
 /**
+ * 内置 pi 的 CLI 入口（vendor/pi/dist/bundle/cli.js）；插件包不完整时 null。
+ *
+ * 为什么需要它（2026-11-05）：内置 pi 管的是 SDK（对话），而 TUI 专属的 /login
+ * （订阅 OAuth）只有真 CLI 能做——老实现 `term.sendText("pi")` 走用户 PATH，等于把
+ * 「内置免装」的承诺在登录这一步作废（没装 pi 的用户点订阅登录 = command not found）。
+ * cli.js 只要 node 就能跑，而扩展宿主自己就是 node 运行时（ELECTRON_RUN_AS_NODE=1
+ * 已在宿主 env 里，实测 Code.exe 即 node v24）——用宿主自己的可执行文件跑内置 CLI，
+ * 用户零安装也能完成 OAuth 登录。
+ */
+export function findBundledPiCli(): string | null {
+  try {
+    const cli = join(dirname(__dirname), "..", "vendor", "pi", "dist", "bundle", "cli.js");
+    return existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 内置 pi 的版本号（读 vendor/pi/package.json）；缺失/损坏返回 null。
+ *  首屏「pi 可用吗」的判定基准改成它：内置在 = 可用——用户自己装没装 pi 与插件无关，
+ *  别再拿 PATH 探测结果当「面板不可用」的依据（2026-11-05） */
+export function bundledPiVersion(): string | null {
+  try {
+    const pkg = join(dirname(__dirname), "..", "vendor", "pi", "package.json");
+    const v = JSON.parse(readFileSync(pkg, "utf8")) as { version?: string };
+    return v.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 定位用户已安装的 pi 包根目录。
  * 顺序：本地 node_modules（开发场景）→ PATH 上的 pi 命令反推（发布场景）。
  */

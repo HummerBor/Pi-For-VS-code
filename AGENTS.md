@@ -68,6 +68,14 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   **随便**，不参与递增纪律。并行发布流（`chore: release` 提交）会按市场线改写 package.json
   版本——看到本地版本号「变小/跳号」是发布流正常现象，**不是事故、不要再排查**；施工会话只
   交代码，版本/发版归 ship 所在会话管。
+- **登录免装：走内置 CLI，不许再 sendText("pi")（2026-11-05）**：内置 pi 管的是 SDK
+  （对话），TUI 专属的 /login（订阅 OAuth）只有真 CLI 能做。老实现 `term.sendText("pi")`
+  走用户 PATH——没装 pi 的用户点「订阅登录」直接 command not found，等于把内置承诺在登录
+  这一步作废。现路径：`piSdk.findBundledPiCli()` 拿 vendor/pi/dist/bundle/cli.js，终端用
+  `shellPath: process.execPath + shellArgs:[cli] + env.ELECTRON_RUN_AS_NODE=1` 直接跑（宿主
+  自己就是 node v24 运行时）。**别改回 sendText 拼引号**：实测 PowerShell 把 `"exe" "cli"`
+  当字符串表达式报「意外的标记」（cmd/bash 又能过），跳过 shell 才跨终端一致。同理首屏
+  「pi 可用吗」判定看内置 `bundledPiVersion()`，不看 PATH 探测。
 - **协议同步**：新增/修改跨边界消息时三处同步——发送方、接收方、protocol.ts。
 - **子 agent 显示名/调用分类两层分离（2026-09-24 用户拍板）**：展示层显示调用方给的名字
   （随便取，subagentNames 台账），实际调用归 pi 注册分类（subagentNameGuard 在 tool_call

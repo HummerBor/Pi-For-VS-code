@@ -4,6 +4,7 @@ import * as path from "path";
 import { spawn } from "child_process";
 import * as vscode from "vscode";
 import type { PiClient } from "../pi/piClient";
+import { bundledPiVersion } from "../pi/piSdk";
 import type { HostToWebviewTagged } from "../core/protocol";
 
 /**
@@ -18,6 +19,8 @@ export interface PiSetupHost {
   post(msg: HostToWebviewTagged, tabId?: string): void;
   getL(): Record<string, any>;
   getCore(): PiSetupCore;
+  /** 打开集成终端跑内置 pi 的 /login（面板侧实现：靠宿主可执行文件当 node，见 panel.openTerminalLogin） */
+  openLoginTerminal(): void;
 }
 /** client 生命周期窄接口（仅 ensureClient/disposeClient/clientRef，PiCore 公共成员满足） */
 export interface PiSetupCore {
@@ -72,16 +75,29 @@ export class PiSetup {
       );
       if (pick === this.L.configKeyBtn) await this.configApiKey();
       else if (pick === this.L.loginBtn) {
-        const c = this.core.ensureClient();
-        this.post({ type: "user", text: "/login" });
-        await c.prompt("/login");
+        // 订阅 OAuth 只能由真 CLI 做（SDK 里没有 /login）——交给面板开终端跑内置 pi。
+        // 旧实现在这里 c.prompt("/login")：SDK 路径不认这个 TUI 命令，用户白等
+        this.host.openLoginTerminal();
       }
     }
   }
 
   /** 检测 pi 是否可用，返回版本号字符串，不可用返回 null。
-   *  10s 超时杀掉子进程兑底，防 pi --version 挂起时 Promise 永不 resolve */
+   *  10s 超时杀掉子进程兑底，防 pi --version 挂起时 Promise 永不 resolve
+   *
+   *  内置 pi（2026-11-05）：判定基准是「vsix 自带的 vendor/pi 在不在」，不是用户 PATH
+   *  上有没有 pi。内置在就直接报内置版本——老实现探 PATH 探不到就弹「面板需要它才能
+   *  工作 + 一键 npm 安装」，对没装过 pi/node 的用户是假错误，还把他们从配凭证引导上
+   *  引偏了（maybeOfferKeyConfig 只在可用分支里）。PATH 探测仅作为旧版包（无 vendor）
+   *  的兼容兜底保留。 */
   piVersion(): Promise<string | null> {
+    const bundled = bundledPiVersion();
+    if (bundled) return Promise.resolve(bundled);
+    return this.probePiOnPath();
+  }
+
+  /** PATH 上的 pi --version 探测（仅内置缺失时的兜底） */
+  private probePiOnPath(): Promise<string | null> {
     return new Promise((resolve) => {
       const p = spawn("pi", ["--version"], {
         shell: process.platform === "win32",
