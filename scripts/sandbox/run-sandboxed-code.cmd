@@ -5,9 +5,8 @@ rem
 rem Usage (from repo root):
 rem   scripts\sandbox\run-sandboxed-code.cmd            mode 1: node present, pi absent
 rem   scripts\sandbox\run-sandboxed-code.cmd fresh      mode 1 + EMPTY home (true first install)
-rem   scripts\sandbox\run-sandboxed-code.cmd install [vsix]  fresh + install the vsix into throwaway
-rem                                                user-data/extensions dirs, then open the window
-rem                                                (no vsix arg = newest *.vsix in repo root)
+rem   scriptssandboxun-sandboxed-code.cmd install [keep]  WIPE state, install vsix, open window
+rem                                                          (keep = reuse previous state)
 rem   scripts\sandbox\run-sandboxed-code.cmd no-node    mode 2: neither node nor pi
 rem   scripts\sandbox\run-sandboxed-code.cmd probe       only prepare + print, no VS Code
 rem
@@ -52,6 +51,21 @@ if not defined CODEBIN if defined CODEREG (
 set "PROBE="
 if /i "%MODE%"=="probe" set "PROBE=1"
 if /i "%~2"=="probe" set "PROBE=1"
+rem Second arg "keep" = do NOT wipe. Default is WIPE: every test run must start clean
+rem (credentials/sessions/settings from the previous run otherwise leak in).
+set "KEEP="
+if /i "%~2"=="keep" set "KEEP=1"
+
+rem Stop a running sandbox instance BEFORE touching its dirs: wiping user-data under a
+rem live window leaves a half-dead profile and the next launch behaves weird.
+if defined PROBE goto :nowipe
+if defined KEEP goto :nowipe
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-sandbox.ps1"
+ping -n 4 127.0.0.1 >nul
+if exist "%SBROOT%\home\.pi" rd /s /q "%SBROOT%\home\.pi" 2>nul
+if exist "%SBROOT%\vscode-user-data" rd /s /q "%SBROOT%\vscode-user-data" 2>nul
+echo [sandbox] state wiped (home/.pi + vscode-user-data)
+:nowipe
 
 if /i "%MODE%"=="no-node" goto :setpath
 if not exist "%NODEDIR%" mkdir "%NODEDIR%" >nul 2>&1

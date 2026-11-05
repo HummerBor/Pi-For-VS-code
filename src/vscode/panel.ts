@@ -515,7 +515,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       dismissChanges: async () => this.changes.dismissActive(),
       // 凭证配置页（2026-11-05）：读写 auth.json 的逻辑全在 piSetup，面板只转发
       authOpen: () => this.piSetup.postAuthState(),
-      authSave: (provider, key) => this.piSetup.saveProviderKey(provider, key),
+      authSave: (provider, key) => {
+        this.piSetup.saveProviderKey(provider, key);
+        // 存完立刻挑模型：新用户不知道「还得选模型」，不自动挑就会吃
+        // No API key found for the selected model（2026-11-05 首次使用实测）
+        void this.ensureUsableModel();
+      },
       authDelete: (provider) => this.piSetup.deleteProviderKey(provider),
     };
   }
@@ -694,6 +699,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 刀3：编辑器面板把 tabKey 存进 webview state（VS Code 序列化面板时捕获，
         // 重启后 serializer 传回 → 恢复原会话而不是开新会话）
         if (this.editorPanel) this.post({ type: "panelInfo", tabKey: this.activeTabId });
+        // 有凭证但可能没选过模型（或选的是没钥匙的那家）→ 静默兜一次自动挑模型；
+        // 已在可用范围就什么都不做（ensureUsableModel 内部判定）
+        void this.ensureUsableModel();
         // 无凭证 → 凭证配置页常驻（2026-11-05 用户口径：没配 key 就该一直有）。
         // 不在 webview 侧记「弹过了」，而是每次握手/重载都重发：面板就是干活的地方，
         // 没凭证时除了配置页也没别的可干；配好后 webview 见 providers 有值就自己收。
@@ -2049,6 +2057,43 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+
+  /**
+   * 凭证刚配好/首次启动时自动挑一个「有钥匙」的模型（2026-11-05 首次使用实测）。
+   *
+   * 事故：新用户配完 key 直接发消息 → `No API key found for the selected model`。
+   * 根因是 pi 有个默认选中模型，而它属于没配 key 的服务商；用户根本不知道还要选模型
+   * （「如果我第一次用肯定不知道还需要选模型」）。这里用 auth.json 里真实存在的服务商
+   * 去筛 pi 的模型表，当前模型不在其中就换第一个可用的并记忆——用户零操作即可对话。
+   */
+  private async ensureUsableModel(): Promise<void> {
+    const providers = this.piSetup.configuredProviders();
+    if (!providers.length) return; // 没凭证：配置页的事，不在这里抢戏
+    const client = this.core.ensureClient();
+    let models: any[] = [];
+    try {
+      models = (await client.getAvailableModels())?.models ?? [];
+    } catch {
+      return;
+    }
+    const usable = models.filter((m) => providers.includes(String(m?.provider)));
+    if (!usable.length) {
+      this.post({ type: "notice", text: this.L.modelNoneForProvider });
+      return;
+    }
+    const st = await client.getState().catch(() => null);
+    const cur = (st as any)?.model as { provider?: string; id?: string } | null | undefined;
+    if (cur && providers.includes(String(cur.provider))) return; // 当前模型就能用，别动用户的选
+    const pick = usable[0];
+    try {
+      await client.setModel(pick.provider, pick.id);
+      this.core.rememberModel({ provider: pick.provider, id: pick.id });
+      await this.core.refreshState();
+      this.post({ type: "notice", text: this.L.modelAutoPicked + (pick.name ?? pick.id) });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.switchFail + (err?.message ?? err) });
+    }
+  }
 
   private async pickModel(): Promise<void> {
     const client = this.core.ensureClient();

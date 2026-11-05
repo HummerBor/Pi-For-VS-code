@@ -168,6 +168,11 @@ export class PiSetup {
     ];
   }
 
+  /** 已配置凭证的服务商 id 列表（面板侧「自动挑模型」按它筛，别猜 pi 内部字段） */
+  configuredProviders(): string[] {
+    return Object.keys(this.readAuth());
+  }
+
   /** auth.json 当前内容（缺失/损坏 → 空对象，不抛） */
   private readAuth(): Record<string, any> {
     try {
