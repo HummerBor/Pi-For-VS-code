@@ -215,3 +215,76 @@ body {
 }
 .r-caret.empty { cursor: inherit; }
 .r-caret:hover { color: var(--pi-fg); }
+
+/* 空态升级（2026-11-05 用户要求）：一条会话都没有时给「很强的符号」——大 + 圆环 + 按钮，
+   整块可点直接开新会话。搜索没命中不走这套（只显示一行文字，见 sessions.ts render） */
+#empty {
+  padding: 0;
+  /* 只做容器：大按钮/普通文字二选一显示 */
+}
+
+.e-new {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 28px 16px;
+  padding: 22px 16px 20px;
+  cursor: pointer;
+  border: 1px dashed var(--pi-composer-border);
+  border-radius: 12px;
+  background: var(--pi-assistant-bubble-bg);
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+
+.e-new:hover {
+  border-color: var(--vscode-button-background);
+  background: var(--pi-tool-hover);
+  transform: translateY(-1px);
+}
+
+.e-plus {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 300;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border-radius: 50%;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+}
+
+.e-title {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.e-sub {
+  font-size: 11px;
+  opacity: .55;
+}
+
+.e-btn {
+  margin-top: 10px;
+  font-size: 12px;
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 0;
+  border-radius: 5px;
+}
+
+.e-btn:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
+
+.e-plain {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  opacity: .55;
+}

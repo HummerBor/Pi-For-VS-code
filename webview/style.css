@@ -2014,3 +2014,15 @@ details.think.compaction-flash>summary {
   opacity: .45;
   padding: 4px 0 2px;
 }
+
+/* 无凭证时的常驻提示（配置页锁住，见 main.ts renderAuthProviders） */
+.ap-lockhint {
+  margin-top: 10px;
+  padding: 7px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--pi-status-busy);
+  background: rgba(232, 163, 61, .10);
+  border: 1px solid rgba(232, 163, 61, .35);
+  border-radius: 5px;
+}

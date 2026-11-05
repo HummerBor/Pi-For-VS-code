@@ -112,7 +112,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
           : '')
       : '';
     listEl.innerHTML = rowsHtml + groupHtml;
-    emptyEl.style.display = list.length || subsShown.length ? 'none' : 'block';
+    const isEmpty = !list.length && !subsShown.length;
+    emptyEl.style.display = isEmpty ? 'block' : 'none';
+    if (isEmpty) {
+      // 搜索态 ≠ 真没会话：过滤没命中只报一句，不催用户新建（否则搜错字就冒出大按钮）
+      const filtering = qEl.value.trim() !== '';
+      const big = document.getElementById('empty-new');
+      const plain = document.getElementById('empty-plain');
+      if (big) big.style.display = filtering ? 'none' : 'flex';
+      if (plain) plain.style.display = filtering ? 'block' : 'none';
+    }
     const cur = listEl.querySelector('.row.sel') as HTMLElement | null;
     if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
@@ -168,6 +177,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   qEl.addEventListener("input", () => render());
 
   (document.getElementById("new") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svNew" }));
+  // 空态大按钮/大符号：整块可点，直接开新会话（新用户第一眼就该看到这个）
+  (document.getElementById("empty-new") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svNew" }));
   (document.getElementById("refresh") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svRefresh" }));
   // ⚡ 菜单（宿主路由到最近激活的编辑器标签，副栏兑底——见 panel.moreFromList）
   (document.getElementById("gear") as HTMLElement).addEventListener("click", () => vscode.postMessage({ type: "svMore" }));

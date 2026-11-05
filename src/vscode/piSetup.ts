@@ -52,8 +52,8 @@ export class PiSetup {
   private get core(): PiSetupCore {
     return this.host.getCore();
   }
-  /** auth.json 里是否已有凭证 */
-  private hasAuthConfig(): boolean {
+  /** auth.json 里是否已有凭证（面板侧握手判定「要不要常驻配置页」也用，故公开） */
+  hasAuthConfig(): boolean {
     try {
       const data = JSON.parse(
         fs.readFileSync(path.join(os.homedir(), ".pi", "agent", "auth.json"), "utf8")

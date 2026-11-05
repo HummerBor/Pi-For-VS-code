@@ -694,6 +694,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         // 刀3：编辑器面板把 tabKey 存进 webview state（VS Code 序列化面板时捕获，
         // 重启后 serializer 传回 → 恢复原会话而不是开新会话）
         if (this.editorPanel) this.post({ type: "panelInfo", tabKey: this.activeTabId });
+        // 无凭证 → 凭证配置页常驻（2026-11-05 用户口径：没配 key 就该一直有）。
+        // 不在 webview 侧记「弹过了」，而是每次握手/重载都重发：面板就是干活的地方，
+        // 没凭证时除了配置页也没别的可干；配好后 webview 见 providers 有值就自己收。
+        if (!this.piSetup.hasAuthConfig()) this.post({ type: "authPanelOpen" });
         // R 刀时序修正（2026-09-23）：pi 预热必须在 postTabs **之后**——快路径 render 同步发，
         // 早跑会抢在标签条前面（用户报「会话信息比页签先出」）。ensureClient 幂等（有 client 即返）
         this.core.ensureClient();

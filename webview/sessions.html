@@ -15,7 +15,17 @@
       <span id="gear" class="ico-btn" title="{{t:svMore}}"></span>
     </div>
     <div id="list"></div>
-    <div id="empty" style="display:none">{{t:svEmpty}}</div>
+    <!-- 空态（2026-11-05 用户要求「加个很强的符号/按钮提醒新建会话」）：
+         真有会话但搜索没命中时只显示一行文字；一条会话都没有时才出大 + 和按钮 -->
+    <div id="empty" style="display:none">
+      <div class="e-new" id="empty-new" title="{{t:svEmptyNew}}">
+        <div class="e-plus">＋</div>
+        <div class="e-title">{{t:svEmptyNew}}</div>
+        <div class="e-sub">{{t:svEmptyNewHint}}</div>
+        <button class="e-btn">{{t:svNew}}</button>
+      </div>
+      <div class="e-plain" id="empty-plain">{{t:svEmpty}}</div>
+    </div>
   </div>
   <script nonce="{{nonce}}">{{js}}</script>
 </body>

@@ -1868,6 +1868,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 服务商、填/存/删一步到位，订阅登录同页可点。
   // 职责：webview 只渲染与收集输入，读写 ~/.pi/agent/auth.json 全在宿主（piSetup）；
   // 密钥不留在 webview 状态里（提交即清空输入框，列表只显示「已配置」）。
+  // 无凭证时弹窗常驻（2026-11-05 用户口径）：没配 key 面板本来就没别的可干，
+  // 关掉只会让用户找不到入口——所以锁住它（无 ✕、Esc/遮罩无效），配好才自动关
+  var authLocked = false;
+  function applyAuthLock() {
+    var x = document.getElementById('ap-close');
+    if (x) x.style.display = authLocked ? 'none' : '';
+    var h = document.getElementById('ap-lockhint');
+    if (h) h.style.display = authLocked ? '' : 'none';
+  }
+  function closeAuthPanel(force?: boolean) {
+    if (authLocked && !force) return;
+    var apEl = document.getElementById('authpanel');
+    if (apEl) apEl.style.display = 'none';
+  }
   function renderAuthProviders(list: any[]) {
     var sel = document.getElementById('ap-provider') as HTMLSelectElement | null;
     var rows = document.getElementById('ap-rows');
@@ -1905,6 +1919,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       })(q);
     }
     if (!any) rows.appendChild(el('div', 'ap-empty', L.authEmpty));
+    var wasLocked = authLocked;
+    authLocked = !any;
+    applyAuthLock();
+    // 刚配好凭证（锁定 → 解锁）：用户来这一页就是为配置，配完自动收起回到对话
+    if (wasLocked && !authLocked) closeAuthPanel(true);
   }
   /** 打开配置页：先展示旧数据（无闪屏），再向宿主要 auth.json 真值 */
   function showAuthPanel() {
@@ -1917,16 +1936,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var apEl = document.getElementById('authpanel');
     if (!apEl) return;
     var close = document.getElementById('ap-close');
-    if (close) close.onclick = function () { apEl.style.display = 'none'; };
-    // Esc 关闭（弹窗该有的基本手感）；输入框里按 Esc 也关（不提交）
+    if (close) close.onclick = function () { closeAuthPanel(); };
+    // Esc 关闭（弹窗该有的基本手感）；无凭证时锁住（closeAuthPanel 内部判定）
     document.addEventListener('keydown', function (e: KeyboardEvent) {
-      if (e.key === 'Escape' && apEl.style.display !== 'none') {
-        apEl.style.display = 'none';
-      }
+      if (e.key === 'Escape' && apEl.style.display !== 'none') closeAuthPanel();
     });
     // 背景点击关闭（点在卡片外才算，卡片内点击不关）
     apEl.addEventListener('click', function (e: Event) {
-      if (e.target === apEl) apEl.style.display = 'none';
+      if (e.target === apEl) closeAuthPanel();
     });
     var login = document.getElementById('ap-login');
     if (login) login.onclick = function () { vscode.postMessage({ type: 'authLogin' }); };
