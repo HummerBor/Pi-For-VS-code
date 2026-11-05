@@ -60,8 +60,10 @@ body.editor-panel #more {
   z-index: 0;
 }
 
-/* :not(#bg-layer) 特异性含 ID，会压过 .subdock 的 position:fixed（浮窗被拍回文档流底部事故），豁免之 */
-body> :not(#bg-layer):not(.subdock) {
+/* :not(#bg-layer) 特异性含 ID，会压过 .subdock 的 position:fixed（浮窗被拍回文档流底部事故），豁免之；
+   #authpanel 同款：它是全屏遮罩弹窗（position:fixed），被这条拍成 relative 就变成「贴在页面
+   最下面的卡片」（2026-11-05 实测截图，用户：这是弹窗？？）——新加的全屏层请一并豁免 */
+body> :not(#bg-layer):not(.subdock):not(#authpanel) {
   position: relative;
   z-index: 1;
 }

@@ -1918,6 +1918,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (!apEl) return;
     var close = document.getElementById('ap-close');
     if (close) close.onclick = function () { apEl.style.display = 'none'; };
+    // Esc 关闭（弹窗该有的基本手感）；输入框里按 Esc 也关（不提交）
+    document.addEventListener('keydown', function (e: KeyboardEvent) {
+      if (e.key === 'Escape' && apEl.style.display !== 'none') {
+        apEl.style.display = 'none';
+      }
+    });
     // 背景点击关闭（点在卡片外才算，卡片内点击不关）
     apEl.addEventListener('click', function (e: Event) {
       if (e.target === apEl) apEl.style.display = 'none';
