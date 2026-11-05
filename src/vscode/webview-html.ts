@@ -73,18 +73,19 @@ let cachedSessionsCss = "";
 /** 会话列表 webview HTML（刀6 B：与聊天共用 tokens 同一套语义色，两 webview 永远同色）。
  *  模板/产物/占位符机制与 getHtml 同构（模板 webview/sessions.html → dist；
  *  {{t:key}} i18n、{{nonce}} CSP、{{js}} 产物内联） */
-/** 会话列表空态用的品牌图（media/source/pi-icon-small.svg，进 vsix 白名单）；
- *  与聊天页鸭子同款「一条路径 + 兜底」写法，读不到就退回 pi-icon.png */
+/** 会话列表空态用的品牌图：优先 media/pi-icon.png（亮色像素鸭子，~3KB 直接内联）。
+ *  别用 media/source/pi-icon-small*.svg —— 那几个带深色底块 fill="#26232A"，
+ *  在深色主题里就是个暗框（2026-11-05 用户截图「不能明亮一点吗」实测） */
 let cachedSessionsLogo = "";
 function sessionsEmptyLogo(): string {
   if (cachedSessionsLogo) return cachedSessionsLogo;
   try {
-    cachedSessionsLogo = "data:image/svg+xml;base64," +
-      readFileSync(join(__dirname, "..", "..", "media", "source", "pi-icon-small.svg")).toString("base64");
+    cachedSessionsLogo = "data:image/png;base64," +
+      readFileSync(join(__dirname, "..", "..", "media", "pi-icon.png")).toString("base64");
   } catch {
     try {
-      cachedSessionsLogo = "data:image/png;base64," +
-        readFileSync(join(__dirname, "..", "..", "media", "pi-icon.png")).toString("base64");
+      cachedSessionsLogo = "data:image/svg+xml;base64," +
+        readFileSync(join(__dirname, "..", "..", "media", "source", "pi-icon-small.svg")).toString("base64");
     } catch {
       cachedSessionsLogo = "";
     }

@@ -235,13 +235,11 @@ body {
   cursor: pointer;
   border: 0;
   background: transparent;
-  transition: transform .18s ease, opacity .18s ease;
-  opacity: .92;
+  transition: transform .18s ease;
 }
 
 .e-new:hover {
   transform: translateY(-2px);
-  opacity: 1;
 }
 
 .e-logo {
@@ -249,7 +247,7 @@ body {
   height: 96px;
   object-fit: contain;
   image-rendering: pixelated;
-  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, .45));
+  filter: drop-shadow(0 10px 26px rgba(0, 0, 0, .35)) drop-shadow(0 0 22px rgba(255, 212, 59, .12));
 }
 
 .e-title {
@@ -261,7 +259,7 @@ body {
 
 .e-sub {
   font-size: 11px;
-  opacity: .5;
+  opacity: .68;
 }
 
 .e-btn {
