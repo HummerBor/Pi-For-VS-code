@@ -2,7 +2,9 @@
 <html lang="{{lang}}">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}';">
+  <!-- img-src data: 必备（2026-11-05）：空态的品牌图是 data URI（同聊天页鸭子），
+       少了这一项 CSP 直接拦掉，页面上就是个破图标框 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}'; img-src data:;">
   {{headAssets}}
 </head>
 <body data-theme="{{theme}}">
@@ -19,7 +21,7 @@
          真有会话但搜索没命中时只显示一行文字；一条会话都没有时才出大 + 和按钮 -->
     <div id="empty" style="display:none">
       <div class="e-new" id="empty-new" title="{{t:svEmptyNew}}">
-        <div class="e-plus">＋</div>
+        <img class="e-logo" src="{{emptyLogo}}" alt="">
         <div class="e-title">{{t:svEmptyNew}}</div>
         <div class="e-sub">{{t:svEmptyNewHint}}</div>
         <button class="e-btn">{{t:svNew}}</button>

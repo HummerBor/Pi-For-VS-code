@@ -216,68 +216,64 @@ body {
 .r-caret.empty { cursor: inherit; }
 .r-caret:hover { color: var(--pi-fg); }
 
-/* 空态升级（2026-11-05 用户要求）：一条会话都没有时给「很强的符号」——大 + 圆环 + 按钮，
-   整块可点直接开新会话。搜索没命中不走这套（只显示一行文字，见 sessions.ts render） */
+/* 空态（2026-11-05）：一条会话都没有时，占满剩余高度居中放品牌图 + 一句引导 + 按钮，
+   整块可点直接开新会话。搜索无命中不走这套（只一行文字，见 sessions.ts render） */
 #empty {
   padding: 0;
-  /* 只做容器：大按钮/普通文字二选一显示 */
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .e-new {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  margin: 28px 16px;
-  padding: 22px 16px 20px;
+  gap: 4px;
+  padding: 12px;
   cursor: pointer;
-  border: 1px dashed var(--pi-composer-border);
-  border-radius: 12px;
-  background: var(--pi-assistant-bubble-bg);
-  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+  border: 0;
+  background: transparent;
+  transition: transform .18s ease, opacity .18s ease;
+  opacity: .92;
 }
 
 .e-new:hover {
-  border-color: var(--vscode-button-background);
-  background: var(--pi-tool-hover);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  opacity: 1;
 }
 
-.e-plus {
-  width: 52px;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 30px;
-  line-height: 1;
-  font-weight: 300;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
-  border-radius: 50%;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+.e-logo {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, .45));
 }
 
 .e-title {
-  margin-top: 6px;
+  margin-top: 10px;
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: .2px;
 }
 
 .e-sub {
   font-size: 11px;
-  opacity: .55;
+  opacity: .5;
 }
 
 .e-btn {
-  margin-top: 10px;
+  margin-top: 12px;
   font-size: 12px;
-  padding: 6px 16px;
+  padding: 6px 18px;
   cursor: pointer;
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
   border: 0;
-  border-radius: 5px;
+  border-radius: 999px;
+  letter-spacing: .3px;
 }
 
 .e-btn:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }

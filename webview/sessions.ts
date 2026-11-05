@@ -113,7 +113,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       : '';
     listEl.innerHTML = rowsHtml + groupHtml;
     const isEmpty = !list.length && !subsShown.length;
-    emptyEl.style.display = isEmpty ? 'block' : 'none';
+    // #list 有 flex:1，空态时把它藏掉，否则空列表和空态卡各占一半高度，
+    // 卡片被挤到下半屏（2026-11-05 用户截图：卡片吊在底部）
+    listEl.style.display = isEmpty ? 'none' : '';
+    emptyEl.style.display = isEmpty ? 'flex' : 'none';
     if (isEmpty) {
       // 搜索态 ≠ 真没会话：过滤没命中只报一句，不催用户新建（否则搜错字就冒出大按钮）
       const filtering = qEl.value.trim() !== '';

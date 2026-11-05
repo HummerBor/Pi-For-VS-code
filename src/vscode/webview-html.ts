@@ -73,6 +73,25 @@ let cachedSessionsCss = "";
 /** 会话列表 webview HTML（刀6 B：与聊天共用 tokens 同一套语义色，两 webview 永远同色）。
  *  模板/产物/占位符机制与 getHtml 同构（模板 webview/sessions.html → dist；
  *  {{t:key}} i18n、{{nonce}} CSP、{{js}} 产物内联） */
+/** 会话列表空态用的品牌图（media/source/pi-icon-small.svg，进 vsix 白名单）；
+ *  与聊天页鸭子同款「一条路径 + 兜底」写法，读不到就退回 pi-icon.png */
+let cachedSessionsLogo = "";
+function sessionsEmptyLogo(): string {
+  if (cachedSessionsLogo) return cachedSessionsLogo;
+  try {
+    cachedSessionsLogo = "data:image/svg+xml;base64," +
+      readFileSync(join(__dirname, "..", "..", "media", "source", "pi-icon-small.svg")).toString("base64");
+  } catch {
+    try {
+      cachedSessionsLogo = "data:image/png;base64," +
+        readFileSync(join(__dirname, "..", "..", "media", "pi-icon.png")).toString("base64");
+    } catch {
+      cachedSessionsLogo = "";
+    }
+  }
+  return cachedSessionsLogo;
+}
+
 export function getSessionsHtml(
   theme = "midnight",
   floorColor = "#1f1f1f",
@@ -90,6 +109,7 @@ export function getSessionsHtml(
     lang,
     theme,
     nonce,
+    emptyLogo: sessionsEmptyLogo(),
     headAssets: "<style>" + cachedSessionsCss + "</style>" +
       "<style>html { background: " + floorColor + " !important; }</style>",
     js: cachedSessionsJs.replace(/<\/script/gi, "<\\/script"),
