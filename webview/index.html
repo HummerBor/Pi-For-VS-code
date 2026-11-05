@@ -68,6 +68,21 @@
       </div>
     </div>
   </div>
+  <!-- 凭证配置页（2026-11-05）：页面级覆盖层，与页签无关（不进 session-view 克隆） -->
+  <div id="authpanel" style="display:none">
+    <div class="ap-box">
+      <div class="ap-head">
+        <span class="ap-title">{{t:authTitle}}</span>
+        <span class="ap-close" id="ap-close" title="{{t:authClose}}">✕</span>
+      </div>
+      <div class="ap-sub">{{t:authSub}}</div>
+      <div id="ap-rows"></div>
+      <div class="ap-foot">
+        <button id="ap-login">{{t:authLoginBtn}}</button>
+        <span class="ap-hint">{{t:authLoginHint}}</span>
+      </div>
+    </div>
+  </div>
   <script nonce="{{nonce}}">{{js}}</script>
 </body>
 </html>

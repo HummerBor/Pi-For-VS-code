@@ -127,6 +127,12 @@ if /i "%MODE%"=="install" (
   )
 )
 
+rem A fresh profile + untrusted workspace puts VS Code in Restricted Mode, which
+rem disables third-party extensions (they never activate) - so the sandbox launch
+rem must turn workspace trust off: --disable-workspace-trust.
+rem Other flags: skip release notes / welcome to reduce noise.
+set "SANDBOXFLAGS=--disable-workspace-trust --disable-telemetry --skip-release-notes --skip-welcome"
+
 echo [sandbox] launching: %CODEBIN%
-call "%CODEBIN%" --new-window %USERDATA_ARG% %EXTDIR_ARG% "%~dp0..\.."
+call "%CODEBIN%" --new-window %USERDATA_ARG% %EXTDIR_ARG% %SANDBOXFLAGS% "%~dp0..\.."
 endlocal

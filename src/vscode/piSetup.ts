@@ -29,6 +29,13 @@ export interface PiSetupCore {
   readonly clientRef?: PiClient | undefined;
 }
 
+/** 面板内凭证配置页可选的服务商（跟 pi 的 auth.json 键一致）。
+ *  label 走 i18n（中文名），id 直接作为 auth.json 的键 */
+export interface AuthProviderDef {
+  id: string;
+  label: string;
+}
+
 export class PiSetup {
   /** 本窗口是否已提醒过配置凭证（避免反复打扰） */
   private authOfferShown = false;
@@ -158,9 +165,9 @@ export class PiSetup {
     });
   }
 
-  /** 配置模型 API key：写入 ~/.pi/agent/auth.json（与 pi 的 /login 存储格式一致） */
-  async configApiKey(): Promise<void> {
-    const providers = [
+  /** 配置页用的服务商清单（id = auth.json 键） */
+  providers(): AuthProviderDef[] {
+    return [
       { id: "zai", label: this.L.providerZai },
       { id: "zai-coding-cn", label: this.L.providerZaiCn },
       { id: "openrouter", label: "OpenRouter" },
@@ -172,6 +179,77 @@ export class PiSetup {
       { id: "qwen-token-plan-cn", label: this.L.providerQwen },
       { id: "xiaomi", label: this.L.providerXiaomi },
     ];
+  }
+
+  /** auth.json 当前内容（缺失/损坏 → 空对象，不抛） */
+  private readAuth(): Record<string, any> {
+    try {
+      const raw = fs.readFileSync(this.authFile(), "utf8");
+      const data = JSON.parse(raw);
+      return data && typeof data === "object" ? data : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private authFile(): string {
+    return path.join(os.homedir(), ".pi", "agent", "auth.json");
+  }
+
+  /** 凭证配置页的数据源：配置页打开/保存/删除后都重发一次，webview 不存本地状态 */
+  postAuthState(): void {
+    const data = this.readAuth();
+    this.post({
+      type: "authState",
+      providers: this.providers().map((p) => ({
+        id: p.id,
+        label: p.label,
+        // 订阅授权（OAuth）在 auth.json 里是 oauth 类型，与手填 api_key 区分展示
+        kind: String(data[p.id]?.type ?? ""),
+      })),
+    });
+  }
+
+  /** 配置页保存：写 ~/.pi/agent/auth.json（与 pi /login 同格式） */
+  saveProviderKey(provider: string, key: string): void {
+    const id = String(provider || "").trim();
+    const val = String(key || "").trim();
+    if (!id || !val) return;
+    const data = this.readAuth();
+    data[id] = { type: "api_key", key: val };
+    try {
+      fs.mkdirSync(path.dirname(this.authFile()), { recursive: true });
+      fs.writeFileSync(this.authFile(), JSON.stringify(data, null, 2) + "\n", "utf8");
+      const label = this.providers().find((p) => p.id === id)?.label ?? id;
+      this.post({ type: "notice", text: this.L.keySaved + label });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.saveFail + (err?.message ?? err) });
+    }
+    this.postAuthState();
+  }
+
+  /** 配置页删除：只删该服务商那一条，其余凭证原样保留 */
+  deleteProviderKey(provider: string): void {
+    const id = String(provider || "").trim();
+    if (!id) return;
+    const data = this.readAuth();
+    if (!(id in data)) {
+      this.postAuthState();
+      return;
+    }
+    delete data[id];
+    try {
+      fs.writeFileSync(this.authFile(), JSON.stringify(data, null, 2) + "\n", "utf8");
+      this.post({ type: "notice", text: this.L.deleted + id });
+    } catch (err: any) {
+      this.post({ type: "notice", text: this.L.delFail + (err?.message ?? err) });
+    }
+    this.postAuthState();
+  }
+
+  /** 配置模型 API key：写入 ~/.pi/agent/auth.json（与 pi 的 /login 存储格式一致） */
+  async configApiKey(): Promise<void> {
+    const providers = this.providers();
     const pick = await vscode.window.showQuickPick(
       providers.map((p) => ({ label: p.label, description: p.id, id: p.id })),
       { placeHolder: this.L.pickProvider }
@@ -182,21 +260,7 @@ export class PiSetup {
       password: true,
     });
     if (!key) return;
-    const file = path.join(os.homedir(), ".pi", "agent", "auth.json");
-    let data: any = {};
-    try {
-      data = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
-      // 文件不存在/损坏 → 新建
-    }
-    data[pick.id] = { type: "api_key", key };
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
-      this.post({ type: "notice", text: this.L.keySaved + pick.label });
-    } catch (err: any) {
-      this.post({ type: "notice", text: this.L.saveFail + (err?.message ?? err) });
-    }
+    this.saveProviderKey(pick.id, key);
   }
 
   /** 查看/删除已保存的凭证（auth.json） */

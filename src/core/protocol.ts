@@ -108,6 +108,30 @@ export interface WvPickThemeMsg {
 export interface WvPickLangMsg {
   type: "pickLang";
 }
+/* ── 凭证配置界面（2026-11-05）───────────────────────────────────────────────
+ * 动机：新用户首屏只看到「先 /login 或 API key 配置」一行字，入口藏在齿轮菜单
+ * 的 QuickPick 链里（选服务商 → 粘 key），关掉就找不回来。改成面板内的常驻配置页：
+ * 一次看全部服务商、像表格一样填/存/删，订阅登录也在同一页。
+ * 职责划分：webview 只负责渲染与收集输入，读写 auth.json 全在宿主（piSetup）。 */
+/** 打开配置页（webview 点击按钮 → 宿主回 authState 真值） */
+export interface WvAuthOpenMsg {
+  type: "authOpen";
+}
+/** 保存某服务商的 API key（明文只走这一次消息，不落 webview 状态） */
+export interface WvAuthSaveMsg {
+  type: "authSave";
+  provider: string;
+  key: string;
+}
+/** 删除某服务商已存凭证 */
+export interface WvAuthDeleteMsg {
+  type: "authDelete";
+  provider: string;
+}
+/** 订阅登录（TUI /login）：宿主开集成终端跑内置 pi */
+export interface WvAuthLoginMsg {
+  type: "authLogin";
+}
 
 /** 横幅关闭按钮（工单六）：webview 只上报，横幅状态机在 piCore，宿主回发 banner:null 收口 */
 export interface WvBannerCloseMsg {
@@ -171,6 +195,10 @@ export type WebviewToHost =
   | WvPickThinkingMsg
   | WvPickThemeMsg
   | WvPickLangMsg
+  | WvAuthOpenMsg
+  | WvAuthSaveMsg
+  | WvAuthDeleteMsg
+  | WvAuthLoginMsg
   | WvBannerCloseMsg
   | WvCompactSessionMsg
   | WvShowChangesMsg
@@ -523,6 +551,23 @@ export interface ChangesListMsg {
   type: "changesList";
   files: ChangesFileInfo[];
 }
+/* ── 凭证配置页（2026-11-05）── */
+/** 单个服务商在配置页的展示/状态：kind = auth.json 里的凭证类型（api_key / oauth），
+ *  空字符串 = 还没配置。id 是 auth.json 的键（zai/openrouter/…），与 pi 一致。 */
+export interface AuthProviderState {
+  id: string;
+  label: string;
+  kind: string;
+}
+/** 宿主 → webview：配置页的凭证真相（打开/保存/删除后都重发一次，webview 无本地状态） */
+export interface AuthStateMsg {
+  type: "authState";
+  providers: AuthProviderState[];
+}
+/** 宿主 → webview：打开配置页（齿轮菜单 / 首屏提示按钮共用此入口） */
+export interface AuthPanelOpenMsg {
+  type: "authPanelOpen";
+}
 /** 工单七：piCore→adapter 的 run 边界回调负载（不经 webview；git/还原语义全在 adapter）。
  *  tool 取 pi 工具名（edit/write）；patches 是同一文件本次 run 内按时间序累积的
  *  edit result.details.patch（未跟踪文件逆序逆向还原用，裁决 11③） */
@@ -582,6 +627,8 @@ export type HostToWebview =
   | PanelInfoMsg
   | BannerMsg
   | ChangesListMsg
+  | AuthStateMsg
+  | AuthPanelOpenMsg
   | TabsMsg
   | LiveSyncMsg
   | UiStateMsg;

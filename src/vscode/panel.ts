@@ -512,6 +512,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       startError: (err) => this.onStartError(err),
       showChanges: () => this.changes.showChangesFlow(),
       dismissChanges: async () => this.changes.dismissActive(),
+      // 凭证配置页（2026-11-05）：读写 auth.json 的逻辑全在 piSetup，面板只转发
+      authOpen: () => this.piSetup.postAuthState(),
+      authSave: (provider, key) => this.piSetup.saveProviderKey(provider, key),
+      authDelete: (provider) => this.piSetup.deleteProviderKey(provider),
     };
   }
 
@@ -1883,6 +1887,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       run: async () => { await this.pickTheme(); },
     });
     items.push({
+      // 凭证配置页入口（2026-11-05）：面板内常驻页，不用再走 QuickPick 链
+      label: this.L.sAuthPanel,
+      run: async () => {
+        this.post({ type: "authPanelOpen" });
+      },
+    });
+    items.push({
       label: this.L.sApiKey,
       run: async () => {
         await this.piSetup.configApiKey();
@@ -2038,6 +2049,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (!models.length) {
+      // 没有任何可用模型 = 还没配凭证：直接开凭证配置页（首屏那句提示只是文字，点不到）
+      this.post({ type: "authPanelOpen" });
       this.post({ type: "notice", text: this.L.noModels });
       return;
     }

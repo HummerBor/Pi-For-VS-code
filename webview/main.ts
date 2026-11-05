@@ -1861,6 +1861,64 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (text !== undefined && text !== '') e.textContent = text;
     return e;
   }
+
+  // ── 凭证配置页（2026-11-05）───────────────────────────────────────────────
+  // 背景：新用户首屏只看到「先 /login 或 API key 配置」一行纯文字，真正入口在齿轮菜单的
+  // QuickPick 链里（选服务商 → 粘 key），关掉就得重找。这里给一个常驻页：一处看全部
+  // 服务商、填/存/删一步到位，订阅登录同页可点。
+  // 职责：webview 只渲染与收集输入，读写 ~/.pi/agent/auth.json 全在宿主（piSetup）；
+  // 密钥不留在 webview 状态里（提交即清空输入框，列表只显示「已配置」）。
+  function renderAuthProviders(list: any[]) {
+    var apRows = document.getElementById('ap-rows');
+    if (!apRows) return;
+    apRows.innerHTML = '';
+    for (var i = 0; i < list.length; i++) {
+      (function (p: any) {
+        var row = el('div', 'ap-row');
+        var name = el('div', 'ap-name', p.label || p.id);
+        name.appendChild(el('span', 'ap-id', p.id));
+        var state = el('span', 'ap-state' + (p.kind ? ' ok' : ''), p.kind ? '\u2714 ' + (p.kind === 'oauth' ? L.authOauth : L.authKey) : L.authNone);
+        var input = document.createElement('input');
+        input.type = 'password';
+        input.className = 'ap-input';
+        input.placeholder = L.authKeyPh;
+        var save = el('button', 'ap-btn', L.authSaveBtn);
+        save.onclick = function () {
+          var v = input.value.trim();
+          if (!v) { input.focus(); return; }
+          vscode.postMessage({ type: 'authSave', provider: p.id, key: v });
+          input.value = ''; // 明文不留在页面里
+        };
+        var del = el('button', 'ap-btn ap-del', L.authDeleteBtn);
+        del.onclick = function () { vscode.postMessage({ type: 'authDelete', provider: p.id }); };
+        if (!p.kind) del.style.display = 'none';
+        row.appendChild(name);
+        row.appendChild(state);
+        row.appendChild(input);
+        row.appendChild(save);
+        row.appendChild(del);
+        apRows.appendChild(row);
+      })(list[i]);
+    }
+  }
+  function showAuthPanel() {
+    var apEl = document.getElementById('authpanel');
+    if (!apEl) return;
+    apEl.style.display = 'flex';
+    vscode.postMessage({ type: 'authOpen' });
+  }
+  (function () {
+    var apEl = document.getElementById('authpanel');
+    if (!apEl) return;
+    var close = document.getElementById('ap-close');
+    if (close) close.onclick = function () { apEl.style.display = 'none'; };
+    // 背景点击关闭（点在卡片外才算，卡片内点击不关）
+    apEl.addEventListener('click', function (e: Event) {
+      if (e.target === apEl) apEl.style.display = 'none';
+    });
+    var login = document.getElementById('ap-login');
+    if (login) login.onclick = function () { vscode.postMessage({ type: 'authLogin' }); };
+  })();
   // ── 子 agent 监控：浮窗（codex 风格）——概览列表 + 点击下钻（工单 A，对齐 Codex 交互）──
   // 概览 = 已开启/完成 分组行（每任务一行：状态图标/名称/处理中/相对时间），点击行下钻
   // 完整活动流 + markdown 产出（subagentDetailRequest → 宿主留存的全量 details）。
@@ -2484,6 +2542,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
   window.addEventListener('message', function (ev: MessageEvent) {
     var m = ev.data as HostToWebviewTagged;
+    // 凭证配置页（2026-11-05）：页面级覆盖层，与页签无关，先于 tabId 过滤截获
+    if (m.type === 'authPanelOpen') { showAuthPanel(); return; }
+    if (m.type === 'authState') { renderAuthProviders(((m as any).providers || []) as any[]); return; }
     // 标签清单先于 tabId 过滤处理（宿主是事实源）
     if (m.type === 'tabs') { handleTabs(m); return; }
     // 子 agent 快照在页签过滤前截获：后台页签的流虽不渲染但必须缓存，

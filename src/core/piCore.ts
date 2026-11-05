@@ -52,6 +52,12 @@ export interface UiActions {
   showChanges(): Promise<void>;
   /** 工单七：收起「本次改动」条（宿主状态收口，webview 重建不重发） */
   dismissChanges(): Promise<void>;
+  /** 凭证配置页（2026-11-05）：读 auth.json 并回发 authState */
+  authOpen(): void;
+  /** 凭证配置页：保存某服务商 API key */
+  authSave(provider: string, key: string): void;
+  /** 凭证配置页：删除某服务商凭证 */
+  authDelete(provider: string): void;
 }
 
 /** 页脚真相（模型/思考/会话/用量）单一形状：collectState 产出、uiState/state 共用、
@@ -1413,6 +1419,19 @@ export class PiCore {
         break;
       case "pickLang":
         await this.ui.pickLang();
+        break;
+      case "authOpen":
+        this.ui.authOpen();
+        break;
+      case "authSave":
+        this.ui.authSave(m.provider, m.key);
+        break;
+      case "authDelete":
+        this.ui.authDelete(m.provider);
+        break;
+      case "authLogin":
+        // 订阅登录只在终端做（TUI 专属），这里直接委托宿主开终端
+        this.ui.openTerminalLogin();
         break;
       case "bannerClose":
         // 用户手动关横幅：宿主状态机收口，webview 重建后也不会重发
