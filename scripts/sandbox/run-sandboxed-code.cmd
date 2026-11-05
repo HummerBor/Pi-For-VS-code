@@ -4,6 +4,7 @@ rem Sandbox: run this repo's Extension Development Host in a PATH that has no pi
 rem
 rem Usage (from repo root):
 rem   scripts\sandbox\run-sandboxed-code.cmd            mode 1: node present, pi absent
+rem   scripts\sandbox\run-sandboxed-code.cmd fresh      mode 1 + EMPTY home (true first install)
 rem   scripts\sandbox\run-sandboxed-code.cmd no-node    mode 2: neither node nor pi
 rem   scripts\sandbox\run-sandboxed-code.cmd probe       only prepare + print, no VS Code
 rem
@@ -13,6 +14,14 @@ rem keeping only that dir + System32 on PATH makes pi disappear, while node stay
 rem Press F5 inside the window that opens: the extension dev host inherits this
 rem PATH, so the panel sees the "no pi" world. Gear menu -> Subscription login
 rem should then run "node + bundled vendor/pi/dist/bundle/cli.js", never PATH pi.
+rem
+rem "fresh" mode additionally isolates the pi agent dir (~/.pi/agent = auth.json
+rem + sessions) by pointing USERPROFILE at an empty temp home, and gives VS Code
+rem a throwaway --user-data-dir, so the panel behaves like a first install:
+rem empty session list, no credentials, first-run credential prompt.
+rem NOTE: pi resolves its agent dir with os.homedir(), i.e. USERPROFILE on Windows.
+rem Keep every comment ASCII: cmd in codepage 936 mis-parses UTF-8 Chinese here
+rem and would try to execute the mangled fragments.
 rem
 rem Side effect: the integrated terminal in that window also gets the trimmed
 rem PATH (that is the point) - do not run npm there.
@@ -59,6 +68,24 @@ echo [sandbox] mode=%MODE%
 echo [sandbox] PATH=%PATH%
 for /f "delims=" %%i in ('where node 2^>nul') do echo [sandbox] node -^> %%i
 for /f "delims=" %%i in ('where pi 2^>nul') do echo [sandbox] pi   -^> %%i
+
+rem fresh mode: isolate pi's agent dir (auth.json + sessions) with an empty home.
+rem pi uses os.homedir(); on Windows that is USERPROFILE. APPDATA is left alone so
+rem VS Code itself keeps functioning (--user-data-dir is passed separately).
+set "USERDATA_ARG="
+if /i not "%MODE%"=="fresh" goto :launch
+set "SANDBOXHOME=%SBROOT%\home"
+if not exist "%SANDBOXHOME%" mkdir "%SANDBOXHOME%" >nul 2>&1
+set "USERPROFILE=%SANDBOXHOME%"
+set "HOME=%SANDBOXHOME%"
+set "USERDATA_ARG=--user-data-dir=%SBROOT%\vscode-user-data"
+echo [sandbox] USERPROFILE=%USERPROFILE%
+if exist "%SANDBOXHOME%\.pi\agent\auth.json" echo [sandbox] WARNING: sandbox home still has auth.json
+echo [sandbox] ~/.pi/agent =
+if exist "%SANDBOXHOME%\.pi\agent" (echo     exists) else (echo     absent - fresh user)
+echo.
+
+:launch
 echo.
 
 if defined PROBE (
@@ -74,5 +101,5 @@ if not defined CODEBIN (
 )
 
 echo [sandbox] launching: %CODEBIN%
-call "%CODEBIN%" --new-window "%~dp0..\.."
+call "%CODEBIN%" --new-window %USERDATA_ARG% "%~dp0..\.."
 endlocal
