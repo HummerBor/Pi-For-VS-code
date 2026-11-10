@@ -2026,3 +2026,887 @@ details.think.compaction-flash>summary {
   border: 1px solid rgba(232, 163, 61, .35);
   border-radius: 5px;
 }
+
+/* ── 上下文用量弹层（2026-11-05）───────────────────────────────────────────────
+   锚点：.session-view 是 position:relative，弹层贴底栏上方浮起（同 authpanel 的浮层语义，
+   但用量是会话域数据，所以随页签克隆而不是页面级）。配色只用 VS Code 主题变量，
+   七个色块是类别标识色（浅深主题通用，不跟主题走）。 */
+#ctxpop {
+  position: absolute;
+  /* 靠右锚定：入口 #usage 在底栏右侧（margin-left:auto），弹层叠在它上方才不跳视线 */
+  right: 12px;
+  bottom: 32px;
+  width: 340px;
+  max-width: calc(100% - 24px);
+  z-index: 40;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .35));
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .28);
+  padding: 12px 14px 10px;
+  font-size: 12px;
+}
+
+#ctxpop .cp-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+#ctxpop .cp-title {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+}
+
+#ctxpop .cp-close {
+  cursor: pointer;
+  opacity: .55;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+#ctxpop .cp-close:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
+}
+
+#ctxpop .cp-sum {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#ctxpop .cp-pct {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.5px;
+}
+
+#ctxpop .cp-used {
+  font-size: 11px;
+  opacity: .6;
+}
+
+/* 分段条：flex 行，段宽即 token 占比；阈值标记线绝对定位叠在上面 */
+#ctxpop .cp-bar {
+  position: relative;
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--vscode-input-background, rgba(128, 128, 128, .18));
+  margin-bottom: 10px;
+}
+
+#ctxpop .cp-bar .cp-seg {
+  display: block;
+  height: 100%;
+}
+
+#ctxpop .cp-legend {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+#ctxpop .cp-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+#ctxpop .cp-legend li > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+#ctxpop .cp-legend .cp-lb {
+  flex: 1;
+  opacity: .85;
+}
+
+#ctxpop .cp-legend .cp-lv {
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+}
+
+#ctxpop .cp-foot {
+  border-top: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
+  padding-top: 8px;
+}
+
+#ctxpop .cp-throw {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+#ctxpop .cp-thlabel {
+  flex: 1;
+  opacity: .8;
+}
+
+#ctxpop .cp-thval {
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 页脚用量入口（2026-11-05 用户指定样式）：圆圈百分比，hover 展开弹层。
+   圆环由 main.ts 的 renderUsageRing 用 dashoffset 推——颜色随占比升档（预览判据同阈值预警）。 */
+#bottombar #usage {
+  cursor: default;
+  min-width: 34px;
+  min-height: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+#usage .uring {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  transform: rotate(-90deg); /* 起点转到 12 点方向 */
+}
+
+#usage .uring-t {
+  fill: none;
+  stroke: currentColor;
+  opacity: .18;
+  stroke-width: 3;
+}
+
+#usage .uring-f {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset .25s ease;
+}
+
+#usage .utxt {
+  font-variant-numeric: tabular-nums;
+  opacity: .8;
+}
+
+#bottombar #usage:hover .utxt {
+  opacity: 1;
+}
+
+/* 顶部「压缩点 X%」读数（拖动滑块时原地联动，见 main.ts syncThresholdUi） */
+#ctxpop .cp-at {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: .55;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 主占比 ≥100%（已越过压缩点，下一轮必压）= 标红示警 */
+#ctxpop .cp-pct.hot {
+  color: #e05a5a;
+}
+
+/* ── 变更页（2026-11-05）：页面级覆盖层，盖住整个 session-view（横幅/消息流/输入区）。
+   左文件清单（+N/-M，顶部汇总相加）+ 右并排 diff。颜色沿用 VS Code 的 diff/git 变量，
+   未定义时给中性兜底（老内核/自定义主题都不至于白块）。禁用双斜杠注释（老坑）。 ── */
+#chgpage {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: none; /* JS 打开时置 flex */
+  flex-direction: column;
+  background: var(--pi-bg);
+  color: var(--pi-fg);
+}
+
+#chgpage .chg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  flex: none;
+  font-size: 12px;
+  border-bottom: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-back {
+  cursor: pointer;
+  opacity: .8;
+  white-space: nowrap;
+}
+
+#chgpage .chg-back:hover {
+  opacity: 1;
+}
+
+#chgpage .chg-title {
+  font-weight: 600;
+}
+
+#chgpage .chg-tot {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+#chgpage .chg-files {
+  flex: none;
+  width: 236px; /* 默认宽，可拖分隔条改内联 width */
+  min-width: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+/* 可拖分隔条：4px 命中区 + 中线视觉（hover/拖动时高亮） */
+#chgpage .chg-split {
+  flex: none;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--pi-header-border);
+  touch-action: none;
+}
+
+#chgpage .chg-split:hover,
+#chgpage .chg-split.dragging {
+  background: var(--vscode-focusBorder, #0078d4);
+}
+
+#chgpage .chg-f {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+#chgpage .chg-f:hover {
+  background: var(--pi-tool-hover);
+}
+
+#chgpage .chg-f.sel {
+  /* 非 VS Code 宿主（浏览器预览）里 --vscode-list-activeSelectionBackground 无值，
+     选中态会整行无高亮——给兜底色，真实宿主仍用 VS Code 变量 */
+  background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, .18));
+  color: var(--vscode-list-activeSelectionForeground, inherit);
+  border-left-color: var(--vscode-focusBorder, #0078d4);
+}
+
+#chgpage .chg-f .chg-n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#chgpage .chg-c {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-a {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ec96e);
+}
+
+#chgpage .chg-x {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+}
+
+#chgpage .chg-diff {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 滚动模型对齐 VS Code 原版（2026-11-05 用户实测口径）：左右各一格、各有一条横向滚动条，
+   拖动任意一格另一格跟随（main.ts 里双向同步 scrollTop/scrollLeft）。所以不再靠 --chg-col
+   撑宽两列——每格内容自然按最长行撑开，自己的滚动条自己走，另一侧不会跑出屏幕。 */
+#chgpage .chg-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+#chgpage .chg-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#chgpage .chg-pane + .chg-pane {
+  border-left: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-dhead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, inherit);
+  background: var(--pi-bg);
+  border-bottom: 1px solid var(--pi-header-border);
+}
+
+/* 页内动作按钮（刀4）：描边小钮，主色只给「还原」的 hover 加红——它不是主流程动作 */
+#chgpage .chg-act {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, inherit);
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--pi-header-border);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .8;
+}
+
+#chgpage .chg-act:hover {
+  opacity: 1;
+  background: var(--pi-tool-hover);
+}
+
+#chgpage .chg-act-danger:hover {
+  border-color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+}
+
+/* 「运行前已有改动」小标（仅提示，不影响动作） */
+#chgpage .chg-dhead .chg-dpre {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  opacity: .6;
+  border: 1px solid var(--pi-header-border);
+  border-radius: 3px;
+}
+
+#chgpage .chg-dhead .chg-dpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: .8;
+}
+
+#chgpage .chg-hunk {
+  margin: 6px 0;
+  padding: 2px 10px;
+  font-size: 11px;
+  opacity: .7;
+  white-space: pre;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+  background: var(--pi-code-bg);
+}
+
+/* 一行 = 一格的整行（左侧一格只画旧行，右侧一格只画新行）：
+   gutter 固定 44px + 代码列 max-content → 最长行撑开这一格自己的滚动宽度 */
+#chgpage .chg-side {
+  display: grid;
+  grid-template-columns: 44px max-content;
+  width: max-content;
+  min-width: 100%;
+  padding-right: 6px;
+  box-sizing: border-box;
+}
+
+#chgpage .chg-side:hover {
+  outline: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-ln {
+  padding-right: 8px;
+  text-align: right;
+  opacity: .45;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-code {
+  white-space: pre;
+}
+
+#chgpage .chg-side.del {
+  background: var(--vscode-diffEditor-removedLineBackground, rgba(255, 80, 80, .14));
+}
+
+#chgpage .chg-side.del .chg-code {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #ff9b9b);
+}
+
+#chgpage .chg-side.ins {
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(70, 200, 90, .13));
+}
+
+#chgpage .chg-side.ins .chg-code {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #9bd27a);
+}
+
+#chgpage .chg-empty {
+  padding: 16px 12px;
+  font-family: var(--vscode-font-family, inherit);
+  font-size: 12px;
+  opacity: .65;
+}
+
+/* 变更条次入口（清单 → QuickPick）：描边而非实心，与主按钮区分 */
+#changesbar .b-act2 {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--vscode-button-background, #0078d4);
+}
+
+#changesbar .b-act2:hover {
+  background: var(--pi-tool-hover);
+}
+
+/* 三段档位（2026-11-05 用户两轮拍板）：要滑块（滑动比点按钮顺手），但滑块只能停在
+   三档上——所以 range 的 min/max/step 是 0..2，一个格 = 一个档位；下面那排刻度是
+   同一件事的可读标签，点一下等于把滑块拖过去。 */
+#ctxpop .cp-range {
+  width: 100%;
+  margin: 6px 0 0;
+  accent-color: var(--vscode-focusBorder, #3b82f6);
+}
+
+#ctxpop .cp-range:disabled {
+  opacity: .4;
+}
+
+#ctxpop .cp-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: .5;
+  font-variant-numeric: tabular-nums;
+}
+
+#ctxpop .cp-ticks span {
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+#ctxpop .cp-ticks span:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
+}
+
+/* 当前档：与滑块位置一一对应（main.ts markActiveTick） */
+#ctxpop .cp-ticks span.on {
+  opacity: 1;
+  color: var(--vscode-charts-blue, #3b82f6);
+  font-weight: 600;
+}
+
+/* 压缩关闭 / 窗口未知：整排变灰不可点（applyStop 里有守卫） */
+#ctxpop .cp-ticks.disabled span {
+  opacity: .4;
+  cursor: default;
+  background: transparent;
+  color: inherit;
+  font-weight: inherit;
+}
+
+/* 页脚用量入口（2026-11-05 用户指定样式）：圆圈百分比，hover 展开弹层。
+   圆环由 main.ts 的 renderUsageRing 用 dashoffset 推——颜色随占比升档（预览判据同阈值预警）。 */
+#bottombar #usage {
+  cursor: default;
+  min-width: 34px;
+  min-height: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+#usage .uring {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  transform: rotate(-90deg); /* 起点转到 12 点方向 */
+}
+
+#usage .uring-t {
+  fill: none;
+  stroke: currentColor;
+  opacity: .18;
+  stroke-width: 3;
+}
+
+#usage .uring-f {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset .25s ease;
+}
+
+#usage .utxt {
+  font-variant-numeric: tabular-nums;
+  opacity: .8;
+}
+
+#bottombar #usage:hover .utxt {
+  opacity: 1;
+}
+
+/* 顶部「压缩点 X%」读数（拖动滑块时原地联动，见 main.ts syncThresholdUi） */
+#ctxpop .cp-at {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: .55;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 主占比 ≥100%（已越过压缩点，下一轮必压）= 标红示警 */
+#ctxpop .cp-pct.hot {
+  color: #e05a5a;
+}
+
+/* ── 变更页（2026-11-05）：页面级覆盖层，盖住整个 session-view（横幅/消息流/输入区）。
+   左文件清单（+N/-M，顶部汇总相加）+ 右并排 diff。颜色沿用 VS Code 的 diff/git 变量，
+   未定义时给中性兜底（老内核/自定义主题都不至于白块）。禁用双斜杠注释（老坑）。 ── */
+#chgpage {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: none; /* JS 打开时置 flex */
+  flex-direction: column;
+  background: var(--pi-bg);
+  color: var(--pi-fg);
+}
+
+#chgpage .chg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  flex: none;
+  font-size: 12px;
+  border-bottom: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-back {
+  cursor: pointer;
+  opacity: .8;
+  white-space: nowrap;
+}
+
+#chgpage .chg-back:hover {
+  opacity: 1;
+}
+
+#chgpage .chg-title {
+  font-weight: 600;
+}
+
+#chgpage .chg-tot {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+#chgpage .chg-files {
+  flex: none;
+  width: 236px; /* 默认宽，可拖分隔条改内联 width */
+  min-width: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+/* 可拖分隔条：4px 命中区 + 中线视觉（hover/拖动时高亮） */
+#chgpage .chg-split {
+  flex: none;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--pi-header-border);
+  touch-action: none;
+}
+
+#chgpage .chg-split:hover,
+#chgpage .chg-split.dragging {
+  background: var(--vscode-focusBorder, #0078d4);
+}
+
+#chgpage .chg-f {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+#chgpage .chg-f:hover {
+  background: var(--pi-tool-hover);
+}
+
+#chgpage .chg-f.sel {
+  /* 非 VS Code 宿主（浏览器预览）里 --vscode-list-activeSelectionBackground 无值，
+     选中态会整行无高亮——给兜底色，真实宿主仍用 VS Code 变量 */
+  background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, .18));
+  color: var(--vscode-list-activeSelectionForeground, inherit);
+  border-left-color: var(--vscode-focusBorder, #0078d4);
+}
+
+#chgpage .chg-f .chg-n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#chgpage .chg-c {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-a {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ec96e);
+}
+
+#chgpage .chg-x {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+}
+
+#chgpage .chg-diff {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 滚动模型对齐 VS Code 原版（2026-11-05 用户实测口径）：左右各一格、各有一条横向滚动条，
+   拖动任意一格另一格跟随（main.ts 里双向同步 scrollTop/scrollLeft）。所以不再靠 --chg-col
+   撑宽两列——每格内容自然按最长行撑开，自己的滚动条自己走，另一侧不会跑出屏幕。 */
+#chgpage .chg-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+#chgpage .chg-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#chgpage .chg-pane + .chg-pane {
+  border-left: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-dhead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, inherit);
+  background: var(--pi-bg);
+  border-bottom: 1px solid var(--pi-header-border);
+}
+
+/* 页内动作按钮（刀4）：描边小钮，主色只给「还原」的 hover 加红——它不是主流程动作 */
+#chgpage .chg-act {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, inherit);
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--pi-header-border);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .8;
+}
+
+#chgpage .chg-act:hover {
+  opacity: 1;
+  background: var(--pi-tool-hover);
+}
+
+#chgpage .chg-act-danger:hover {
+  border-color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f66);
+}
+
+/* 「运行前已有改动」小标（仅提示，不影响动作） */
+#chgpage .chg-dhead .chg-dpre {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  opacity: .6;
+  border: 1px solid var(--pi-header-border);
+  border-radius: 3px;
+}
+
+#chgpage .chg-dhead .chg-dpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: .8;
+}
+
+#chgpage .chg-hunk {
+  margin: 6px 0;
+  padding: 2px 10px;
+  font-size: 11px;
+  opacity: .7;
+  white-space: pre;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+  background: var(--pi-code-bg);
+}
+
+/* 一行 = 一格的整行（左侧一格只画旧行，右侧一格只画新行）：
+   gutter 固定 44px + 代码列 max-content → 最长行撑开这一格自己的滚动宽度 */
+#chgpage .chg-side {
+  display: grid;
+  grid-template-columns: 44px max-content;
+  width: max-content;
+  min-width: 100%;
+  padding-right: 6px;
+  box-sizing: border-box;
+}
+
+#chgpage .chg-side:hover {
+  outline: 1px solid var(--pi-header-border);
+}
+
+#chgpage .chg-ln {
+  padding-right: 8px;
+  text-align: right;
+  opacity: .45;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#chgpage .chg-code {
+  white-space: pre;
+}
+
+#chgpage .chg-side.del {
+  background: var(--vscode-diffEditor-removedLineBackground, rgba(255, 80, 80, .14));
+}
+
+#chgpage .chg-side.del .chg-code {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #ff9b9b);
+}
+
+#chgpage .chg-side.ins {
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(70, 200, 90, .13));
+}
+
+#chgpage .chg-side.ins .chg-code {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #9bd27a);
+}
+
+#chgpage .chg-empty {
+  padding: 16px 12px;
+  font-family: var(--vscode-font-family, inherit);
+  font-size: 12px;
+  opacity: .65;
+}
+
+/* 变更条次入口（清单 → QuickPick）：描边而非实心，与主按钮区分 */
+#changesbar .b-act2 {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--vscode-button-background, #0078d4);
+}
+
+#changesbar .b-act2:hover {
+  background: var(--pi-tool-hover);
+}
+
+/* 三段档位（2026-11-05 用户拍板：不要滑块，只要三个可点的刻度）。
+   一格 = 一个档位，当前档高亮；点击即写盘（宿主写 pi settings.json 的
+   compaction.reserveTokens），本地同时按新档重算所有百分比。 */
+#ctxpop .cp-ticks {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#ctxpop .cp-tick {
+  flex: 1;
+  padding: 5px 0;
+  font-family: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .35));
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: .75;
+}
+
+#ctxpop .cp-tick:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
+}
+
+#ctxpop .cp-tick.on {
+  opacity: 1;
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #3b82f6);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* 压缩关闭 / 窗口未知：整排刻度变灰不可点（点击在 renderTicks 里有守卫） */
+#ctxpop .cp-ticks.disabled .cp-tick {
+  opacity: .35;
+  cursor: default;
+  background: transparent;
+  color: inherit;
+  border-color: var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
+}

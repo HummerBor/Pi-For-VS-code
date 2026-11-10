@@ -5,8 +5,10 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/core/i18n";
-import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
+import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, ChangesDiffFile, TabsMsg, TabInfo } from "../src/core/protocol";
 import { toolDetail } from "../src/domain/toolDetail";
+import { compactionStops } from "../src/domain/ctxBreakdown";
+import { parseUnifiedDiff } from "../src/domain/diffView";
 import { isEditRetryable } from "../src/domain/errorClass"; // 余额/配额/鉴权类错误不给「修改后重试」入口
 import type { SubagentSnapshot } from "../src/domain/subagentSnapshot"; // 快照构建在宿主（subagentSnapshot.ts），webview 只消费
 import "./style.css";
@@ -146,13 +148,39 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var input = q('#input') as HTMLTextAreaElement; var stopBtn = q('#stop'); var sendBtn = q('#send');
     var statusEl = q('#status'); var modeBadge = q('#modebadge'); var codechipEl = q('#codechip');
     var modelEl = q('#model'); var thinkEl = q('#think'); var usageEl = q('#usage');
+    /** 圆圈百分比的内部节点（bindViewEvents 建，applyState 每次刷新） */
+    var ringFillEl: any = null; var usageTxtEl: any = null;
     var attachbarEl = q('#attachbar'); var attachEl = q('#attach'); var fileInput = q('#file') as HTMLInputElement;
     var suggestEl = q('#suggest'); var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
     var bannerEl = q('#banner'); var changesBarEl = q('#changesbar'); var queuebarEl = q('#queuebar');
+    // 变更页（2026-11-05）：页级覆盖层，随视图克隆——各页签各看各的本轮改动
+    var chgPageEl = q('#chgpage'); var chgFilesEl = q('#chg-files'); var chgDiffEl = q('#chg-diff');
+    var chgTotEl = q('#chg-tot'); var chgBackEl = q('#chg-back'); var chgSplitEl = q('#chg-split');
     var compactbarEl = q('#compactbar'); // 压缩浮动条（仿改动条：完成后提示 + 点击定位折叠块）
     var outlineEl = q('#outline'); // 消息大纲轨道（每页签一棵，随视图克隆；逻辑见 olSpy 区）
+    // 上下文用量弹层（2026-11-05）：随页签克隆；数据全由宿主 ctxDetail 一条消息给全
+    var ctxPopEl = q('#ctxpop'); var cpPctEl = q('#ctxpop .cp-pct'); var cpUsedEl = q('#ctxpop .cp-used');
+    var cpBarEl = q('#ctxpop .cp-bar'); var cpLegendEl = q('#ctxpop .cp-legend');
+    var cpRangeEl = q('#ctxpop .cp-range') as HTMLInputElement; var cpThValEl = q('#ctxpop .cp-thval');
+    var cpThLabelEl = q('#ctxpop .cp-thlabel'); var cpCloseEl = q('#ctxpop .cp-close');
+    var cpTicksEl = q('#ctxpop .cp-ticks');
+    /** 顶部「压缩点」读数（拖动滑块时原地联动，不等宿主回包） */
+    var cpAtEl = q('#ctxpop .cp-at');
+    /** 最近一条 ctxDetail 真值（拖动滑块时以它为基准局部重算，不必等宿主回包） */
+    var ctxDetail: any = null;
+    /** 弹层补查节流（state/uiState 帧到了才补查一次）：弹层开着时跟着宿主真相走。
+     *  事故（2026-11-05 用户报「上面数字有延迟」）：弹层只在 hover 打开那一刻查一次，
+     *  之后 agent 干活、页脚圆环跟着 state 帧动，弹层却冻在打开瞬间 —— 看着就像卡住。 */
+    var ctxQueryTimer: any = null;
     // 视图内上行显式带自己的 tabId（不再借活动页签打标——换镜退役后归属唯一）
     function vpost(m: any) { if (m.tabId === undefined) m.tabId = id; vscodeApi.postMessage(m); }
+    function scheduleCtxQuery() {
+      if (ctxQueryTimer) return;
+      ctxQueryTimer = setTimeout(function () {
+        ctxQueryTimer = null;
+        if (ctxPopEl.style.display === 'block') vpost({ type: 'ctxQuery' });
+      }, 400);
+    }
   var toolEls = {}; var queuedItems = [];
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
   // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
@@ -251,12 +279,49 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var modeText = 'Auto';
   var pendingImages: any[] = []; var pendingFiles: any[] = [];
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
+  // 变更页数据（宿主一次发齐：清单 + 每文件 hunk）；changesList 一到就作废（清单变了 hunk 必变）
+  var chgData: { files: ChangesDiffFile[]; totalAdds: number; totalDels: number } | null = null;
+  var chgSel = '';
     var built = false; // uiState/render 快照是否已建树（activateTab 按此决定要不要向宿主要快照）
   function bindViewEvents() {
+    // 变更页：返回按钮（页头）+ 标题/返回文案（i18n）
+    chgBackEl.textContent = '↖ ' + L.chgPageBack;
+    chgBackEl.onclick = closeChgPage;
+    // 左清单宽度可拖（2026-11-05 用户「这块不能拉动吗」）：mousemove/mouseup 只在拖动期间挂在
+    // document 上，松手即摘——常驻的话每个页签视图都会留一份监听，dispose 也带不走
+    (function () {
+      var dragging = false;
+      function onMove(e) {
+        if (!dragging) return;
+        var box = chgPageEl.getBoundingClientRect();
+        // 夹在 140px ~ (页宽-160px)：给自己留一列可见的 diff，别拖到只剩滚动条
+        var w = Math.max(140, Math.min(e.clientX - box.left, box.width - 160));
+        chgFilesEl.style.width = w + 'px';
+      }
+      function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        chgSplitEl.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      chgSplitEl.addEventListener('mousedown', function (e) {
+        dragging = true;
+        chgSplitEl.classList.add('dragging');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+      });
+    })();
     attachEl.innerHTML = ico('image');
     pmUpload.innerHTML = ico('image', 13) + '<span>' + L.uploadFile + '</span><span style=' + String.fromCharCode(34) + 'opacity:.5;font-size:10px;margin-left:auto;' + String.fromCharCode(34) + '>' + L.dragShift + '</span>';
     pmAt.innerHTML = ico('at', 13) + '<span>' + L.referenceFile + '</span>';
     modelEl.innerHTML = ico('cpu') + ' —';
+    // 页脚用量入口：圆圈百分比（2026-11-05 用户指定样式）。结构一次建好，
+    // applyState 每次只改 dashoffset/颜色/文字（不重建节点，否则过渡动画和 hover 都会断）
+    usageEl.innerHTML = '<svg class="uring" viewBox="0 0 20 20" aria-hidden="true"><circle class="uring-t" cx="10" cy="10" r="8"></circle><circle class="uring-f" cx="10" cy="10" r="8" stroke-dasharray="50.27" stroke-dashoffset="50.27"></circle></svg><span class="utxt"></span>';
+    ringFillEl = usageEl.querySelector('.uring-f');
+    usageTxtEl = usageEl.querySelector('.utxt');
     stopBtn.innerHTML = ico('stop', 11);
     sendBtn.innerHTML = ico('up', 14);
     // ── ＋菜单：上传图片 / 引用文件 ──
@@ -275,6 +340,40 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     stopBtn.addEventListener('click', function () { vpost({ type: 'abort' }); });
     fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
     modelEl.addEventListener('click', function () { vpost({ type: 'pickModel' }); });
+    // 上下文用量弹层（2026-11-05）：**hover 打开**（用户 2026-11-05 指定，不用点击），
+    // 移出去 280ms 才关——鼠标从页脚滑进弹层要过一道缝，立刻关会来回闪。
+    // 弹层自身 hover 时取消关闭定时器；✕ / Esc 立即关。
+    var ctxCloseTimer: any = null;
+    function openCtxPop() {
+      if (ctxCloseTimer) { clearTimeout(ctxCloseTimer); ctxCloseTimer = null; }
+      if (ctxPopEl.style.display === 'block') return;
+      ctxPopEl.style.display = 'block';
+      if (ctxDetail) renderCtxDetail(ctxDetail); // 先用上次真值垫一帧，等宿主回包再替换（避免闪空）
+      vpost({ type: 'ctxQuery' });
+    }
+    function closeCtxPopLater() {
+      if (ctxCloseTimer) clearTimeout(ctxCloseTimer);
+      ctxCloseTimer = setTimeout(function () { ctxCloseTimer = null; ctxPopEl.style.display = 'none'; }, 280);
+    }
+    usageEl.addEventListener('mouseenter', openCtxPop);
+    usageEl.addEventListener('mouseleave', closeCtxPopLater);
+    ctxPopEl.addEventListener('mouseenter', openCtxPop);
+    ctxPopEl.addEventListener('mouseleave', closeCtxPopLater);
+    cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; });
+    // 滑块 = 三段吸附（2026-11-05 用户：滑动好使点，档位不用手调）。
+    // input 只本地重算（零延迟、不写盘），change（放手）才落库
+    cpRangeEl.addEventListener('input', function () {
+      var stops = ctxStops();
+      if (!stops.length) return;
+      var idx = Math.max(0, Math.min(stops.length - 1, Number(cpRangeEl.value)));
+      applyStop(idx, false);
+    });
+    cpRangeEl.addEventListener('change', function () {
+      var stops = ctxStops();
+      if (!stops.length) return;
+      var idx = Math.max(0, Math.min(stops.length - 1, Number(cpRangeEl.value)));
+      applyStop(idx, true);
+    });
     thinkEl.addEventListener('click', function () { vpost({ type: 'pickThinking' }); });
     modeBadge.addEventListener('click', function () { vpost({ type: 'pickMode' }); });
     codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChipAll(); });
@@ -491,13 +590,151 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var txt = document.createElement('span'); txt.className = 'b-txt';
     txt.textContent = L.changesCount.replace('{n}', String(files.length));
     changesBarEl.appendChild(txt);
+    // 主入口 = 变更页（2026-11-05 用户拍板：截图那种左清单+右并排 diff）
     var act = document.createElement('button'); act.className = 'b-act'; act.textContent = L.changesView;
-    act.onclick = function () { vscode.postMessage({ type: 'showChanges' }); };
+    act.onclick = function () { openChgPage(); };
     changesBarEl.appendChild(act);
+    // 次入口 = 原 QuickPick 清单（带「还原」与「在 VS Code 对比」——变更页未接管的能力住这里）
+    var list = document.createElement('button'); list.className = 'b-act b-act2'; list.textContent = L.chgList;
+    list.onclick = function () { vpost({ type: 'showChanges' }); };
+    changesBarEl.appendChild(list);
     var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
     x.onclick = function () { vscode.postMessage({ type: 'changesDismiss' }); };
     changesBarEl.appendChild(x);
     changesBarEl.style.display = 'flex';
+  }
+
+  // ── 变更页（2026-11-05）：左文件清单（+N/-M，顶部汇总相加）+ 右并排 diff ──
+  // 数据面全在宿主（git/patch 逆向/pi 的 generateUnifiedPatch），这里零 git/磁盘访问，
+  // 只解析 hunk 文本。打开时向宿主要一次（同轮改动宿主有缓存，反复开页不重算）。
+  function openChgPage() {
+    chgPageEl.style.display = 'flex';
+    if (!chgData) {
+      chgFilesEl.innerHTML = '';
+      chgFilesEl.appendChild(el('div', 'chg-empty', L.chgPageLoading));
+      chgDiffEl.innerHTML = '';
+    }
+    vpost({ type: 'changesPageOpen' });
+  }
+  function closeChgPage() { chgPageEl.style.display = 'none'; }
+  function renderChgPage(data) {
+    chgData = data;
+    chgFilesEl.innerHTML = '';
+    var files = (data && data.files) || [];
+    if (!files.length) {
+      chgTotEl.textContent = '';
+      chgDiffEl.innerHTML = '';
+      chgDiffEl.appendChild(el('div', 'chg-empty', L.chgPageEmpty));
+      return;
+    }
+    // 顶部汇总：「相加」就是这个数——各文件 +/- 之和
+    chgTotEl.innerHTML = '';
+    chgTotEl.appendChild(el('span', 'chg-a', '+' + data.totalAdds));
+    chgTotEl.appendChild(el('span', 'chg-x', '-' + data.totalDels));
+    for (var i = 0; i < files.length; i++) {
+      (function (f) {
+        var row = el('div', 'chg-f');
+        row.setAttribute('data-p', f.path);
+        var base = String(f.rel).split('/').pop() || f.rel;
+        row.title = f.rel + (f.note ? '\n' + f.note : '');
+        row.appendChild(el('span', 'chg-n', base));
+        var counts = el('span', 'chg-c');
+        if (f.adds) counts.appendChild(el('span', 'chg-a', '+' + f.adds));
+        // 删除数为 0 不画（截图同款：只有新增的文件不挂 -0）
+        if (f.dels) counts.appendChild(el('span', 'chg-x', '-' + f.dels));
+        row.appendChild(counts);
+        row.onclick = function () { selectChgFile(f.path); };
+        chgFilesEl.appendChild(row);
+      })(files[i]);
+    }
+    var want = chgSel;
+    var hit = false;
+    for (var k = 0; k < files.length; k++) if (files[k].path === want) hit = true;
+    selectChgFile(hit ? want : files[0].path);
+  }
+  function selectChgFile(p) {
+    if (!chgData || !chgData.files) return;
+    chgSel = p;
+    var rows = chgFilesEl.children;
+    for (var i = 0; i < rows.length; i++) (rows[i] as HTMLElement).classList.toggle('sel', rows[i].getAttribute('data-p') === p);
+    var f = null;
+    for (var k = 0; k < chgData.files.length; k++) if (chgData.files[k].path === p) f = chgData.files[k];
+    chgDiffEl.innerHTML = '';
+    if (!f) return;
+    var head = el('div', 'chg-dhead');
+    head.appendChild(el('span', 'chg-dpath', f.rel));
+    if (f.preexisting) head.appendChild(el('span', 'chg-dpre', L.chgPreexisting));
+    var hc = el('span', 'chg-c');
+    if (f.adds) hc.appendChild(el('span', 'chg-a', '+' + f.adds));
+    if (f.dels) hc.appendChild(el('span', 'chg-x', '-' + f.dels));
+    head.appendChild(hc);
+    // 页内动作（顶4）：原生 diff / 还原——两个能力都复用 QuickPick 那条链路，不另写一套。
+    // 显不显示由宿主算好的资格决定（canDiff/canRevert），webview 不自己判
+    if (f.canDiff) {
+      var bd = el('button', 'chg-act', L.chgPageNative);
+      bd.onclick = function () { vpost({ type: 'changesNativeDiff', path: f.path }); };
+      head.appendChild(bd);
+    }
+    if (f.canRevert) {
+      var br = el('button', 'chg-act chg-act-danger', L.chgActRevert);
+      br.onclick = function () { vpost({ type: 'changesRevert', path: f.path }); };
+      head.appendChild(br);
+    }
+    chgDiffEl.appendChild(head);
+    renderDiffInto(chgDiffEl, f);
+  }
+  /** 单侧行：行号 + 代码（长行不裁：由这一格自己的横向滚动条承接） */
+  function chgSide(cell, kind) {
+    var side = el('div', 'chg-side' + (cell ? ' ' + kind : ''));
+    side.appendChild(el('span', 'chg-ln', cell ? String(cell.no) : ''));
+    side.appendChild(el('span', 'chg-code', cell ? String(cell.text) : ''));
+    return side;
+  }
+  /** 并排渲染：宿主已把每个文件的 diff 剥成 hunk-only，行配对/行号由纯逻辑叶
+   *  parseUnifiedDiff 算好（domain/diffView.ts，有裸跑用例），这里只做 DiffRow → DOM。
+   *
+   *  滚动模型对齐 VS Code（2026-11-05 用户实测口径「vsc 有两个横向滚动条，一个动另一个也跟着动」）：
+   *  左右各一格独立滚动（各有一条自己的横向滚动条，长行只撑开自己那格，另一侧不会跑出屏幕），
+   *  拖动任一格时双向同步 scrollTop/scrollLeft。行高等高靠同一个 line-height + 单行 pre 保证。 */
+  function renderDiffInto(host, file) {
+    if (file.note) { host.appendChild(el('div', 'chg-empty', file.note)); return; }
+    if (!file.diff) { host.appendChild(el('div', 'chg-empty', L.chgPageNoDiff)); return; }
+    var rows = parseUnifiedDiff(String(file.diff));
+    if (!rows.length) { host.appendChild(el('div', 'chg-empty', L.chgPageNoDiff)); return; }
+    var panes = el('div', 'chg-panes');
+    var left = el('div', 'chg-pane');
+    var right = el('div', 'chg-pane');
+    panes.appendChild(left);
+    panes.appendChild(right);
+    var fragL = document.createDocumentFragment();
+    var fragR = document.createDocumentFragment();
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.kind === 'hunk') {
+        // hunk 头两格各一份（等高才能对齐行；只画一份另一侧就会整体错行）
+        fragL.appendChild(el('div', 'chg-hunk', r.text));
+        fragR.appendChild(el('div', 'chg-hunk', r.text));
+        continue;
+      }
+      fragL.appendChild(chgSide(r.left, r.changed ? 'del' : 'ctx'));
+      fragR.appendChild(chgSide(r.right, r.changed ? 'ins' : 'ctx'));
+    }
+    left.appendChild(fragL);
+    right.appendChild(fragR);
+    // 双向滚动同步：谁被拖动谁是主，另一格跟到同位置（赋同值不会重触发自己的 scroll）
+    var syncing = false;
+    function link(from, to) {
+      from.addEventListener('scroll', function () {
+        if (syncing) return;
+        syncing = true;
+        to.scrollTop = from.scrollTop;
+        to.scrollLeft = from.scrollLeft;
+        syncing = false;
+      }, { passive: true });
+    }
+    link(left, right);
+    link(right, left);
+    host.appendChild(panes);
   }
   // 毫秒 → 紧凑时长（42s / 1m23s / 1h2m）；供 Working 实时计数与本轮耗时显示共用
   function fmtDur(ms) {
@@ -1175,6 +1412,141 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 「临时(未保存)」已随 ephemeral 判死退役（审计红线：一切会话都落盘，2026-09-22）
     return base || L.startingSession;
   }
+  // ── 上下文用量弹层（2026-11-05 用户工单）──
+  // 分段颜色/顺序/文案全在这里：宿主只给 key + token 数（+percent），不跨边界传颜色文案。
+  // other 是估算与真值的差额（tokenizer/缓存），单列不藏。
+  var CP_SEGS = [
+    { key: 'prompt', color: '#7c6cf5', label: 'ctxSegPrompt' },
+    { key: 'tools', color: '#2f9e6e', label: 'ctxSegTools' },
+    { key: 'messages', color: '#e8912d', label: 'ctxSegMessages' },
+    { key: 'mcp', color: '#9333ea', label: 'ctxSegMcp' },
+    { key: 'skills', color: '#e0559a', label: 'ctxSegSkills' },
+    { key: 'project', color: '#3b82f6', label: 'ctxSegProject' },
+    { key: 'other', color: '#94a3b8', label: 'ctxSegOther' }
+  ];
+  function fmtTok(n) {
+    if (n === null || n === undefined) return L.ctxNoData;
+    if (n >= 1000000) return (Math.round(n / 100000) / 10) + 'M';
+    if (n >= 1000) return (Math.round(n / 100) / 10) + 'K';
+    return String(Math.round(n));
+  }
+  function cpSegOf(m, key) {
+    var list = (m && m.segments) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  }
+  /** 弹层渲染（2026-11-05 第二版：百分比分母改成**压缩预算**）。
+   *  budget = 压缩点（window - reserveTokens），满宽就是「压到这里就自动压缩」。
+   *  拖动滑块时用 budgetOverride 局部重算（不等宿主回包），所以全部数字会一起动——
+   *  用户的原始诉求就是这样：拖阈值，上面全变（窗口口径下它们数学上不可能变）。 */
+  function renderCtxDetail(m, budgetOverride?: number) {
+    ctxDetail = m;
+    var win = m.window || 0;
+    var budget = budgetOverride || m.budget || win;
+    var p = budget > 0 && m.used !== null && m.used !== undefined ? (m.used / budget) * 100 : null;
+    cpPctEl.textContent = p === null ? L.ctxNoData : (Math.round(p * 10) / 10) + '%';
+    cpPctEl.classList.toggle('hot', p !== null && p >= 100);
+    // 页脚圆环用同一份数据重画：用户实测「弹层 19.8% / 页脚 19.6%」——两处各自采样各的时刻
+    // 必然差一截。ctxDetail 是真值帧，圆环跟着它走（拖阈值时也走这条，所以零延迟）。
+    if (p !== null) paintUsage(p, lastUsageCost);
+    cpUsedEl.textContent = m.used === null || m.used === undefined || !budget ? '' : L.ctxUsed + ' ' + fmtTok(m.used) + '/' + fmtTok(budget);
+    cpUsedEl.title = win ? L.ctxWindowLabel + ' ' + fmtTok(win) : '';
+    // 分段条：满宽 = 压缩预算（不是窗口），这样条子越满 = 越接近自动压缩
+    var bar = '';
+    if (budget > 0) {
+      for (var i = 0; i < CP_SEGS.length; i++) {
+        var s = cpSegOf(m, CP_SEGS[i].key);
+        if (!s || !s.tokens) continue;
+        var w = (s.tokens / budget) * 100;
+        if (w > 100) w = 100;
+        bar += '<i class="cp-seg" style="width:' + w + '%;background:' + CP_SEGS[i].color + '"></i>';
+      }
+    }
+    cpBarEl.innerHTML = bar;
+    // 图例：只列有量的分类（0 值不占行，避免“一串 0.0%”噪音）；百分比同样按预算算
+    var rows = '';
+    for (var j = 0; j < CP_SEGS.length; j++) {
+      var sg = cpSegOf(m, CP_SEGS[j].key);
+      if (!sg || !sg.tokens) continue;
+      var lv = budget > 0 ? (Math.round((sg.tokens / budget) * 1000) / 10) + '%' : fmtTok(sg.tokens);
+      rows += '<li><i style="background:' + CP_SEGS[j].color + '"></i><span class="cp-lb">' + esc(L[CP_SEGS[j].label]) + '</span><span class="cp-lv">' + lv + '</span></li>';
+    }
+    cpLegendEl.innerHTML = rows;
+    // 阈值滑块（真相 = pi 的 compaction.reserveTokens，webview 这边用“触发点占窗口百分比”表达）
+    cpThLabelEl.textContent = m.compactEnabled ? L.ctxCompactHint : L.ctxCompactOff;
+    var usable = m.compactEnabled && win > 0;
+    cpRangeEl.disabled = !usable;
+    cpTicksEl.classList.toggle('disabled', !usable);
+    if (win > 0 && m.compactAt !== null && m.compactAt !== undefined) {
+      if (!budgetOverride) {
+        renderTicks(); // 刻度标签随窗口/语言刷新（点刻度 = 直接跳档并写盘）
+        // 档位回填：取离当前阈值最近的一档（默认 reserve 16K 时天然落在末档 = 拉满）
+        var stops = ctxStops();
+        var idx = 0;
+        var best = Infinity;
+        for (var si = 0; si < stops.length; si++) {
+          var d = Math.abs(stops[si] - m.compactAt);
+          if (d < best) { best = d; idx = si; }
+        }
+        cpRangeEl.value = String(idx);
+        markActiveTick(idx);
+      }
+      syncThresholdUi(budget);
+    } else {
+      cpThValEl.textContent = L.ctxNoData;
+      cpAtEl.textContent = '';
+    }
+  }
+  /** 三段档位 = 模型窗口三等分，并对齐到好读的整数（≥300K 用 50K 步进）：
+   *  1M 窗口 → 350K / 700K / 1M。末档恒等于窗口本身（「拉满」= 到窗口才压缩）。
+   *  2026-11-05 用户拍板：连续百分比太难拖，三段就够。 */
+  function ctxStops() {
+    // 纯计算在 domain（有独立用例锁行为）：webview 只负责取值/渲染
+    return compactionStops(ctxDetail && ctxDetail.window ? ctxDetail.window : 0);
+  }
+  /** 三段刻度：标签 = 档位 token 数（点一下直接跳档并写盘） */
+  function renderTicks() {
+    var stops = ctxStops();
+    var spans = cpTicksEl.children;
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i] as HTMLElement;
+      var has = i < stops.length;
+      sp.style.display = has ? '' : 'none';
+      sp.textContent = has ? fmtTok(stops[i]) : '';
+      sp.onclick = (function (idx) {
+        return function () { applyStop(idx, true); };
+      })(i);
+    }
+  }
+  /** 切档唯一入口（滑块与刻度共用）：commit=false 只本地重算（拖动中），true 才写库。
+   *  写库走 piCore.setCompactionReserve → 只改本会话设置内存（不碰全局配置文件）。 */
+  function applyStop(idx, commit) {
+    if (!ctxDetail || !ctxDetail.window) return;
+    if (!ctxDetail.compactEnabled) return; // 压缩关着：档位不可用（宿主那边也不会写）
+    var stops = ctxStops();
+    if (idx < 0 || idx >= stops.length) return;
+    var th = stops[idx];
+    if (!commit) { renderCtxDetail(ctxDetail, th); markActiveTick(idx); return; }
+    renderCtxDetail(ctxDetail, th); // 先本地重算，宿主回 ctxDetail 时以真值为准
+    markActiveTick(idx);
+    vpost({ type: 'ctxSetReserve', reserveTokens: Math.round(ctxDetail.window - th) });
+  }
+  /** 当前档高亮（滑块位置 ↦ 下面刻度的选中态） */
+  function markActiveTick(idx) {
+    var spans = cpTicksEl.children;
+    for (var i = 0; i < spans.length; i++) {
+      if (i === idx) spans[i].className = 'on';
+      else spans[i].className = '';
+    }
+  }
+  /** 阈值读数联动：底部「压缩点 X · 预留 Y」+ 顶部「压缩点 N%」（占模型窗口）。 */
+  function syncThresholdUi(th) {
+    var win = ctxDetail && ctxDetail.window ? ctxDetail.window : 0;
+    if (!win || !th) return;
+    var p = Math.max(0, Math.min(100, (th / win) * 100));
+    cpThValEl.textContent = fmtTok(th) + ' · ' + L.ctxReserveLabel + ' ' + fmtTok(win - th);
+    cpAtEl.textContent = L.ctxCompactAt.replace('{p}', String(Math.round(p)));
+  }
   function applyState(m) {
     // 工单24 二期：页脚（模型/思考/用量）随页签视图走，后台直接渲进隐藏视图；
     // 页头会话标题是页面级（只显示活动页签），后台跳过
@@ -1205,13 +1577,42 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
     }
 
-    if (m.stats) {
-      var parts = [];
-      if (m.stats.contextPercent !== null && m.stats.contextPercent !== undefined) parts.push(L.ctx + (Math.round(m.stats.contextPercent * 10) / 10) + '%');
-      if (m.stats.cost) parts.push('$' + Number(m.stats.cost).toFixed(2));
-      usageEl.textContent = parts.join(' · ');
-      usageEl.title = parts.join(' · ');
-    } else { usageEl.textContent = ''; }
+    // 页脚用量：圆圈百分比（2026-11-05 用户指定）——圆环画占比，右侧文字只留成本；
+    // 圆环颜色随占比升档（<70 蓝 / <90 橙 / ≥90 红），与阈值预警同色语言
+    renderUsageRing(m.stats);
+  }
+
+  /** 圆环周长：SVG r=8 → 2πr；dashoffset 按占比推进 */
+  var RING_C = 2 * Math.PI * 8;
+  /** 最近一次已知成本（圆环与弹层共用：拖阈值时圆环也要跟着重画，但成本只在 state 帧里有） */
+  var lastUsageCost = 0;
+  /** 圆环 + 百分比文字的唯一画笔。三条入口都走这里，保证页脚永远只有一个数、一个时刻：
+   *  ① state 帧（renderUsageRing）② 弹层数据到达（renderCtxDetail）③ 拖阈值（本地预算重算） */
+  function paintUsage(p, cost) {
+    if (p === null || p === undefined) {
+      ringFillEl.style.strokeDashoffset = String(RING_C); // 无数据 = 空环
+      usageTxtEl.textContent = '';
+      usageEl.title = L.ctxTitle;
+      return;
+    }
+    var pct = Math.max(0, Math.min(100, p));
+    ringFillEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
+    ringFillEl.style.stroke = pct >= 90 ? '#e05a5a' : pct >= 70 ? '#e8912d' : 'var(--vscode-charts-blue, #3b82f6)';
+    usageTxtEl.textContent = (Math.round(p * 10) / 10) + '%' + (cost ? ' · $' + Number(cost).toFixed(2) : '');
+    usageEl.title = L.ctxTitle + ' ' + (Math.round(p * 10) / 10) + '%';
+  }
+  /** 页脚圆环（state 帧入口）：分母与弹层同一口径（压缩预算 = 窗口 − reserveTokens），
+   *  stats.contextLimit 缺失（老帧/压缩关闭）时退回 pi 原生的窗口百分比。 */
+  function renderUsageRing(stats) {
+    lastUsageCost = stats && stats.cost ? Number(stats.cost) : 0;
+    var budget = stats ? Number(stats.contextLimit || stats.contextWindow || 0) : 0;
+    var p = null;
+    if (stats && stats.contextTokens !== null && stats.contextTokens !== undefined && budget > 0) {
+      p = (Number(stats.contextTokens) / budget) * 100;
+    } else if (stats && stats.contextPercent !== null && stats.contextPercent !== undefined) {
+      p = Number(stats.contextPercent);
+    }
+    paintUsage(p, lastUsageCost);
   }
 
   function handleFiles(files, dt) {
@@ -1468,7 +1869,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (edgeOk && histNav(dir)) { e.preventDefault(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    else if (e.key === 'Escape' && !sgOpen && !e.isComposing) { vpost({ type: 'abort' }); }
+    else if (e.key === 'Escape' && !sgOpen && !e.isComposing) {
+      // 变更页开着时 Esc 先关页（它是覆盖层，底下会话还在）——不关就直接断任务会误伤
+      if (chgPageEl.style.display !== 'none') closeChgPage();
+      else vpost({ type: 'abort' });
+    }
     // isComposing 守门：中文输入法取消候选词也是 Esc，不拦的话打字打到一半就把运行中的任务中断了
     // （2026-09-18 事故：用户没点停止却见“已中断当前任务”）
   }
@@ -1605,6 +2010,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       for (var uq = 0; uq < queuedItems.length; uq++) addQueuedDom(queuedItems[uq]);
       nativeQueuePills = []; renderNativeQueue(); // uiState 不带 followUp 数组，同上取舍
       applyState(m);
+      scheduleCtxQuery(); // 同上：弹层开着时跟真相走
     }
     else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
     else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
@@ -1659,9 +2065,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat((m.files || []).filter(function (f) { return !hasFile(f.path, f.name); })); renderAttach(); }
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
-    else if (m.type === 'state') applyState(m);
+    else if (m.type === 'state') { applyState(m); scheduleCtxQuery(); }
+    else if (m.type === 'ctxDetail') renderCtxDetail(m);
     else if (m.type === 'banner') { banner = m.banner; renderBanner(m.banner); }
-    else if (m.type === 'changesList') { changes = m.files; renderChanges(m.files); }
+    else if (m.type === 'changesList') {
+      changes = m.files; chgData = null; renderChanges(m.files);
+      // 变更页开着时清单变了（新 run / 页外还原）：静默重拉一次，别让页面停在旧数据上
+      if (chgPageEl.style.display !== 'none') vpost({ type: 'changesPageOpen' });
+    }
+    else if (m.type === 'changesPage') { chgData = m; renderChgPage(m); }
     else if (m.type === 'theme') { document.body.setAttribute('data-theme', m.name || 'auto'); }
     else if (m.type === 'tabs') handleTabs(m);
   }
@@ -1670,6 +2082,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (suppressScroll) { suppressScroll = false; return; }
       followingEnd = root.scrollHeight - root.scrollTop - root.clientHeight <= 48;
     }, { passive: true });
+    // 点消息区 = 点到浮层外：收起上下文用量弹层（标准浮层行为；监听挂在 root 上，
+    // 视图销毁即随 DOM 一起走，不往 document 上挂——那会按页签数累加并泄漏）
+    root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; });
     bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
@@ -1678,6 +2093,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       isFollowing: function () { return followingEnd; },
       forceScrollToBottom: function () { suppressScroll = true; root.scrollTop = root.scrollHeight; },
       isBuilt: function () { return built; },
+      /** 变更页开/合（Esc 与页内返回共用；数据刷新由宿主 changesPage 回来时重渲） */
+      hasPage: function () { return chgPageEl.style.display !== 'none'; },
+      closePage: closeChgPage,
+      /** 上下文用量弹层：Esc / 点消息区收起（与变更页同级的浮层语义，弹层优先关） */
+      closeCtxPop: function () { ctxPopEl.style.display = 'none'; },
+      isCtxPopOpen: function () { return ctxPopEl.style.display === 'block'; },
       dispose: function () {
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         if (liveRTimer) { clearTimeout(liveRTimer); liveRTimer = null; }
@@ -1688,6 +2109,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
 
   var views: Record<string, ReturnType<typeof makeSessionView>> = {};
+  // 变更页 Esc 关页（焦点不在输入框时的兑底：点了清单/diff 后焦点不在 composer）
+  document.addEventListener('keydown', function (e: KeyboardEvent) {
+    if (e.key !== 'Escape' || e.isComposing || activeTabId === null) return;
+    var v = views[activeTabId];
+    // Esc 先关浮层（上下文用量弹层），没有浮层才关整页
+    if (v && v.isCtxPopOpen()) { v.closeCtxPop(); return; }
+    if (v && v.hasPage()) v.closePage();
+  });
   function viewFor(tid: string) { return views[tid] || (views[tid] = makeSessionView(tid)); }
   /** codeCtx 是页面级数据：变更时循环各视图重渲 chip（三期⑥） */
   function renderCodeChipAll() { for (var vid in views) views[vid].renderCodeChip(); }

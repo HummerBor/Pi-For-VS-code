@@ -149,10 +149,28 @@ export interface WvShowChangesMsg {
 export interface WvChangesDismissMsg {
   type: "changesDismiss";
 }
+/** 变更页入口（2026-11-05）：打开面板内变更页，宿主算好每个文件的 hunk 后回发 changesPage */
+export interface WvChangesPageMsg {
+  type: "changesPageOpen";
+}
 /** 工单十六：queuebar 条目「取回」→ 文本回编辑框（pi 原生 dequeue 语义的单条版） */
 export interface WvQueuedRetrieveMsg {
   type: "queuedRetrieve";
   qid: string;
+}
+/* ── 上下文用量弹层（2026-11-05 用户工单：对齐截图「上下文用量」面板）─────────────
+ * 数据全在宿主：总 token/窗口走 pi 原生 getSessionStats().contextUsage，分类明细由
+ * piCore 按 system 消息的分节结构自己拆（见 piCore.collectContextDetail 头注释），
+ * 压缩阈值走 settingsManager.getCompactionSettings（pi 原生 getter）。webview 只渲染。 */
+/** 打开/刷新上下文用量弹层（webview 点页脚百分比） */
+export interface WvCtxQueryMsg {
+  type: "ctxQuery";
+}
+/** 拖动压缩阈值滑块：宿主写 pi settings.json 的 compaction.reserveTokens（pi 自己的
+ *  FileSettingsStorage 锁），回 ctxDetail 刷新 */
+export interface WvCtxSetReserveMsg {
+  type: "ctxSetReserve";
+  reserveTokens: number;
 }
 /** webview 未捕获异常/未处理 rejection 上报（2026-10-19）：VS Code 的 webview 控制台要走
  *  命令面板 Developer: Open Webview Developer Tools（不是 F12），不能让用户为查 bug 开调试器。
@@ -203,7 +221,12 @@ export type WebviewToHost =
   | WvCompactSessionMsg
   | WvShowChangesMsg
   | WvChangesDismissMsg
+  | WvChangesPageMsg
+  | WvChangesNativeDiffMsg
+  | WvChangesRevertMsg
   | WvQueuedRetrieveMsg
+  | WvCtxQueryMsg
+  | WvCtxSetReserveMsg
   | WvErrorMsg
   | WvTabSwitchMsg
   | WvTabNewMsg
@@ -446,7 +469,17 @@ export interface StateMsg {
   thinkingLevel?: number | null;
   sessionFile?: string | null;
   sessionName?: string | null;
-  stats?: { contextPercent?: number | null; cost?: number } | null;
+  /** 页脚用量（2026-11-05 预算口径）：contextPercent 是 pi 原生的「占模型窗口」百分比，
+   *  contextTokens/contextWindow/contextLimit 供 webview 换算「占压缩预算」百分比——
+   *  自动压缩就在 limit 处触发，页脚圆环与弹层必须同一分母，否则两个数永远对不上。
+   *  limit = contextWindow - compaction.reserveTokens（压缩关闭时等于 window）。 */
+  stats?: {
+    contextPercent?: number | null;
+    cost?: number;
+    contextTokens?: number | null;
+    contextWindow?: number | null;
+    contextLimit?: number | null;
+  } | null;
 }
 export interface ThemeMsg {
   type: "theme";
@@ -505,6 +538,39 @@ export interface BannerMsg {
   /** null = 收起横幅 */
   banner: BannerPayload | null;
 }
+/** 上下文用量弹层数据（2026-11-05）：一条消息带全部字段，webview 原子渲染。
+ *  tokens 口径：used/window/segments.tokens 均为 token 数；percent 由宿主算好（避免两处
+ *  四舍五入不一致）。used 缺失（压缩后首个 LLM 响应之前 pi 也返回 null）时 webview 显示
+ *  「—」，segments 退回未缩放的估算值。 */
+export interface CtxSegment {
+  /** prompt=系统提示词 / project=项目上下文 / tools=工具定义 / mcp=连接器及MCP /
+   *  messages=对话消息 / skills=技能 / other=其他（估算与真值的差额） */
+  key: "prompt" | "project" | "tools" | "mcp" | "messages" | "skills" | "other";
+  tokens: number;
+  /** 相对 contextWindow 的百分比（窗口未知时 null） */
+  percent: number | null;
+}
+export interface CtxDetailMsg {
+  type: "ctxDetail";
+  /** 主占比：相对于**压缩预算**（budget）而非模型窗口——拖阈值滑块时全部数字一起变，
+   *  这正是用户要看的东西（「离自动压缩还有多远」）。压缩关闭时 budget = window */
+  percent: number | null;
+  used: number | null;
+  /** 模型窗口（原值，不变） */
+  window: number | null;
+  /** 百分比分母：压缩启用时 = compactAt，否则 = window */
+  budget: number | null;
+  /** 自动压缩触发点（window - reserveTokens，pi 的 shouldCompact 判据） */
+  compactAt: number | null;
+  reserveTokens: number;
+  keepRecentTokens: number;
+  compactEnabled: boolean;
+  /** 分类明细（已含 other；顺序由宿主固定）。tokens 已按真值总量缩放（见 piCore.collectContextDetail
+   *  的 scale 注释）——分段之和 ≈ used，不是 chars/3.5 的原始估算值 */
+  segments: CtxSegment[];
+  /** 缩放前的估算合计（诊断用：only 用于算 scale，不必展示） */
+  estimated: number;
+}
 /** 工单十八：切页签/真相重拉的原子快照——postUiState 原先连发 render/liveSync/busy/mode/
  *  banner/queuedClear/queuedAdd 七条消息，webview 各区域各自更新，中间态混搭（消息区 B、
  *  排队条/Working 还是 A）被切页签空分支漏发固化成永久态（用户实测「两个 DOM 结构」/串显）。
@@ -532,7 +598,17 @@ export interface UiStateMsg {
   thinkingLevel?: number | null;
   sessionFile?: string | null;
   sessionName?: string | null;
-  stats?: { contextPercent?: number | null; cost?: number } | null;
+  /** 页脚用量（2026-11-05 预算口径）：contextPercent 是 pi 原生的「占模型窗口」百分比，
+   *  contextTokens/contextWindow/contextLimit 供 webview 换算「占压缩预算」百分比——
+   *  自动压缩就在 limit 处触发，页脚圆环与弹层必须同一分母，否则两个数永远对不上。
+   *  limit = contextWindow - compaction.reserveTokens（压缩关闭时等于 window）。 */
+  stats?: {
+    contextPercent?: number | null;
+    cost?: number;
+    contextTokens?: number | null;
+    contextWindow?: number | null;
+    contextLimit?: number | null;
+  } | null;
   /** B 刀（2026-11-04）：**启动期占位帧**标记——页脚/历史来自快路径缓存或模型记忆，
    *  pi 内核（services/modelRuntime）还没 init 完，model/标题都还不是真值。
    *  webview 见 true 不收启动秒表、不清「pi 后台启动中…」提示（真值帧才收）。
@@ -550,6 +626,42 @@ export interface ChangesFileInfo {
 export interface ChangesListMsg {
   type: "changesList";
   files: ChangesFileInfo[];
+}
+/** 变更页（2026-11-05）：单个文件的对比数据。**diff 恒为 hunk-only**（首个 @@ 之后，
+ *  头部 `diff --git`/`index`/`---`/`+++` 已在宿主侧剥掉）——git 与 patch 逆向两路
+ *  头部形态不同，剥干净后 webview 只认一种文法，不自造 diff 算法（hunk 由 pi
+ *  generateUnifiedPatch / git diff 产出）。note 非空 = 无可对比内容，宿主组装文案。 */
+export interface ChangesDiffFile {
+  /** 绝对路径（选中/动作寻址用，与 ChangesFileInfo.path 对齐） */
+  path: string;
+  /** 展示用相对路径（正斜杠；工作区外回退绝对路径） */
+  rel: string;
+  adds: number;
+  dels: number;
+  diff: string;
+  note?: string;
+  /** 可开原生 diff / 可还原（裁决 11 的资格判定在宿主算，webview 只决定显不显示按钮） */
+  canDiff: boolean;
+  canRevert: boolean;
+  /** 运行前已 dirty（仅提示，不影响动作） */
+  preexisting?: boolean;
+}
+/** 变更页单文件动作：在 VS Code 中打开原生 diff（tracked 走 HEAD，其余走 patch 逆向基线） */
+export interface WvChangesNativeDiffMsg {
+  type: "changesNativeDiff";
+  path: string;
+}
+/** 变更页单文件还原（破坏性：宿主侧模态二次确认 + 全部还原守卫；资格不足只报不做） */
+export interface WvChangesRevertMsg {
+  type: "changesRevert";
+  path: string;
+}
+/** 宿主 → webview：变更页全量数据（页面级，一次发齐；切文件是 webview 内部选择，不再回宿主） */
+export interface ChangesPageMsg {
+  type: "changesPage";
+  files: ChangesDiffFile[];
+  totalAdds: number;
+  totalDels: number;
 }
 /* ── 凭证配置页（2026-11-05）── */
 /** 单个服务商在配置页的展示/状态：kind = auth.json 里的凭证类型（api_key / oauth），
@@ -627,10 +739,12 @@ export type HostToWebview =
   | PanelInfoMsg
   | BannerMsg
   | ChangesListMsg
+  | ChangesPageMsg
   | AuthStateMsg
   | AuthPanelOpenMsg
   | TabsMsg
   | LiveSyncMsg
+  | CtxDetailMsg
   | UiStateMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
@@ -655,7 +769,10 @@ export interface GetStateResult {
 }
 /** get_session_stats 响应：token 用量与花费 */
 export interface GetSessionStatsResult {
-  contextUsage?: { percent?: number | null } | null;
+  /** 上下文用量（2026-11-05）：pi 原生 ContextUsage（extensions/types.d.ts:216）——tokens
+   *  在压缩后首个 LLM 响应之前为 null，percent 同源派生，contextWindow 是模型窗口。
+   *  上下文用量弹层的总量真值就取这三个字段，别处不要再自算一套 */
+  contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
   cost?: number;
   [k: string]: unknown;
 }

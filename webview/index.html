@@ -66,6 +66,41 @@
         <span id="usage"></span>
         <span id="ver">v{{version}}</span>
       </div>
+      <!-- 上下文用量弹层：页脚百分比点击展开。随页签克隆（用量是会话域信息），
+           数据全由宿主 ctxDetail 一条消息给全，这里只负责画 -->
+      <div id="ctxpop" style="display:none">
+        <div class="cp-head">
+          <span class="cp-title">{{t:ctxTitle}}</span>
+          <span class="cp-close" title="{{t:ctxClose}}">✕</span>
+        </div>
+        <div class="cp-sum"><span class="cp-pct">—</span><span class="cp-used"></span><span class="cp-at"></span></div>
+        <div class="cp-bar"></div>
+        <ul class="cp-legend"></ul>
+        <div class="cp-foot">
+          <div class="cp-throw"><span class="cp-thlabel">{{t:ctxCompactHint}}</span><span class="cp-thval">—</span></div>
+          <!-- 三段档位（2026-11-05 用户拍板）：滑块只能停在这三档上，下面的刻度可点 -->
+          <input type="range" class="cp-range" min="0" max="2" step="1" value="2">
+          <div class="cp-ticks"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <!-- 变更页（2026-11-05）：
+           这一层是页面级覆盖层（不进页签外），随 session-view 克隆 → 每个页签各看各的本轮改动。
+           左清单带 +N/-M 与顶部汇总，右栏是该文件的并排 diff（宿主已算好 hunk，前端只渲染）。
+           默认 display:none；入口是改动条上的「查看改动」。 -->
+      <div id="chgpage" style="display:none">
+        <div class="chg-head">
+          <span class="chg-back" id="chg-back"></span>
+          <span class="chg-title" id="chg-title">{{t:chgPageTitle}}</span>
+          <span class="chg-tot" id="chg-tot"></span>
+        </div>
+        <div class="chg-body">
+          <div class="chg-files" id="chg-files"></div>
+          <!-- 可拖分隔条（2026-11-05 用户：这块不能拉动吗）：拖动改左清单宽度，
+               几何限制在 main.ts 里（140px ~ 页面宽-160px），只改内联 width，不落盘 -->
+          <div class="chg-split" id="chg-split"></div>
+          <div class="chg-diff" id="chg-diff"></div>
+        </div>
+      </div>
     </div>
   </div>
   <!-- 凭证配置页（2026-11-05）：页面级覆盖层，与页签无关（不进 session-view 克隆）。

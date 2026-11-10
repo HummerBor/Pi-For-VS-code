@@ -2,8 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
 import * as vscode from "vscode";
-import type { ChangesFileInfo, HostToWebviewTagged, ToolChangedFile } from "../core/protocol";
+import type { ChangesDiffFile, ChangesFileInfo, HostToWebviewTagged, ToolChangedFile } from "../core/protocol";
 import { reverseApplyPatch } from "../domain/patchRevert";
+import { loadPiSdk } from "../pi/piSdk";
 
 /**
  * ChangesController —— 工单七「本次改动」宿主侧状态机（刀 C 第一簇自 panel.ts 搬出）。
@@ -46,12 +47,15 @@ export class ChangesController {
       dismissed: boolean;
       startP: Promise<Map<string, string> | null> | null;
       lastStateFile: string | null;
+      /** 变更页数据缓存（2026-11-05）：清单/detail 一变就作废——hunk 计算按文件 spawn git/读磁盘，
+       *  每次开页重算会白白重复一遍（同一轮改动反复看是常态） */
+      page: { files: ChangesDiffFile[]; totalAdds: number; totalDels: number } | null;
     }
   >();
   private changesOf(tabId: string) {
     let s = this.changesTab.get(tabId);
     if (!s) {
-      s = { files: [], detail: new Map(), dismissed: false, startP: null, lastStateFile: null };
+      s = { files: [], detail: new Map(), dismissed: false, startP: null, lastStateFile: null, page: null };
       this.changesTab.set(tabId, s);
     }
     return s;
@@ -73,6 +77,7 @@ export class ChangesController {
       if (s.files.length) {
         s.files = [];
         s.detail.clear();
+        s.page = null;
         this.postChangesList(tabId);
       }
     }
@@ -147,6 +152,7 @@ export class ChangesController {
     };
     const norm = (p: string): string => path.normalize(p);
     s.detail.clear();
+    s.page = null; // 新一轮清单 → 变更页缓存作废
     const list: ChangesFileInfo[] = [];
     // 1) 工具命中（裁决 11②：还原只对工具清单命中文件提供；git-only 仅展示）
     for (const f of files) {
@@ -273,6 +279,26 @@ export class ChangesController {
     );
   }
 
+  /** 未跟踪/仅工具命中文件的「本轮改动前」内容（patch 链逆序逆向，裁决 11③）。
+   *  失败语义由调用方定：原生 diff 提供者给占位文案、变更页给 note——守卫同源不复制，
+   *  两条路径的逆向行为永远一致。 */
+  private prerunContent(
+    abs: string,
+    d: { patches: string[] }
+  ): { ok: true; content: string } | { ok: false; why: string } {
+    try {
+      let content = fs.readFileSync(abs, "utf8");
+      for (let i = d.patches.length - 1; i >= 0; i--) {
+        const r = reverseApplyPatch(content, d.patches[i]);
+        if (!r.ok || r.content === null) return { ok: false, why: r.reason ?? "" };
+        content = r.content;
+      }
+      return { ok: true, content };
+    } catch (err: any) {
+      return { ok: false, why: String(err?.message ?? err) };
+    }
+  }
+
   /** vscode.diff 左侧：HEAD 版本只读内容（TextDocumentContentProvider 回调） */
   async headContent(uri: vscode.Uri): Promise<string> {
     return (await this.tryHeadContent(uri)) ?? this.L.chgHeadFail;
@@ -296,17 +322,8 @@ export class ChangesController {
       const abs = q.slice("prerun:".length);
       const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(abs));
       if (!d || !d.patches.length) return null; // 不持有（多实例分发：问下一家）
-      try {
-        let content = fs.readFileSync(abs, "utf8");
-        for (let i = d.patches.length - 1; i >= 0; i--) {
-          const r = reverseApplyPatch(content, d.patches[i]);
-          if (!r.ok || r.content === null) return this.L.chgHeadFail;
-          content = r.content;
-        }
-        return content;
-      } catch {
-        return this.L.chgHeadFail;
-      }
+      const pre = this.prerunContent(abs, d);
+      return pre.ok ? pre.content : this.L.chgHeadFail;
     }
     const rel = q;
     if (!root) return this.L.chgHeadFail;
@@ -327,6 +344,159 @@ export class ChangesController {
       path.basename(abs) + "  (HEAD ↔ " + this.L.chgWorking + ")",
       { preview: true }
     );
+  }
+
+  // ── 变更页（2026-11-05 用户拍板 A 方案：左清单+右并排 diff，截图为形）──
+  /** 打开变更页：算好逐文件 hunk 后一次性回发。清单不变时复用缓存
+   *  （同一个改动反复看是常态，重算就得多 spawn N 次 git / 重读 N 个文件） */
+  async openPage(): Promise<void> {
+    const tabId = this.activeTabId;
+    const s = this.changesOf(tabId);
+    if (!s.files.length) {
+      this.post({ type: "notice", text: this.L.chgNone });
+      return;
+    }
+    if (!s.page) s.page = await this.buildPage(s.files);
+    const page = s.page;
+    if (!page) return; // await 期间被新 run/还原作废：不发过期数据
+    this.post({ type: "changesPage", files: page.files, totalAdds: page.totalAdds, totalDels: page.totalDels }, tabId);
+  }
+
+  private async buildPage(
+    files: ChangesFileInfo[]
+  ): Promise<{ files: ChangesDiffFile[]; totalAdds: number; totalDels: number }> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+    const out: ChangesDiffFile[] = [];
+    // 逐文件串行：一个 run 的改动清单通常几十个以内；并发 spawn git 在 Windows 上反而
+    // 抢进程创建锁（且本函数只在开页那一刻跑一次，缓存后不重复）
+    for (const f of files) out.push(await this.fileDiff(f, root));
+    let totalAdds = 0;
+    let totalDels = 0;
+    for (const f of out) {
+      totalAdds += f.adds;
+      totalDels += f.dels;
+    }
+    return { files: out, totalAdds, totalDels };
+  }
+
+  /** 单文件 diff：路由与 openChangesDiff 同源（tracked 走 HEAD，其余走 patch 逆向），
+   *  但产物是 hunk 文本而不是开编辑器——数据面全在宿主，webview 不做任何 git/磁盘访问 */
+  private async fileDiff(f: ChangesFileInfo, root: string): Promise<ChangesDiffFile> {
+    const rel = this.relOf(root, f.path);
+    const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(f.path));
+    let diff = "";
+    let note = "";
+    if (d?.canGit && d.inHead && root) {
+      // tracked：git 自己算（不读文件，删除文件也能对比；--no-ext-diff 防用户配的外部 diff 输出脏）
+      const raw = (await this.git(["diff", "HEAD", "--no-color", "--no-ext-diff", "--", rel], root)) ?? "";
+      if (/^Binary files /m.test(raw)) note = this.L.chgPageBinary;
+      diff = this.hunkOnly(raw);
+      if (!diff && !note) note = this.L.chgPageNoDiff;
+    } else {
+      // 未跟踪/仅工具命中：基线 = patch 链逆向（无 patch 的未跟踪文件基线是空，全文件算新增）
+      let oldText = "";
+      if (d && d.patches.length) {
+        const pre = this.prerunContent(f.path, d);
+        if (pre.ok) oldText = pre.content;
+        else note = this.L.chgPageNoBase;
+      }
+      if (!note) {
+        const cur = this.readText(f.path);
+        if (!cur.ok) note = cur.binary ? this.L.chgPageBinary : this.L.chgPageGone;
+        else diff = this.hunkOnly(await this.unifiedPatch(rel, oldText, cur.text));
+      }
+    }
+    const { adds, dels } = this.countDiff(diff);
+    return {
+      path: f.path,
+      rel,
+      adds,
+      dels,
+      diff: note ? "" : diff,
+      note: note || undefined,
+      // 资格判定复用 QuickPick 那两个判据（单一真相，不另写一份）：
+      // canDiff = 有可取的基线；canRevert = 裁决 11 的还原资格（仅工具命中）
+      canDiff: !!d && ((d.canGit && d.inHead) || (d.source === "tool" && d.patches.length > 0)),
+      canRevert: !!d && this.revertable(d),
+      preexisting: d?.preexisting || undefined,
+    };
+  }
+
+  /** 工作区内 → 相对路径（正斜杠）；工作区外/无工作区 → 绝对路径原样（不造 ../ 垃圾显示） */
+  private relOf(root: string, abs: string): string {
+    if (!root) return abs;
+    const r = path.relative(root, abs);
+    return !r || r.startsWith("..") ? abs.replace(/\\/g, "/") : r.replace(/\\/g, "/");
+  }
+
+  /** 读文本；二进制（含 NUL）与不存在分开报（二进制有内容但不能渲染，删除连内容都没了——
+   *  两种 note 文案不同，混成一种就是骗用户） */
+  private readText(abs: string): { ok: true; text: string } | { ok: false; binary: boolean } {
+    try {
+      const buf = fs.readFileSync(abs);
+      if (buf.includes(0)) return { ok: false, binary: true };
+      return { ok: true, text: buf.toString("utf8") };
+    } catch {
+      return { ok: false, binary: false };
+    }
+  }
+
+  /** hunk 计算复用 pi 公开 API（dist/index.d.ts:25 导出 generateUnifiedPatch）——
+   *  壳原则：能蹭 pi 的算法就蹭，不自写 Myers；pi 真不可用才退化到「整文件替换」单 hunk
+   *  （丢失精细化但不让功能整块挂掉，且行数统计仍然对得上） */
+  private async unifiedPatch(rel: string, oldText: string, newText: string): Promise<string> {
+    try {
+      const sdk = await loadPiSdk();
+      const fn = sdk?.generateUnifiedPatch;
+      if (typeof fn === "function") return this.hunkOnly(String(fn(rel, oldText, newText) ?? ""));
+    } catch {
+      /* 退化路径见下 */
+    }
+    if (oldText === newText) return "";
+    const cut = (s: string): string[] => {
+      const ls = s.split("\n");
+      if (ls.length && ls[ls.length - 1] === "") ls.pop();
+      return ls;
+    };
+    const ol = cut(oldText);
+    const nl = cut(newText);
+    return ["@@ -1," + ol.length + " +1," + nl.length + " @@", ...ol.map((l) => "-" + l), ...nl.map((l) => "+" + l)].join("\n");
+  }
+
+  /** 只留 hunk：从首个 @@ 行起。git 与 pi 的头部形态不同（diff --git/index/---/+++），
+   *  剥干净后 webview 只认一种文法，渲染侧不写两套解析 */
+  private hunkOnly(text: string): string {
+    const lines = String(text ?? "").split("\n");
+    let i = 0;
+    while (i < lines.length && !lines[i].startsWith("@@")) i++;
+    return i >= lines.length ? "" : lines.slice(i).join("\n");
+  }
+
+  /** +N/-M 从 hunk 文本数（头部已剥，不会把 +++/--- 算进去；未跟踪文件用不上 git numstat） */
+  private countDiff(diff: string): { adds: number; dels: number } {
+    let adds = 0;
+    let dels = 0;
+    for (const line of diff.split("\n")) {
+      if (line.startsWith("+")) adds++;
+      else if (line.startsWith("-")) dels++;
+    }
+    return { adds, dels };
+  }
+
+  /** 变更页「在 VS Code 中对比」：与 QuickPick 同一条路由（canDiff 已在页面算好，这里只转发） */
+  async openNativeDiff(abs: string): Promise<void> {
+    await this.openChangesDiff(abs);
+  }
+
+  /** 变更页「还原」：资格不足只报不做（与 QuickPick 同口径）；revertFile 自带模态确认与
+   *  全部守卫（HEAD checkout / patch 逆向任一行不符即拒打）——webview 无法绕过 */
+  async revertByPath(abs: string): Promise<void> {
+    const d = this.changesOf(this.activeTabId).detail.get(this.hunkKey(abs));
+    if (!d || !this.revertable(d)) {
+      this.post({ type: "notice", text: this.L.chgNoAction });
+      return;
+    }
+    await this.revertFile(abs, d);
   }
 
   /** 单文件还原（破坏性操作，deleteSession 同规格：模态二次确认，失败只报不硬打） */
@@ -372,6 +542,7 @@ export class ChangesController {
       const s = this.changesOf(this.activeTabId);
       s.files = s.files.filter((f) => f.path !== abs);
       s.detail.delete(abs);
+      s.page = null; // 还原后 diff 已变，缓存作废（页内动作后可原地重发）
       this.postChangesList(this.activeTabId);
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.chgRevertFail + (err?.message ?? err) });

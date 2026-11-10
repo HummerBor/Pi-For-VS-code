@@ -513,6 +513,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       startError: (err) => this.onStartError(err),
       showChanges: () => this.changes.showChangesFlow(),
       dismissChanges: async () => this.changes.dismissActive(),
+      openChangesPage: () => this.changes.openPage(),
+      openChangesNativeDiff: (path) => this.changes.openNativeDiff(path),
+      revertChange: (path) => this.changes.revertByPath(path),
       // 凭证配置页（2026-11-05）：读写 auth.json 的逻辑全在 piSetup，面板只转发
       authOpen: () => this.piSetup.postAuthState(),
       authSave: (provider, key) => {

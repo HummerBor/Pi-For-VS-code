@@ -145,3 +145,41 @@
   3. 新协议 `forkTo{ index }` 三处同步（发送方 / 接收方 / protocol.ts）；
   4. 复用 `panel.forkToMessage()` 的既有链路，仅去掉 QuickPick 分支。
 - **注**：DIRECTOR.md 当前是只读（r--r--r--，工单区归总监），故本需求记在此处，待总监立单/裁决。
+
+## 变更页（2026-11-05 用户拍板 A 方案：截图那种「左清单 + 右并排 diff」）
+
+- **来源**：用户贴了别的产品的「变更」页截图（左文件清单每行 `+N -M`、顶部合计相加，右侧并排逐行红绿），
+  问「这种也相加」→ 选 A = 面板内自建变更页。原「查看改动」只是 改动条 → QuickPick → VS Code 原生 diff。
+- **壳原则三处查**：① pi 公开 API `dist/index.d.ts:25` 导出 `generateUnifiedPatch`（hunk 直接复用，不自写
+  Myers）；② pi TUI 的 `renderDiff` 是 ANSI 终端组件，webview 用不上（只作语义参照）；③ 无现成 diff 面板扩展，
+  面板内自绘属壳的合理自研（VS Code 原生 diff 是编辑器，不是面板）。
+- **落地面**：
+  - 宿主 `src/vscode/changes.ts` 新增 `openPage/buildPage/fileDiff`：逐文件产出 **hunk-only** diff
+    （tracked 走 `git diff HEAD -- rel`，其余走 patch 逆向 + pi `generateUnifiedPatch`；pi 不可用退化为
+    「整文件替换」单 hunk）+ `+N/-M` 与合计，按页签缓存、清单/还原一变作废。二进制/无基线/已删除给 `note`
+    文案，不硬猜（还原守卫的 `prerunContent` 与原生 diff 提供者共用一处，两路逆向行为永不分裂）。
+  - 协议两消息（`changesPageOpen` / `changesPage`）+ piCore 的 `ui.openChangesPage` 委托，三处同步。
+  - webview：`#chgpage` 页级覆盖层（随 session-view 克隆 = per-tab）、左清单 + 顶部合计、右并排渲染；
+    行配对/行号抽成纯逻辑叶 `src/domain/diffView.ts`（`parseUnifiedDiff`，零 import）。改动条主按钮进变更页，
+    次按钮「清单」保留原 QuickPick（还原/原生 diff 的入口没丢）。
+- **验证**：`npm run compile` 绿；新增 `test:diffview`（7 例）与 `test:changespage`（7 例，桩 vscode + 临时
+  git 仓库真跑：tracked/未跟踪 patch/汇总/二进制/已删除/缓存六路）；存量 8 支回归全绿（含此前预存红的
+  `test:revert`）；无头 Chrome 截图 `scripts/probe/make-changes-preview.mjs` 生成 dist/webview/preview-chgpage.html
+  实测三态（并排对齐/切换文件/note 占位）。
+- **滚动模型（2026-11-05 用户实测两追刀）**：① 省略号裁断把行尾吃掉 → 先改成单一滚动层 + `--chg-col`
+  撑宽两列；② 用户随后指出「vsc 有两个横向滚动条，一个动另一个也跟着动」→ **推倒重来对齐 VS Code 原版**：
+  左右各一格（`.chg-pane`）各自 `overflow:auto`、各有一条自己的横滚条，长行只撑开自己那格，另一侧不会
+  跑出屏幕；两格 `scrollTop/scrollLeft` 双向同步（scroll 监听，赋值同值不重触发）。hunk 头两格各画一份
+  以保等高，行高等高靠同一 line-height + 单行 pre。`--chg-col` 那套随之删除（不留双机制）。
+  已知轻微不对称：一侧没有可滚内容时 sync 会把它夹在 0（VS Code 同款行为，实测无回弹）。
+- **左清单可拖（2026-11-05 用户「这块不能拉动吗」）**：`#chg-split` 4px 拖拽条，夹在 140px ~
+  (页宽-160px)；mousemove/mouseup 只在拖动期间挂 document，松手即摘（常驻会随页签视图泄漏）。
+  宽度只存内联 style（不落盘，重载回默认 236px）。
+- **刀4（2026-11-05 用户口径「两种效果其实都不错」→ 两种都留）**：变更页文件标题栏加「在 VS Code 中对比」
+  与「还原此文件」两个按钮——**复用**原 QuickPick 链路（`openChangesDiff` / `revertFile`，含模态二次确认与
+  全部还原守卫），资格（`canDiff`/`canRevert`）由宿主按裁决 11 算好下发，webview 不自己判；「清单」按钮
+  **保留**（用户要留老路径），三层并存：页内扫全量 → 页内按钮细看/还原 → QuickPick 老入口。
+  用例追加 3 条（资格下发、还原落盘+清单重生、无资格拒收不动盘），`test:changespage` 10/10。
+- **未做（记债）**：不做行内词级高亮（pi 的 renderDiff 有，逐词 diff 值不值另议）；Bar 上
+  「查看改动 / 清单」两按钮在窄面板可能挤（未实测）；清单宽度不持久化（刷新回默认 236px）。
+- **待用户实测**：真实面板里开一轮改动 → 改动条「查看改动」→ 核对计数/并排色块/中文路径。

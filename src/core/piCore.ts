@@ -14,8 +14,19 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { PiClient } from "../pi/piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
-import type { BannerPayload, GetSessionStatsResult, HostToWebview, PiEvent, PiUnknownEvent, ToolChangedFile, WebviewToHost } from "./protocol";
+import type {
+  BannerPayload,
+  CtxDetailMsg,
+  CtxSegment,
+  GetSessionStatsResult,
+  HostToWebview,
+  PiEvent,
+  PiUnknownEvent,
+  ToolChangedFile,
+  WebviewToHost,
+} from "./protocol";
 import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
+import { estimateContextBreakdown } from "../domain/ctxBreakdown";
 import { samePath } from "../domain/pathKey";
 import { readLedgerRows } from "./subagentLedger";
 import { toolDetail } from "../domain/toolDetail";
@@ -52,6 +63,12 @@ export interface UiActions {
   showChanges(): Promise<void>;
   /** 工单七：收起「本次改动」条（宿主状态收口，webview 重建不重发） */
   dismissChanges(): Promise<void>;
+  /** 变更页（2026-11-05）：算好逐文件 hunk 后回发 changesPage（数据全在 adapter） */
+  openChangesPage(): Promise<void>;
+  /** 变更页单文件：在 VS Code 中打开原生 diff（路由与 QuickPick 同源） */
+  openChangesNativeDiff(path: string): Promise<void>;
+  /** 变更页单文件：还原（宿主侧模态确认 + 全部还原守卫，webview 不得绕过） */
+  revertChange(path: string): Promise<void>;
   /** 凭证配置页（2026-11-05）：读 auth.json 并回发 authState */
   authOpen(): void;
   /** 凭证配置页：保存某服务商 API key */
@@ -68,7 +85,16 @@ export interface FootData {
   thinkingLevel: number | null;
   sessionName: string | null;
   sessionFile: string | null;
-  stats: { contextPercent: number | null; cost: number } | null;
+  /** 用量（预算口径）：contextPercent 是 pi 原生的窗口百分比，后三个字段让 webview 自己算
+   *  「占压缩预算」——页脚圆环与用量弹层必须同分母（2026-11-05 用户：拖阈值时两个数
+   *  对不上就是错） */
+  stats: {
+    contextPercent: number | null;
+    cost: number;
+    contextTokens?: number | null;
+    contextWindow?: number | null;
+    contextLimit?: number | null;
+  } | null;
 }
 
 export class PiCore {
@@ -1448,9 +1474,26 @@ export class PiCore {
       case "changesDismiss":
         await this.ui.dismissChanges();
         break;
+      case "changesPageOpen":
+        // 变更页（2026-11-05）：adapter 算 hunk，webview 只做渲染
+        await this.ui.openChangesPage();
+        break;
+      case "changesNativeDiff":
+        await this.ui.openChangesNativeDiff(m.path);
+        break;
+      case "changesRevert":
+        await this.ui.revertChange(m.path);
+        break;
       case "queuedRetrieve":
         // 工单十六：queuebar 条目「取回」→ 文本回编辑框（pi 原生 dequeue 语义的单条版）
         await this.retrieveQueued(m.qid);
+        break;
+      case "ctxQuery":
+        // 上下文用量弹层（2026-11-05）：字段全在宿主算，webview 只渲染
+        await this.sendContextDetail();
+        break;
+      case "ctxSetReserve":
+        await this.setCompactionReserve(m.reserveTokens);
         break;
     }
   }
@@ -1719,6 +1762,7 @@ export class PiCore {
    *  切历史/新建/重载四条链路统一走这里；原先与 switchSession 并行的补回是竞态（谁后到谁赢）。
    *  panel 切历史链路用 reapplyModelMemory */
   private async applyModelMemory(): Promise<void> {
+    await this.applyReserveMemory(); // 阈值与会话绑定，与模型/思考记忆无关，早退之前先灌
     const lastModel = this.lastModelFor();
     const lastThinking = this.lastThinkingFor();
     if (!lastModel && !lastThinking) return;
@@ -1759,6 +1803,31 @@ export class PiCore {
     (tabMap[ws] ??= {})[this.tabKey] = level;
     delete tabMap[ws]["_"];
     this.caps.setPersist("piChat.lastThinkingByWs2", tabMap);
+  }
+  /** 本页签的压缩阈值记忆（token 数）。与模型/思考记忆同款二维键：globalState 是机器级
+   *  共享、tabId 每窗口从 t1 起算，不用工作区维度会跨项目串。 */
+  private rememberReserve(reserveTokens: number): void {
+    const ws = this.wsKey();
+    const tabMap = this.caps.getPersist<Record<string, Record<string, number | undefined>>>("piChat.compactReserveByWs2", {});
+    (tabMap[ws] ??= {})[this.tabKey] = reserveTokens;
+    this.caps.setPersist("piChat.compactReserveByWs2", tabMap);
+  }
+  private lastReserveFor(): number | undefined {
+    const tabMap = this.caps.getPersist<Record<string, Record<string, number | undefined>>>("piChat.compactReserveByWs2", {});
+    const v = tabMap[this.wsKey()]?.[this.tabKey];
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  }
+  /** 把本页签记忆的阈值灌回当前 session（设置只活在会话内存里，重启/换会话后必须重灌）。
+   *  失败静默：回灌不上就用 pi 的全局默认，不影响对话。 */
+  private async applyReserveMemory(): Promise<void> {
+    const v = this.lastReserveFor();
+    if (v === undefined || !this.client) return;
+    try {
+      await this.client.setCompactionReserve(v);
+      this.compactCache = null; // 让 compactInfo 重读（新增阈值会改变预算分母）
+    } catch {
+      // ignore
+    }
   }
   private lastModelFor(): { provider: string; id: string } | undefined {
     const tabMap = this.caps.getPersist<Record<string, Record<string, { provider: string; id: string } | undefined>>>("piChat.lastModelByWs2", {});
@@ -2117,6 +2186,8 @@ export class PiCore {
       } catch {
         // ignore
       }
+      // compaction 设置（载入缓存，供 limitFrom 算预算分母）；首次读一次，之后走实例缓存
+      await this.compactInfo();
       // 刀6：原「get_state 真相对账 + 工单五-1 观察断言」整块删除——busy=isStreaming 派生后
       // 镜像不存在，对账无从谈起（工单五-1 的观察期到此期满结案）
       // 按项目记住当前会话文件，下次启动自动恢复（切走/重启不用重选会话）
@@ -2167,6 +2238,11 @@ export class PiCore {
           ? {
               contextPercent: stats?.contextUsage?.percent ?? null,
               cost: stats?.cost ?? 0,
+              // 预算口径（见 FootData.stats 注释）：limit = 窗口 - reserveTokens，
+              // 压缩关闭时等于窗口。compaction 设置走实例缓存（不每次 state 都跨边界读）
+              contextTokens: stats?.contextUsage?.tokens ?? null,
+              contextWindow: stats?.contextUsage?.contextWindow ?? null,
+              contextLimit: this.limitFrom(stats?.contextUsage?.contextWindow ?? null),
             }
           : null,
       };
@@ -2179,6 +2255,145 @@ export class PiCore {
       // ignore
       return null;
     }
+  }
+
+  /* ── 上下文用量弹层（2026-11-05 用户工单：对齐截图「上下文用量」面板）──────────────
+   * 数据分三层，全部来自 pi 原生结构，不自己发明口径：   * ① 总量真值：getSessionStats().contextUsage = {tokens, contextWindow, percent}。压缩后
+   *    首个 LLM 响应之前 tokens 为 null（pi 语义），照实透传让 webview 显示「—」。
+   * ② 分类明细：pi 没有现成分类，但系统提示词是分节结构、工具声明在 toolsAdded——
+   *    拆分规则全在 domain/ctxBreakdown.ts（纯函数零 import，有独立用例），这里只负责
+   *    取真值 + 组装消息。
+   * ③ 压缩阈值：settingsManager.getCompactionSettings(model) 原生 getter。触发点 =
+   *    contextWindow - reserveTokens（compaction.js:173 的 shouldCompact 判据）。
+   * 绝对 token 数 = 真值总量 × 估算占比（见下方 scale 注释），只有真值缺失时才纯估算。
+   * 百分比分母 = **压缩预算**（compactAt），不是模型窗口：拖阈值滑块时上面所有数字
+   * 应当一起变（用户 2026-11-05 指出「拖了阈值数字不动」——窗口口径下它们数学上不可能变）。
+   */
+  /** compaction 设置缓存：collectState 是高频路径（每次 refreshState），没必要每次都跨
+   *  client 边界读；键带模型（pi 允许 per-model 覆写 compaction.modelOverrides）。
+   *  失效点：模型切换（键变）、滑块写盘（写完主动回填）、外部改 settings.json（不追）。 */
+  private compactCache: { key: string; enabled: boolean; reserveTokens: number; keepRecentTokens: number } | null = null;
+
+  private modelKey(): string {
+    const m = this.lastModelFor();
+    return (m?.provider ?? "") + "/" + (m?.id ?? "");
+  }
+
+  private async compactInfo(): Promise<{ enabled: boolean; reserveTokens: number; keepRecentTokens: number } | null> {
+    const client = this.client;
+    if (!client) return null;
+    const key = this.modelKey();
+    if (this.compactCache && this.compactCache.key === key) return this.compactCache;
+    try {
+      const s = await client.getCompactionInfo();
+      this.compactCache = { key, ...s };
+      return this.compactCache;
+    } catch {
+      return this.compactCache;
+    }
+  }
+
+  /** 预算分母：窗口 − reserveTokens；压缩关闭/设置未知时退窗口口径（= 没有预算概念） */
+  private limitFrom(window: number | null | undefined): number | null {
+    if (!window || window <= 0) return null;
+    const c = this.compactCache;
+    if (!c || !c.enabled) return window;
+    const lim = window - c.reserveTokens;
+    return lim > 0 ? lim : window;
+  }
+
+  async collectContextDetail(): Promise<CtxDetailMsg | null> {
+    const client = this.client;
+    if (!client) return null;
+    let stats: GetSessionStatsResult | null = null;
+    try {
+      stats = await client.getSessionStats();
+    } catch {
+      // ignore
+    }
+    const comp = (await this.compactInfo()) ?? (await client.getCompactionInfo().catch(() => null));
+    const d = await client.getMessages().catch(() => null);
+    const bd = estimateContextBreakdown(d?.messages ?? []);
+
+    const used = stats?.contextUsage?.tokens ?? null;
+    const window = stats?.contextUsage?.contextWindow ?? null;
+    // 分类的**绝对** token 数用真值总量 × 估算占比换算，而不是直接上报 chars/3.5 的估算：
+    // pi 的估算假设 3.5 字符/token（英文口径），中文实际≈1 字符/token，直接上报的话
+    // 中文会话会凭空多出 50% 的「其他」（实测样本：真值 316K，估算只算出 158K），
+    // 图上看就是一半不明分类。比例本身是可信的，总量有真值——两者相乘才两边都对。
+    // 真值缺失（压缩后首个 LLM 响应之前 pi 返回 null）时只能退估，不缩放。
+    const scale = used != null && bd.estimated > 0 ? used / bd.estimated : 1;
+    const tk = (n: number): number => Math.round(n * scale);
+    const sumScaled = tk(bd.prompt) + tk(bd.tools) + tk(bd.messages) + tk(bd.mcp + bd.extSections) + tk(bd.skills) + tk(bd.project);
+    const total = used ?? bd.estimated;
+    // 缩放后的四舍五入零头归 other（通常 0~5 token，显示层自动隐藏 0 值分类）
+    const other = Math.max(0, total - sumScaled);
+    const mcpAll = tk(bd.mcp + bd.extSections);
+    const compactAt = window != null && comp ? Math.max(0, window - comp.reserveTokens) : null;
+    // 分母 = 压缩预算（compactAt）：拖滑块时上面所有百分比跟着变。压缩启用且阈值有效才用预算，
+    // 否则退回窗口口径（没有预算概念时窗口就是全部空间）。
+    const budget = comp?.enabled && compactAt != null && compactAt > 0 ? compactAt : window;
+    const pct = (n: number): number | null => (budget && budget > 0 ? (n / budget) * 100 : null);
+    const segments: CtxSegment[] = [
+      { key: "prompt", tokens: tk(bd.prompt), percent: pct(tk(bd.prompt)) },
+      { key: "tools", tokens: tk(bd.tools), percent: pct(tk(bd.tools)) },
+      { key: "messages", tokens: tk(bd.messages), percent: pct(tk(bd.messages)) },
+      { key: "mcp", tokens: mcpAll, percent: pct(mcpAll) },
+      { key: "skills", tokens: tk(bd.skills), percent: pct(tk(bd.skills)) },
+      { key: "project", tokens: tk(bd.project), percent: pct(tk(bd.project)) },
+      { key: "other", tokens: other, percent: pct(other) },
+    ];
+    return {
+      type: "ctxDetail",
+      percent: used != null ? pct(used) : null,
+      used,
+      window,
+      budget,
+      compactAt,
+      reserveTokens: comp?.reserveTokens ?? 0,
+      keepRecentTokens: comp?.keepRecentTokens ?? 0,
+      compactEnabled: comp?.enabled ?? false,
+      segments,
+      estimated: bd.estimated,
+    };
+  }
+
+  /** 弹层查询入口：算好就回一条 ctxDetail（拿不到 client 时回空segments，不让弹层永久转圈） */
+  private async sendContextDetail(): Promise<void> {
+    const detail = await this.collectContextDetail();
+    if (detail) this.post(detail);
+  }
+
+  /** 阈值写入（弹层档位的唯一写入口）：**只改本会话**的 pi 设置内存态，
+   *  绝不写全局 settings.json（2026-11-05 用户否决：「还会影响其他会话？那可不行」）。
+   *  隔离原理见 piClient.setCompactionReserve 头注释；持久化走本页签记忆
+   *  （piChat.compactReserveByWs2），重启后由 applyReserveMemory 回灌。
+   *  上限夹到「窗口 − 4096」：reserveTokens ≥ contextWindow 时压缩永远不触发（pi 不校验），
+   *  等于用户把自动压缩关掉了却看不出来。 */
+  private async setCompactionReserve(n: number): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    let window: number | null = null;
+    try {
+      window = (await client.getSessionStats())?.contextUsage?.contextWindow ?? null;
+    } catch {
+      // ignore
+    }
+    const min = 1024;
+    const max = window && window > 8192 ? window - 4096 : 1024 * 1024;
+    const next = Math.min(max, Math.max(min, Math.round(n)));
+    try {
+      const res = await client.setCompactionReserve(next);
+      // 写完立即回填缓存：页脚圆环的分母（预算）也要跟着变，否则要等下一次 refreshState
+      // 才追——用户改完档位看一眼页脚，两个数不一致就是 bug 观感
+      this.compactCache = { key: this.modelKey(), ...res };
+      this.rememberReserve(next); // 本页签记忆（重启后回灌的唯一来源）
+      this.dbg("ctx: reserveTokens=" + next + " (session-scoped)");
+    } catch (e: any) {
+      this.post({ type: "notice", text: fmt(this.L.ctxSaveFail, String(e?.message ?? e)) });
+    }
+    await this.sendContextDetail();
+    void this.refreshState(); // 页脚圆环同分母重算（不 await：不影响弹层回包）
   }
 
   /** agent_start 时把已被 pi 取走的排队气泡原地转正为普通气泡（不做整页重绘，避免打断流式渲染顺序） */
@@ -2481,6 +2696,11 @@ export class PiCore {
       }
 
       case "model_select":
+        // 换模型后重灌阈值：pi 的 modelOverrides 优先级高于普通设置，不重灌会被新模型的
+        // per-model 值压回去（用户设定看起来「自己变了」）
+        await this.applyReserveMemory();
+        await this.refreshState();
+        break;
       case "thinking_level_select":
         await this.refreshState();
         break;
@@ -2670,6 +2890,9 @@ const GATE_PASS_TYPES = new Set<string>([
   "compacting",
   "subagentUpdate",
   "subagentLedger",
+  // 上下文用量弹层（2026-11-05）：交互应答类，与快照无顺序依赖。不在这张表里会被闸门
+  // 扣住，用户在快照窗口内点开弹层就转圈等下一次 flush
+  "ctxDetail",
 ]);
 
 /** 从消息 content 里抽纯文本（核心与 adapter 共用；adapter 的会话预览读取也用它） */

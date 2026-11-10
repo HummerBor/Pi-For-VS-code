@@ -534,6 +534,50 @@ export class PiClient {
     return this.ready().then(() => PiClient.snapshot(this.session.getSessionStats()));
   }
 
+  /** 上下文压缩设置真值（2026-11-05 上下文用量弹层）：pi 的自动压缩判据是
+   *  `contextTokens > contextWindow - reserveTokens`（compaction.js:173），触发点要展示给
+   *  用户就必须读得到 reserveTokens —— settingsManager 有原生 getter，直接取。
+   *  model 参数走 session.model：pi 允许 per-model 覆写（settings.json 的
+   *  compaction.modelOverrides），不传模型会读到错了那一层。 */
+  getCompactionInfo(): Promise<{ enabled: boolean; reserveTokens: number; keepRecentTokens: number }> {
+    return this.ready().then(() => {
+      const sm = this.session.settingsManager;
+      const s = sm.getCompactionSettings(this.session.model ?? undefined);
+      return { enabled: s.enabled, reserveTokens: s.reserveTokens, keepRecentTokens: s.keepRecentTokens };
+    });
+  }
+
+  /** 写压缩阈值 —— **只对本会话生效，绝不碰全局配置**（2026-11-05 用户明确否决：
+   *  「还会影响其他会话？那可不行」）。
+   *
+   *  为什么 applyOverrides 就够：pi 的 SettingsManager 是**每 PiClient 一份**
+   *  （createAgentSessionServices 里 `SettingsManager.create(cwd, agentDir)`），
+   *  applyOverrides 只改这个实例内存里的 settings（settings-manager.js:389），
+   *  别的页签/别的 PiClient/TUI 进程读的是各自的实例或磁盘文件，完全看不见 → 天然隔离。
+   *  代价：不落盘，插件重启/换会话后由 piCore 用插件自己的记忆（piChat.compactReserveByWs2）
+   *  回灌，见 piCore.applyReserveMemory。
+   *
+   *  顺手写 modelOverrides 的当前模型键：pi 的优先级是 modelOverride > 普通设置
+   *  （settings-manager.js:665），用户若在 settings.json 里写过 per-model 的 reserveTokens，
+   *  不覆盖这一层就会被它压回去，滑块看起来「点了没反应」。
+   */
+  setCompactionReserve(n: number): Promise<{ enabled: boolean; reserveTokens: number; keepRecentTokens: number }> {
+    return this.ready().then(() => {
+      const sm = this.session.settingsManager;
+      const v = Math.max(0, Math.round(n));
+      const model = this.session.model;
+      const modelKey = model ? `${model.provider}/${model.id}` : null;
+      sm.applyOverrides({
+        compaction: {
+          reserveTokens: v,
+          ...(modelKey ? { modelOverrides: { [modelKey]: { reserveTokens: v } } } : {}),
+        },
+      });
+      const s = sm.getCompactionSettings(this.session.model ?? undefined);
+      return { enabled: s.enabled, reserveTokens: s.reserveTokens, keepRecentTokens: s.keepRecentTokens };
+    });
+  }
+
   getAvailableModels(): Promise<any> {
     return this.ready().then(async () => {
       const models = await this.session.modelRuntime.getAvailable();
