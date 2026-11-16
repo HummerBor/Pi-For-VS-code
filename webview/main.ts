@@ -164,6 +164,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var cpRangeEl = q('#ctxpop .cp-range') as HTMLInputElement; var cpThValEl = q('#ctxpop .cp-thval');
     var cpThLabelEl = q('#ctxpop .cp-thlabel'); var cpCloseEl = q('#ctxpop .cp-close');
     var cpTicksEl = q('#ctxpop .cp-ticks');
+    var cpCostEl = q('#ctxpop .cp-cost'); var cpCostListEl = q('#ctxpop .cp-cost-list');
+    var cpCostAmtEl = q('#ctxpop .cp-cost-amount'); var cpCostTagEl = q('#ctxpop .cp-cost-tag');
+    var cpCostNoteEl = q('#ctxpop .cp-cost-note'); var cpCostHitEl = q('#ctxpop .cp-cost-hit');
+    var cpPriceEl = q('#ctxpop .cp-price');
     /** 顶部「压缩点」读数（拖动滑块时原地联动，不等宿主回包） */
     var cpAtEl = q('#ctxpop .cp-at');
     /** 最近一条 ctxDetail 真值（拖动滑块时以它为基准局部重算，不必等宿主回包） */
@@ -180,6 +184,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         ctxQueryTimer = null;
         if (ctxPopEl.style.display === 'block') vpost({ type: 'ctxQuery' });
       }, 400);
+    }
+    // 弹层开启期间的 1s 心跳（2026-11-05 用户：「这个百分比不是实时的，pi 本身好像是实时的」）。
+    // 只靠 state 帧刷新的话，流式输出期间数字会冻住（state 只在轮次边界发）；心跳带 light 标记，
+    // 宿主只重算总量/花费（getSessionStats 便宜），分类明细复用上次估算，不每秒克隆整个消息树。
+    var ctxTick: any = null;
+    function startCtxTick() {
+      if (ctxTick) return;
+      ctxTick = setInterval(function () {
+        if (ctxPopEl.style.display !== 'block') { stopCtxTick(); return; }
+        vpost({ type: 'ctxQuery', light: true });
+      }, 1000);
+    }
+    function stopCtxTick() {
+      if (ctxTick) { clearInterval(ctxTick); ctxTick = null; }
     }
   var toolEls = {}; var queuedItems = [];
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
@@ -350,16 +368,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ctxPopEl.style.display = 'block';
       if (ctxDetail) renderCtxDetail(ctxDetail); // 先用上次真值垫一帧，等宿主回包再替换（避免闪空）
       vpost({ type: 'ctxQuery' });
+      startCtxTick(); // 开着就每秒跟一次真值（pi 的 percent 每轮都在动）
     }
     function closeCtxPopLater() {
       if (ctxCloseTimer) clearTimeout(ctxCloseTimer);
-      ctxCloseTimer = setTimeout(function () { ctxCloseTimer = null; ctxPopEl.style.display = 'none'; }, 280);
+      ctxCloseTimer = setTimeout(function () {
+        ctxCloseTimer = null;
+        ctxPopEl.style.display = 'none';
+        stopCtxTick();
+      }, 280);
     }
     usageEl.addEventListener('mouseenter', openCtxPop);
     usageEl.addEventListener('mouseleave', closeCtxPopLater);
     ctxPopEl.addEventListener('mouseenter', openCtxPop);
     ctxPopEl.addEventListener('mouseleave', closeCtxPopLater);
-    cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; });
+    cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; stopCtxTick(); });
     // 滑块 = 三段吸附（2026-11-05 用户：滑动好使点，档位不用手调）。
     // input 只本地重算（零延迟、不写盘），change（放手）才落库
     cpRangeEl.addEventListener('input', function () {
@@ -849,10 +872,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number, images?: any[]) {
     // 子 agent 异步回报特殊标记渲染（2026-09-18 用户拍板升级：不隐藏，改独立卡片——
     // 防止被当成用户自己说的话；前版“直接不展示”作废）。前缀契约在 subagent 扩展的
-    // sendUserMessage 处（"[子 agent sa-N 完成|失败] agent名: 输出"），改格式两处同步。
-    var sm2 = (text || '').match(/^\[子 agent (\S+) (完成|失败)\] ([^:\n]*): ?/);
+    // sendUserMessage 处（"[子 agent sa-N 完成|失败|已终止] agent名: 输出"），改格式三处同步
+    // （harness 发送方 / piCore message_start 正则 / 本文件 addUser + queue 两处）。
+    // 2026-11-13 补「已终止」：用户 kill 的单也会回传，否则主 agent 以为它还在跑。
+    var sm2 = (text || '').match(/^\[子 agent (\S+) (完成|失败|已终止)\] ([^:\n]*): ?/);
     if (sm2) {
-      var card = el('div', 'subret' + (sm2[2] === '失败' ? ' fail' : ''));
+      var card = el('div', 'subret' + (sm2[2] === '完成' ? '' : ' fail'));
       var sh = el('div', 'subret-head', '⮑ 子 agent ' + sm2[1] + ' · ' + sm2[2] + (sm2[3] ? ' · ' + sm2[3] : ''));
       card.appendChild(sh);
       var sb = el('div', 'subret-body');
@@ -1435,6 +1460,72 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
     return null;
   }
+  /** 金额格式：币种由宿主下发（cny/usd）；钱小的时候给足小数位，否则 ¥0.00 会把小额看成「免费」 */
+  function fmtCost(v, currency) {
+    if (v === null || v === undefined || !isFinite(v)) return L.ctxNoData;
+    var sign = currency === 'cny' ? '¥' : '$';
+    if (v <= 0) return sign + '0';
+    if (v >= 1) return sign + v.toFixed(2);
+    if (v >= 0.01) return sign + v.toFixed(3);
+    return sign + v.toFixed(4);
+  }
+  /** 用量与花费（2026-11-05 用户：积分式百分比不适合 API 计费）：
+   *  缓存命中 / 缓存写入 / 非缓存输入 / 输出 四行，各显 token 与金额，末行合计。
+   *  数据由宿主 domain/usageTotals.ts 从 pi 消息 usage 累加（含 pi 算好的分项成本）——
+   *  这里零计算，只排版。全零分类不占行（与图例同口径）；无价目时只显 token。 */
+  function renderCtxCost(u) {
+    if (!u) { cpCostEl.style.display = 'none'; return; }
+    cpCostEl.style.display = 'block';
+    var money = u.priced === true;
+    var split = money && u.splitKnown === true;
+    if (cpCostNoteEl) {
+      cpCostNoteEl.style.display = money ? 'none' : 'block';
+    }
+    if (cpCostTagEl) {
+      // 展示的是「pi 的数 + 我们的汇率」：换算写在明面上，别让人以为是账单原值
+      cpCostTagEl.textContent = money && u.currency === 'cny' ? L.ctxCostFx.replace('{r}', String(u.fx)) : '';
+      cpCostTagEl.className = 'cp-cost-tag';
+    }
+    var rows = '';
+    if (u.cacheRead) rows += cpCostRow(L.ctxCostCacheRead, u.cacheRead, u.costCacheRead, split, u.currency, 'cache');
+    if (u.cacheWrite) rows += cpCostRow(L.ctxCostCacheWrite, u.cacheWrite, u.costCacheWrite, split, u.currency, 'write');
+    if (u.input) rows += cpCostRow(L.ctxCostInput, u.input, u.costInput, split, u.currency, 'input');
+    if (u.output) rows += cpCostRow(L.ctxCostOutput, u.output, u.costOutput, split, u.currency, 'output');
+    cpCostListEl.innerHTML = rows;
+    // 缓存命中率（2026-11-05 用户要）：DeepSeek 命中/未命中差 50 倍价，这是「便宜了多少」的唯一
+    // 直观指标。null（还没输入）留空，别拿 0% 骗人。
+    if (cpCostHitEl) {
+      cpCostHitEl.textContent = u.cacheHitRate === null || u.cacheHitRate === undefined
+        ? ''
+        : L.ctxCostHitRate + ' ' + (Math.round(Number(u.cacheHitRate) * 1000) / 10) + '%';
+    }
+    cpCostAmtEl.textContent = money ? fmtCost(u.cost, u.currency) : fmtTok(u.tokens) + ' tokens';
+    cpCostAmtEl.title = u.tokens ? u.tokens.toLocaleString() + ' tokens' : '';
+  }
+  /** 当前模型价目（2026-11-05 用户：「启动插件后可以自动查一次」）：
+   *  显示 pi 此刻生效的单价（目录价 + 你在 pi 配置里的覆盖），单位按弹层货币换算。
+   *  这一行是**对账锚点**——pi 算出来的钱对不对，看它就知道 pi 用的是哪套价。 */
+  function renderCtxPrice(p, u) {
+    if (!cpPriceEl) return;
+    if (!p) { cpPriceEl.style.display = 'none'; return; }
+    var currency = (u && u.currency) || 'cny';
+    var fx = (u && u.fx) || 1;
+    function perM(v) { return fmtCost((v || 0) * fx, currency) + '/M'; }
+    cpPriceEl.style.display = 'block';
+    cpPriceEl.textContent =
+      L.ctxPriceLine
+        .replace('{m}', p.name || p.id)
+        .replace('{i}', perM(p.input))
+        .replace('{c}', perM(p.cacheRead))
+        .replace('{w}', perM(p.cacheWrite))
+        .replace('{o}', perM(p.output));
+    cpPriceEl.title = p.provider + '/' + p.id;
+  }
+  function cpCostRow(label, tokens, cost, showMoney, currency, kind) {
+    return '<li><i class="cp-cc cp-cc-' + kind + '"></i><span class="cp-lb">' + esc(label) + '</span>' +
+      '<span class="cp-lv">' + fmtTok(tokens) + '</span>' +
+      '<span class="cp-cm">' + (showMoney ? fmtCost(cost, currency) : '') + '</span></li>';
+  }
   /** 弹层渲染（2026-11-05 第二版：百分比分母改成**压缩预算**）。
    *  budget = 压缩点（window - reserveTokens），满宽就是「压到这里就自动压缩」。
    *  拖动滑块时用 budgetOverride 局部重算（不等宿主回包），所以全部数字会一起动——
@@ -1472,6 +1563,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       rows += '<li><i style="background:' + CP_SEGS[j].color + '"></i><span class="cp-lb">' + esc(L[CP_SEGS[j].label]) + '</span><span class="cp-lv">' + lv + '</span></li>';
     }
     cpLegendEl.innerHTML = rows;
+    renderCtxCost(m.usage);
+    renderCtxPrice(m.pricing, m.usage);
     // 阈值滑块（真相 = pi 的 compaction.reserveTokens，webview 这边用“触发点占窗口百分比”表达）
     cpThLabelEl.textContent = m.compactEnabled ? L.ctxCompactHint : L.ctxCompactOff;
     var usable = m.compactEnabled && win > 0;
@@ -2019,7 +2112,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
       nativeQueuePills = [];
       if (m.followUp) for (var fi = 0; fi < m.followUp.length; fi++) {
-        var fm2 = String(m.followUp[fi] || '').match(/^\[子 agent (\S+) (完成|失败)\] ([^:\n]*): ?/);
+        var fm2 = String(m.followUp[fi] || '').match(/^\[子 agent (\S+) (完成|失败|已终止)\] ([^:\n]*): ?/);
         if (fm2) nativeQueuePills.push(fm2);
       }
       renderNativeQueue();
@@ -2084,7 +2177,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }, { passive: true });
     // 点消息区 = 点到浮层外：收起上下文用量弹层（标准浮层行为；监听挂在 root 上，
     // 视图销毁即随 DOM 一起走，不往 document 上挂——那会按页签数累加并泄漏）
-    root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; });
+    root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; stopCtxTick(); });
     bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
@@ -2097,9 +2190,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       hasPage: function () { return chgPageEl.style.display !== 'none'; },
       closePage: closeChgPage,
       /** 上下文用量弹层：Esc / 点消息区收起（与变更页同级的浮层语义，弹层优先关） */
-      closeCtxPop: function () { ctxPopEl.style.display = 'none'; },
+      closeCtxPop: function () { ctxPopEl.style.display = 'none'; stopCtxTick(); },
       isCtxPopOpen: function () { return ctxPopEl.style.display === 'block'; },
       dispose: function () {
+        stopCtxTick();
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         if (liveRTimer) { clearTimeout(liveRTimer); liveRTimer = null; }
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }

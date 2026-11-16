@@ -4,7 +4,7 @@ import * as path from "path";
 import { spawn } from "child_process";
 import * as vscode from "vscode";
 import type { PiClient } from "../pi/piClient";
-import { bundledPiVersion } from "../pi/piSdk";
+import { bundledPiVersion, findBundledPiCli, findNodeRuntime } from "../pi/piSdk";
 import type { HostToWebviewTagged } from "../core/protocol";
 
 /**
@@ -115,6 +115,49 @@ export class PiSetup {
       p.stdout?.on("data", (d: Buffer) => (out += d.toString()));
       p.on("error", () => finish(null));
       p.on("close", (code) => finish(code === 0 ? out.trim().split("\n")[0] || "ok" : null));
+    });
+  }
+
+  /** 刷新模型价目目录（2026-11-05 用户：「加」——不抓网页，走 pi 自己的远端目录刷新）。
+   *
+   *  市面上的「官方价」抓法都得解析 HTML，provider 改版就崩、代理/离线还会报错；
+   *  pi 本身有远端目录（pi.dev）与 `pi update --models` 这个官方入口（docs/models.md:15），
+   *  价目就在目录里。壳只负责：找真 node + 内置 cli 跑一次、把结果回报。
+   *
+   *  **只在此处触发（手动）**，不静默联网；返回值给调用方决定文案与后续动作。 */
+  refreshModelCatalog(): Promise<{ ok: boolean; out: string }> {
+    const cli = findBundledPiCli();
+    const node = findNodeRuntime();
+    const cmd = node && cli ? { file: node, args: [cli, "update", "--models"] } : { file: "pi", args: ["update", "--models"] };
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok: boolean, out: string) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve({ ok, out });
+      };
+      let p: ReturnType<typeof spawn>;
+      try {
+        p = spawn(cmd.file, cmd.args, { windowsHide: true, shell: process.platform === "win32" && !node });
+      } catch (err: any) {
+        resolve({ ok: false, out: String(err?.message ?? err) });
+        return;
+      }
+      let tail = "";
+      const onOut = (d: Buffer) => (tail = (tail + d.toString()).slice(-400));
+      p.stdout?.on("data", onOut);
+      p.stderr?.on("data", onOut);
+      p.on("error", (err: any) => finish(false, String(err?.message ?? err)));
+      p.on("close", (code: number | null) => finish(code === 0, tail.trim()));
+      const timer = setTimeout(() => {
+        try {
+          p.kill();
+        } catch {
+          // ignore
+        }
+        finish(false, "timeout");
+      }, 90000);
     });
   }
 

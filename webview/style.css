@@ -2137,6 +2137,118 @@ details.think.compaction-flash>summary {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 用量与花费（2026-11-05）：四类 token + 各自金额 + 合计 ── */
+#ctxpop .cp-cost {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
+}
+
+#ctxpop .cp-cost-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  opacity: .9;
+}
+
+#ctxpop .cp-cost-title {
+  flex: 1;
+}
+
+#ctxpop .cp-cost-tag {
+  font-size: 10px;
+  opacity: .6;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .3));
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* 实付（供应商回传账单）比估算可信，给个绿标区分 */
+#ctxpop .cp-cost-tag.billed {
+  opacity: .9;
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ec96e);
+  border-color: currentColor;
+}
+
+#ctxpop .cp-cost-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#ctxpop .cp-cost-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+#ctxpop .cp-cost-list li > i.cp-cc {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+#ctxpop .cp-cc-cache { background: #4ec96e; }
+#ctxpop .cp-cc-write { background: #e8a33d; }
+#ctxpop .cp-cc-input { background: #5aa9e6; }
+#ctxpop .cp-cc-output { background: #b180d7; }
+
+#ctxpop .cp-cost-list .cp-lb {
+  flex: 1;
+  opacity: .85;
+}
+
+#ctxpop .cp-cost-list .cp-lv {
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+}
+
+#ctxpop .cp-cost-list .cp-cm {
+  min-width: 58px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#ctxpop .cp-cost-foot {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
+  opacity: .9;
+}
+
+#ctxpop .cp-cost-foot > span:first-child {
+  flex: 1;
+}
+
+#ctxpop .cp-cost-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 缓存命中率（2026-11-05 用户要）：放在「合计」行、金额左边——它是解释金额的那句话 */
+#ctxpop .cp-cost-hit {
+  opacity: .6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 当前模型价目（对账锚点）：小字、可换行，不抢主线 */
+#ctxpop .cp-price {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  opacity: .5;
+}
+
+#ctxpop .cp-cost-note {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: .55;
+}
+
 #ctxpop .cp-foot {
   border-top: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
   padding-top: 8px;
@@ -2864,49 +2976,4 @@ details.think.compaction-flash>summary {
 
 #changesbar .b-act2:hover {
   background: var(--pi-tool-hover);
-}
-
-/* 三段档位（2026-11-05 用户拍板：不要滑块，只要三个可点的刻度）。
-   一格 = 一个档位，当前档高亮；点击即写盘（宿主写 pi settings.json 的
-   compaction.reserveTokens），本地同时按新档重算所有百分比。 */
-#ctxpop .cp-ticks {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-#ctxpop .cp-tick {
-  flex: 1;
-  padding: 5px 0;
-  font-family: inherit;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: inherit;
-  background: transparent;
-  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, .35));
-  border-radius: 6px;
-  cursor: pointer;
-  opacity: .75;
-}
-
-#ctxpop .cp-tick:hover {
-  opacity: 1;
-  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .2));
-}
-
-#ctxpop .cp-tick.on {
-  opacity: 1;
-  color: var(--vscode-button-foreground, #fff);
-  background: var(--vscode-button-background, #3b82f6);
-  border-color: transparent;
-  font-weight: 600;
-}
-
-/* 压缩关闭 / 窗口未知：整排刻度变灰不可点（点击在 renderTicks 里有守卫） */
-#ctxpop .cp-ticks.disabled .cp-tick {
-  opacity: .35;
-  cursor: default;
-  background: transparent;
-  color: inherit;
-  border-color: var(--vscode-editorWidget-border, rgba(128, 128, 128, .25));
 }

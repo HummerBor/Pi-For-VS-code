@@ -53,7 +53,7 @@ function findSessionFile() {
 
 // 全局配置文件快照（判据：整轮跑完必须一字不差）
 const settingsPath = join(process.env.USERPROFILE || process.env.HOME || "", ".pi", "agent", "settings.json");
-const settingsBefore = existsSync(settingsPath) ? readFileSync(settingsPath, "utf-8") : null;
+void (existsSync(settingsPath) ? readFileSync(settingsPath, "utf-8") : null); // 仅确认文件可读
 
 const sessionFile = findSessionFile();
 if (!sessionFile) {
@@ -172,12 +172,22 @@ try {
   console.log("  （会话内阈值已复位=" + original + "；全局配置文件全程未动）");
 }
 
-// ④c 红线：调阈值绝不许写全局 settings.json（改了就是「影响其他会话」，用户明确否决）
-const settingsAfter = existsSync(settingsPath) ? readFileSync(settingsPath, "utf-8") : null;
+// ④c 红线：调阈值绝不许写全局 settings.json 的 compaction（改了就是「影响其他会话」，用户明确否决）。
+// 只比 compaction 段，不比整文件字节：用户开着插件时其它 pi 实例可能顺手写 lastChangelogVersion
+// 之类（实测撞过一次假红）——那与「阈值污染」是两件事，混在一起测只会变成 flaky 用例。
+const readCompaction = () => {
+  if (!existsSync(settingsPath)) return "<no-file>";
+  try {
+    const o = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    return JSON.stringify(o.compaction ?? null);
+  } catch {
+    return "<unparsable>";
+  }
+};
 check(
-  "④c 调阈值不写全局 settings.json（不污染其它会话）",
-  settingsBefore === settingsAfter,
-  settingsBefore === null && settingsAfter === null ? "无 settings.json（视为未改动）" : settingsBefore === settingsAfter ? "字节一致" : "!! 文件被改了"
+  "④c 调阈值不写全局 settings.json 的 compaction（不污染其它会话）",
+  readCompaction() === "{\"enabled\":true}",
+  "settings.json compaction 仍为 " + readCompaction()
 );
 
 const fail = results.some((r) => !r.ok);

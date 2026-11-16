@@ -27,6 +27,7 @@ import type {
 } from "./protocol";
 import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
 import { estimateContextBreakdown } from "../domain/ctxBreakdown";
+import { buildUsage } from "../domain/usageTotals";
 import { samePath } from "../domain/pathKey";
 import { readLedgerRows } from "./subagentLedger";
 import { toolDetail } from "../domain/toolDetail";
@@ -538,6 +539,7 @@ export class PiCore {
         // 由这次原子 uiState 一次补齐（含页脚模型/思考/会话名），此后不再「无人再刷」
         void this.postUiState();
         this.dbg("boot done tab=" + this.tabKey + " total=" + (Date.now() - t0) + "ms");
+        void this.refreshModelPricing(); // 启动自动查一次价目（写日志 + 供弹层展示）
       } catch (err: any) {
         // 吞掉语义保留（不重抛，async 链无人接 reject）；但失败必弹错（F′，拍板 4）——
         // 静默整链死是 P0 的隐身衣：留痕（A 刀）+ 用户可见 notice 双保险
@@ -1489,8 +1491,9 @@ export class PiCore {
         await this.retrieveQueued(m.qid);
         break;
       case "ctxQuery":
-        // 上下文用量弹层（2026-11-05）：字段全在宿主算，webview 只渲染
-        await this.sendContextDetail();
+        // 上下文用量弹层（2026-11-05）：字段全在宿主算，webview 只渲染。
+        // light = 弹层开着时的 1s 心跳（只刷总量/花费，不重算分类明细）
+        await this.sendContextDetail(m.light === true);
         break;
       case "ctxSetReserve":
         await this.setCompactionReserve(m.reserveTokens);
@@ -1901,8 +1904,10 @@ export class PiCore {
     this.post({ type: "notice", text: this.L.reloadDone });
   }
 
-  /** ⚙ 新建会话（⚡ /commands 与 webview 皆可触发）：会话恢复编排的一部分 */
-  private async newSession(): Promise<void> {
+  /** ⚙ 新建会话（⚡ /commands、webview、以及 adapter 的「副栏让位」皆可触发——
+   *  让位见 panel.releaseSessionForEditor：切到新会话 = 释放旧 jsonl 的唯一正路，
+   *  别在 adapter 里自己拼 newSession 半链）：会话恢复编排的一部分 */
+  async newSession(): Promise<void> {
     const client = this.ensureClient();
     // 防误触：agent 正在干活时，新会话会终止当前任务，先确认
     if (this.busy) {
@@ -2200,6 +2205,7 @@ export class PiCore {
         this.runChangedFiles.clear();
         this.toolCallPaths.clear();
         this.toolCallDetails.clear();
+        this.resetCtxBreakCache(); // 换会话 = 换消息树，分类估算缓不作数
       }
       this.lastSessionName = st?.sessionName ?? null;
       this.lastSessionFile = st?.sessionFile ?? null;
@@ -2302,7 +2308,39 @@ export class PiCore {
     return lim > 0 ? lim : window;
   }
 
-  async collectContextDetail(): Promise<CtxDetailMsg | null> {
+  /** 当前模型价目缓存（2026-11-05）：换模型才重新查（价目只跟模型走） */
+  private modelPricing: { provider: string; id: string; name: string; input: number; output: number; cacheRead: number; cacheWrite: number } | null = null;
+  private pricingLoggedFor = "";
+
+  /** 启动/换模型时**自动查一次**价目（用户 2026-11-05：「不应该只是改一个 ds，启动插件后可以自动查一次」）。
+   *  查的是 pi 自己的 model.cost（目录价 + 用户覆盖），零网络；结果进诊断日志 + 弹层展示，
+   *  用户对账时能立刻看到「pi 现在按多少钱在算」，价目老了该改的是 pi 的 models 配置。 */
+  async refreshModelPricing(): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    try {
+      const p = await client.getModelPricing();
+      this.modelPricing = p;
+      const key = p ? p.provider + "/" + p.id : "";
+      if (p && key !== this.pricingLoggedFor) {
+        this.pricingLoggedFor = key;
+        this.dbg(
+          "price: " + key + " input=" + p.input + " cacheRead=" + p.cacheRead +
+            " cacheWrite=" + p.cacheWrite + " output=" + p.output + " USD/M (pi catalog)"
+        );
+      }
+    } catch {
+      // 拿不到就不展示，不编
+    }
+  }
+
+  /** 分类明细缓存（2026-11-05）：light 心跳复用上一次的估算结果，只有全量帧才重算 */
+  private ctxBreakCache: ReturnType<typeof estimateContextBreakdown> | null = null;
+
+  /** @param light 弹层开着时的 1s 心跳（用户口径「百分比不是实时的，pi 本身是实时的」）：
+   *   只重算总量/花费/阈值（getSessionStats + usage 遍历 entries，都很便宜），分类明细复用
+   *   上一次的 bd 再按新总量缩放——跳过 getMessages 的整树 JSON 克隆（大会话每秒一次会卡壳）。 */
+  async collectContextDetail(light = false): Promise<CtxDetailMsg | null> {
     const client = this.client;
     if (!client) return null;
     let stats: GetSessionStatsResult | null = null;
@@ -2312,8 +2350,13 @@ export class PiCore {
       // ignore
     }
     const comp = (await this.compactInfo()) ?? (await client.getCompactionInfo().catch(() => null));
-    const d = await client.getMessages().catch(() => null);
-    const bd = estimateContextBreakdown(d?.messages ?? []);
+    if (!this.modelPricing) await this.refreshModelPricing();
+    let bd = this.ctxBreakCache;
+    if (!light || !bd) {
+      const d = await client.getMessages().catch(() => null);
+      bd = estimateContextBreakdown(d?.messages ?? []);
+      this.ctxBreakCache = bd;
+    }
 
     const used = stats?.contextUsage?.tokens ?? null;
     const window = stats?.contextUsage?.contextWindow ?? null;
@@ -2334,6 +2377,27 @@ export class PiCore {
     // 否则退回窗口口径（没有预算概念时窗口就是全部空间）。
     const budget = comp?.enabled && compactAt != null && compactAt > 0 ? compactAt : window;
     const pct = (n: number): number | null => (budget && budget > 0 ? (n / budget) * 100 : null);
+    // 用量/花费（2026-11-05）：**pi 算的，壳只搬**（用户三次纠偏的口径）。
+    // tokens 与合计都取 pi 的 getSessionStats()（= 页脚那个 $，遍历全部 session entries，
+    // 压缩不丢账）；分项金额是 pi 逐条 usage.cost 的累加。壳只乘汇率，不定价、不归一。
+    // 从 getMessages() 累加是错的：压缩后旧消息被摘要替代、usage 条目不在 messages 里。
+    let usageDetail: Awaited<ReturnType<typeof client.getUsageDetail>> | null = null;
+    try {
+      usageDetail = await client.getUsageDetail();
+    } catch {
+      usageDetail = null; // pi 侧异常就整段隐藏，宁缺勿造
+    }
+    const curRaw: string = this.caps.getConfig("piChat", "costCurrency", "cny");
+    const fxRaw = Number(this.caps.getConfig("piChat", "usdCnyRate", 7.2));
+    const usage = usageDetail
+      ? buildUsage({
+          tokens: usageDetail.tokens,
+          costTotal: usageDetail.costTotal,
+          costSplit: usageDetail.costSplit,
+          currency: curRaw === "usd" ? "usd" : "cny",
+          fx: Number.isFinite(fxRaw) && fxRaw > 0 ? fxRaw : 7.2,
+        })
+      : undefined;
     const segments: CtxSegment[] = [
       { key: "prompt", tokens: tk(bd.prompt), percent: pct(tk(bd.prompt)) },
       { key: "tools", tokens: tk(bd.tools), percent: pct(tk(bd.tools)) },
@@ -2355,12 +2419,29 @@ export class PiCore {
       compactEnabled: comp?.enabled ?? false,
       segments,
       estimated: bd.estimated,
+      ...(usage ? { usage } : {}),
+      ...(this.modelPricing ? { pricing: this.modelPricing } : {}),
     };
   }
 
   /** 弹层查询入口：算好就回一条 ctxDetail（拿不到 client 时回空segments，不让弹层永久转圈） */
-  private async sendContextDetail(): Promise<void> {
-    const detail = await this.collectContextDetail();
+  /** 换会话/压缩后分类缓存作废（消息树变了，估算是按旧树算的） */
+  private resetCtxBreakCache(): void {
+    this.ctxBreakCache = null;
+  }
+
+  /** 设置项改完立刻重发一次弹层数据（货币/汇率变了，界面得跟着变） */
+  pushContextDetail(): void {
+    void this.sendContextDetail();
+  }
+
+  /** 同上，但可 await（价目刷新后要等新数据落到页面上再提示用户） */
+  async pushContextDetailNow(): Promise<void> {
+    await this.sendContextDetail();
+  }
+
+  private async sendContextDetail(light = false): Promise<void> {
+    const detail = await this.collectContextDetail(light);
     if (detail) this.post(detail);
   }
 
@@ -2499,7 +2580,8 @@ export class PiCore {
           // 反了。只认回报前缀：面板自己发的消息在 sendPromptCore 已乐观上屏（displayText
           // 与会话原文不含代码上下文块而不等），不能在这里重复渲染
           const text = extractText((e.message as Record<string, unknown>).content);
-          if (/^\[子 agent \S+ (完成|失败)\]/.test(text)) this.post({ type: "user", text });
+          // 三态（2026-11-13 补「已终止」）：用户 kill 的 async 单也会回传，否则主 agent 还以为在跑
+          if (/^\[子 agent \S+ (完成|失败|已终止)\]/.test(text)) this.post({ type: "user", text });
         }
         break;
       }
@@ -2699,6 +2781,7 @@ export class PiCore {
         // 换模型后重灌阈值：pi 的 modelOverrides 优先级高于普通设置，不重灌会被新模型的
         // per-model 值压回去（用户设定看起来「自己变了」）
         await this.applyReserveMemory();
+        await this.refreshModelPricing(); // 换模型 = 换价目，重查一次
         await this.refreshState();
         break;
       case "thinking_level_select":
@@ -2755,6 +2838,7 @@ export class PiCore {
         // 压缩窗口关闭：先落状态再走显性化，busy:false/settled 重绘按非压缩真相清标签
         this.compacting = false;
         this.post({ type: "compacting", value: false });
+        this.resetCtxBreakCache(); // 压缩重写了消息树（摘要顶掉旧消息），分类估算必须重算
         // 压缩后占比大降 + 折叠块已入消息数组（pi 压缩完成即重建 agent.state.messages，
         // agent-session.js: buildSessionContext 合成 compactionSummary）——postUiState 整体
         // 重拉消息让折叠块立即上屏。事故教训：原先只 refreshState 刷页脚，DOM 留在压缩前，

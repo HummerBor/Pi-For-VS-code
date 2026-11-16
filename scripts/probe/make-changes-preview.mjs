@@ -16,6 +16,9 @@ const root = join(here, "..", "..");
 const dist = join(root, "dist", "webview");
 const require = createRequire(import.meta.url);
 const pkg = require(join(root, "package.json"));
+// 模板占位符 {{t:key}} 也要真的替换（否则中文文案在截图里全空，看着像 bug 其实只是探针没实现）
+const { STRINGS } = await import(new URL("../../src/core/i18n.ts", import.meta.url).href);
+const L = STRINGS.zh;
 
 const template = readFileSync(join(root, "webview", "index.html"), "utf8");
 // 预览不需要 CSP（file:// 下会拦外链脚本）
@@ -88,6 +91,55 @@ const PAGE = {
   ],
 };
 
+const CTX = {
+  type: "ctxDetail",
+  tabId: "t1",
+  percent: 18.1,
+  used: 180700,
+  window: 999000,
+  budget: 999000,
+  compactAt: 999000,
+  reserveTokens: 16000,
+  keepRecentTokens: 20000,
+  compactEnabled: true,
+  estimated: 178000,
+  segments: [
+    { key: "prompt", tokens: 1200, percent: 0.1 },
+    { key: "tools", tokens: 3200, percent: 0.3 },
+    { key: "messages", tokens: 171900, percent: 17.2 },
+    { key: "mcp", tokens: 0, percent: 0 },
+    { key: "skills", tokens: 200, percent: 0 },
+    { key: "project", tokens: 4200, percent: 0.4 },
+    { key: "other", tokens: 0, percent: 0 },
+  ],
+  pricing: {
+    provider: "deepseek",
+    id: "deepseek-v4.1-flash",
+    name: "DeepSeek V4.1 Flash",
+    input: 0.27,
+    output: 1.1,
+    cacheRead: 0.027,
+    cacheWrite: 0.27,
+  },
+  usage: {
+    input: 182400,
+    output: 24800,
+    cacheRead: 1288000,
+    cacheWrite: 96400,
+    tokens: 1591600,
+    costInput: 3.94,
+    costOutput: 2.68,
+    costCacheRead: 0.93,
+    costCacheWrite: 2.08,
+    cost: 9.63,
+    currency: "cny",
+    fx: 7.2,
+    priced: true,
+    splitKnown: true,
+  },
+};
+
+
 const stub = `
 window.__wvLog = [];
 window.acquireVsCodeApi = function () {
@@ -102,10 +154,12 @@ window.acquireVsCodeApi = function () {
           window.dispatchEvent(new MessageEvent('message', { data: ${escJ(JSON.stringify(UISTATE))} }));
           setTimeout(function () {
             window.dispatchEvent(new MessageEvent('message', { data: ${escJ(JSON.stringify(CHANGES_LIST))} }));
-            var bar = document.querySelector('.session-view:not(.offview) #changesbar');
-            var btn = bar && bar.querySelector('.b-act');
-            if (btn) btn.click();
-            else console.error('changesbar 按钮没找到');
+            if (location.hash.indexOf('ctx') < 0) { // #ctx 只看用量弹层，不盖变更页
+              var bar = document.querySelector('.session-view:not(.offview) #changesbar');
+              var btn = bar && bar.querySelector('.b-act');
+              if (btn) btn.click();
+              else console.error('changesbar 按钮没找到');
+            }
             window.dispatchEvent(new MessageEvent('message', { data: ${escJ(JSON.stringify(PAGE))} }));
             // #note / #js：额外点一下别的文件，验证选中切换与 note/多文件路径
             var pick = location.hash.indexOf('note') >= 0 ? 2 : location.hash.indexOf('js') >= 0 ? 1 : -1;
@@ -117,6 +171,16 @@ window.acquireVsCodeApi = function () {
                 document.title = 'n=' + panes.length + ' L=' + (panes[0] ? panes[0].scrollLeft + '/' + panes[0].scrollWidth + '/' + panes[0].clientWidth : 'x') + ' R=' + (panes[1] ? panes[1].scrollLeft + '/' + panes[1].scrollWidth + '/' + panes[1].clientWidth : 'x');
               }, 120);
             }, 900);
+            if (location.hash.indexOf('tick') >= 0) setTimeout(function () {
+              var q = (window.__wvLog || []).filter(function (m) { return m && m.type === 'ctxQuery'; });
+              var light = q.filter(function (m) { return m.light === true; });
+              document.title = 'ctxQuery=' + q.length + ' light=' + light.length;
+            }, 3200);
+            if (location.hash.indexOf('ctx') >= 0) setTimeout(function () {
+              var u = document.querySelector('.session-view:not(.offview) #usage');
+              if (u) u.dispatchEvent(new MouseEvent('mouseenter'));
+              window.dispatchEvent(new MessageEvent('message', { data: ${escJ(JSON.stringify(CTX))} }));
+            }, 400);
             if (location.hash.indexOf('split') >= 0) setTimeout(function () {
               var sp = document.querySelector('.session-view:not(.offview) .chg-split');
               var files = document.querySelector('.session-view:not(.offview) .chg-files');
@@ -151,7 +215,9 @@ const vars = {
   js: stub,
   bgLayer: "",
 };
-let html = template.replace(/\{\{(?:(\w+):)?([\w.]+)\}\}/g, (_, ns, key) => String(vars[key] ?? ""));
+let html = template.replace(/\{\{(?:(\w+):)?([\w.]+)\}\}/g, (_, ns, key) =>
+  String(ns === "t" ? (L[key] ?? "") : (vars[key] ?? ""))
+);
 html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\n?/, "");
 const bi = html.lastIndexOf("</body>");
 html = html.slice(0, bi) + '<script src="./main.js"></script>\n</body>' + html.slice(bi);

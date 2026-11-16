@@ -5,6 +5,7 @@ import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from ".
 import { loadPiSdk } from "./piSdk";
 import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
 import { ensureSubagentHarness } from "./ensureSubagentHarness";
+import { SKILL_INVOCATION_RULES } from "./skillInvocationRules";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
 let dbg: (s: string) => void = () => {};
@@ -111,7 +112,13 @@ function createServices(sdk: any, cwd: string): Promise<any> {
     const result = await sdk.createAgentSessionServices({
       cwd,
       modelRuntime,
-      resourceLoaderOptions: { extensionFactories: [makeSubagentNameGuard(sdk, cwd)] },
+      resourceLoaderOptions: {
+        extensionFactories: [makeSubagentNameGuard(sdk, cwd)],
+        // 技能调用规则注入（根因与别改回去的理由见 skillInvocationRules.ts 头注释）：
+        // appendSystemPromptOverride 是 pi 给宿主的原生钩子，system 层优先级高于
+        // superpowers 伪造的 user 消息，且不依赖用户自己的 AGENTS.md（对所有人生效）
+        appendSystemPromptOverride: (base: string[]) => [...base, SKILL_INVOCATION_RULES],
+      },
     });
     dbg(
       "[boot-svc] 排队=" + (t0 - tQ) + "ms mr=" + (tMr - t0) + "ms harness=" + (tH - tMr) + "ms create=" + (Date.now() - tH) + "ms 合计=" + (Date.now() - tQ) + "ms",
@@ -532,6 +539,80 @@ export class PiClient {
 
   getSessionStats(): Promise<GetSessionStatsResult> {
     return this.ready().then(() => PiClient.snapshot(this.session.getSessionStats()));
+  }
+
+  /** 当前模型的**生效价目**（pi 的 model.cost：目录价 + 用户在 pi 配置里的覆盖，
+   *  USD / 百万 token；长上下文档位 tiers 不展开，弹层只作「pi 此时按多少钱在算」的展示）。
+   *  2026-11-05 用户：「不应该只是改一个 ds，启动插件后可以自动查一次」——这是那次自检的数据源。 */
+  getModelPricing(): Promise<{
+    provider: string;
+    id: string;
+    name: string;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  } | null> {
+    return this.ready().then(() => {
+      const m: any = this.session.model;
+      if (!m) return null;
+      const c = m.cost || {};
+      return {
+        provider: String(m.provider ?? ""),
+        id: String(m.id ?? ""),
+        name: String(m.name ?? m.id ?? ""),
+        input: Number(c.input) || 0,
+        output: Number(c.output) || 0,
+        cacheRead: Number(c.cacheRead) || 0,
+        cacheWrite: Number(c.cacheWrite) || 0,
+      };
+    });
+  }
+
+  /** 会话累计用量 + 分项成本（2026-11-05，用户口径「pi 算的，壳只搬」）。
+   *  tokens/costTotal 直接取 pi 的 getSessionStats()（它遍历**全部 session entries**：
+   *  message / usage / compaction / branch_summary / toolResult 五类，压缩后也不丢）。
+   *  costSplit 用**同一批 entries、同一个 usage.cost** 逐条累加——pi 只把 total 汇进 stats，
+   *  分项它自己算好了但没暴露，这里按它自己的结果相加，不做任何定价/归一。
+   *  两此遍历口径必须与 pi 的 getSessionStats 逐行对齐（见 dist/core/agent-session.js）。 */
+  getUsageDetail(): Promise<{
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    costTotal: number;
+    costSplit: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  }> {
+    return this.ready().then(() => {
+      const split = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const add = (u: any): void => {
+        if (!u) return;
+        const c = u.cost || {};
+        split.input += Number(c.input) || 0;
+        split.output += Number(c.output) || 0;
+        split.cacheRead += Number(c.cacheRead) || 0;
+        split.cacheWrite += Number(c.cacheWrite) || 0;
+      };
+      const sm: any = this.session.sessionManager;
+      const entries: any[] = typeof sm?.getEntries === "function" ? sm.getEntries() : [];
+      for (const e of entries) {
+        if (!e) continue;
+        if (e.type === "usage") add(e.usage);
+        else if ((e.type === "branch_summary" || e.type === "compaction") && e.usage) add(e.usage);
+        if (e.type !== "message") continue;
+        const msg = e.message;
+        if (msg && (msg.role === "assistant" || msg.role === "toolResult")) add(msg.usage);
+      }
+      const st: any = this.session.getSessionStats();
+      return {
+        tokens: {
+          input: Number(st?.tokens?.input) || 0,
+          output: Number(st?.tokens?.output) || 0,
+          cacheRead: Number(st?.tokens?.cacheRead) || 0,
+          cacheWrite: Number(st?.tokens?.cacheWrite) || 0,
+          total: Number(st?.tokens?.total) || 0,
+        },
+        costTotal: Number(st?.cost) || 0,
+        costSplit: split,
+      };
+    });
   }
 
   /** 上下文压缩设置真值（2026-11-05 上下文用量弹层）：pi 的自动压缩判据是

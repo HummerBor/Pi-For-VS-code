@@ -216,9 +216,9 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
-	/** 显式生命周期真值（2026-10-23 实测事故「跑着的子 agent 浮窗显示 ✓」）：异步 run 的
-	 *  真实状态随载荷走，快照/回放不再靠 stopReason 启发式猜——每回合结束 stopReason 都会
-	 *  更新成正常值，回合收尾 ≠ 任务收尾。同步最终结果无此字段，走旧判定 */
+	/** 显式生命周期真值（2026-10-23 实测事故「跑着的子 agent 浮窗显示 ✓」）：真实状态随载荷
+	 *  走，快照/回放不再靠 stopReason 启发式猜——每回合结束 stopReason 都会更新成正常值，
+	 *  回合收尾 ≠ 任务收尾。2026-11-13 同步单也补上（见 runSingleAgent 处注释） */
 	running?: boolean;
 	status?: "running" | "completed" | "failed" | "killed";
 }
@@ -440,6 +440,11 @@ async function runSingleAgent(
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model,
 		step,
+		// 显式生命周期真值（2026-11-13 用户实测事故「浮窗说完成、主 agent 半天没回复」）：
+		// 同步单此前不带 running/status，展示层只能吃 stopReason 启发式——而那份启发式把
+		// "toolUse" 当成了收尾值（写错枚举），于是每隔回合结束就翻一次 ✓ 完成。现在与异步单
+		// 同口径：开跑即 running，close 后改 completed/failed，展示层不再猜。
+		status: "running",
 	};
 
 	const emitUpdate = () => {
@@ -562,6 +567,8 @@ async function runSingleAgent(
 		});
 
 		currentResult.exitCode = exitCode;
+		// 终态真值（同上）：退出码 + 失败原因收口后改写——此后 emitUpdate / toolEnd 载荷都是终态
+		currentResult.status = exitCode === 0 && !isFailedResult(currentResult) ? "completed" : "failed";
 		// 台账收口（2026-11-02）：终态写回——左侧折叠组/浮窗历史的真值
 		try {
 			markRun(handle, {
@@ -736,8 +743,7 @@ function startAsyncRun(
 				}
 				emitAsyncProgress(pi, run);
 				opts.onClosed?.();
-				// 结果回传主会话（送达分档见 reportBackToMain：失败 steer 插队、完成 followUp
-				// 排队）；killed 不回传（用户主动终止，已知）
+				// 结果回传主会话（送达分档见 reportBackToMain：非完成态一律 steer 插队、完成 followUp 排队）
 				reportBackToMain(pi, run);
 				stopAsyncProc(run); // proc close 另行触发，那里只做 quiet 收尾防双重回传
 				continue;
@@ -865,24 +871,33 @@ function asyncDetails(run: AsyncRun): SubagentDetails {
 	return { mode: "single", agentScope: run.agentScope, projectAgentsDir: null, results: [trimmed] };
 }
 
-/** 结果回传主会话（2026-10-23 送达分档，用户拍板「失败插队、完成排队」）：
- *  失败/异常 → deliverAs:"steer"（回合边界插队，主会话忙也下一轮必见，不被排队压住）；
+/** 结果回传主会话（2026-10-23 送达分档，用户拍板「失败插队、完成排队」；2026-11-13 用户
+ *  又补一条「子 agent 不管因为什么结束都要给主 agent 一个回复」→ killed 也回传，
+ *  不然主会话不知道那单已经死了，还以为在跑）——
+ *  失败/已终止 → deliverAs:"steer"（回合边界插队，主会话忙也下一轮必见，不被排队压住）；
  *  完成 → deliverAs:"followUp"（排队不打断，完成是常态不抢跑）。
  *  失败文本带原因（error/errorMessage/stderr 截断）——主会话不用再 collect 就知道为什么挂。
- *  killed 不回传（用户主动终止，已知）；双重回传由 run.status 守卫（close/拒单分支
- *  只在结算时进这里一次）。 */
+ *  双重回传由 run.status 守卫与 reported 台账防住（close/拒单分支只在结算时进这里一次）。
+ *
+ *  ⚠️ followUp 的真实送达时机（pi-agent-core/dist/agent-loop.js:197）：**只有主 agent
+ *  没有工具要调的那一刻**才取队列。所以主 agent 自己 sleep 轮询 = 把回传关在门外，
+ *  越等越晚——禁轮询的硬拦截见 registerGuardToolCall。 */
 function reportBackToMain(pi: ExtensionAPI, run: AsyncRun): void {
-	if (run.status !== "completed" && run.status !== "failed") return;
+	if (run.status !== "completed" && run.status !== "failed" && run.status !== "killed") return;
 	const output = truncateParallelOutput(getResultOutput(run.result));
-	const head = run.status === "completed" ? "完成" : "失败";
+	const head = run.status === "completed" ? "完成" : run.status === "killed" ? "已终止" : "失败";
 	const reason =
 		run.status === "failed"
 			? String(run.error || run.result.errorMessage || run.result.stderr || "").trim()
-			: "";
+			: run.status === "killed"
+				? "用户主动终止（subagent_kill / 会话侧停止），已产生的文件改动不会自动撤销"
+				: "";
+	// 前缀契约（改格式必同步两处消费方）：piCore 的 message_start 实时上屏正则 +
+	// webview 的 addUser / queue 回报卡片正则，三处一起改
 	const text = `[子 agent ${run.handle} ${head}] ${run.agent}: ${reason ? reason.slice(0, 300) + " —— " : ""}${output.slice(0, 2000)}`;
 	try {
 		void pi.sendUserMessage(text, {
-			deliverAs: run.status === "failed" ? "steer" : "followUp",
+			deliverAs: run.status === "completed" ? "followUp" : "steer",
 		});
 		markRun(run.handle, { reported: true });
 	} catch {
@@ -955,6 +970,18 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 	}
 }
 
+/** 纯等待型命令识别（禁轮询硬拦截用）。只认「整条命令就是等」的几种写法：
+ *  正常业务命令里夹 sleep（`npm test && sleep 1`）不命中，不干涉正经用途。 */
+function isPureWaitCommand(cmd: string): boolean {
+	const c = cmd.trim();
+	return (
+		/^sleep\s+\d+(?:\.\d+)?[smhd]?\s*;?$/i.test(c) || // sleep 150 / sleep 2.5s
+		/^(?:ba)?sh\s+-c\s+['"]?sleep\s+\d+(?:\.\d+)?[smhd]?['"]?\s*;?$/i.test(c) || // bash -c "sleep 150"
+		/^start-sleep\s+(?:-s(?:econds)?\s+)?\d+\s*;?$/i.test(c) || // PowerShell
+		/^(?:while|until|for)\b[\s\S]*\bsleep\b[\s\S]*\bdone\s*$/i.test(c) // 轮询循环
+	);
+}
+
 /** 停 rpc 子进程：stdin EOF（rpc 优雅 shutdown），5s 不退 SIGKILL 兕底；不改 status（调用方负责） */
 function stopAsyncProc(run: AsyncRun) {
 	try {
@@ -971,7 +998,8 @@ function stopAsyncProc(run: AsyncRun) {
 	}, 5000);
 }
 
-/** 用户主动终止：置 killed 态（结算/回传分支不进），再停进程 */
+/** 用户主动终止：置 killed 态 + 台账落死因，再停进程。**回传由调用方负责**（subagent_kill
+ *  工具里调 reportBackToMain）——本函数保持单一职责，不动主会话 */
 function killAsyncRun(run: AsyncRun) {
 	if (run.status !== "running") return;
 	run.status = "killed";
@@ -1009,7 +1037,7 @@ const SubagentParams = Type.Object({
 	async: Type.Optional(
 		Type.Boolean({
 			description:
-				"Fire-and-forget dispatch (single mode only): returns a handle immediately, the agent runs in the background and reports back when done. Use subagent_list/subagent_collect/subagent_steer/subagent_kill to manage it.",
+				"Fire-and-forget dispatch (single mode only): returns a handle immediately, the agent runs in the background and reports back when done. Use subagent_list/subagent_collect/subagent_steer/subagent_kill to manage it. After dispatching, do NOT poll or wait (no sleep loops) — end your turn and the completion message will start a new one.",
 				default: false,
 		}),
 	),
@@ -1024,6 +1052,11 @@ export default function (pi: ExtensionAPI) {
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"MODE SELECTION (default false = sync, waits and returns the result): use async:true when the user asks for background/parallel-with-conversation/non-blocking dispatch (e.g. 后台跑/同时去/别堵着会话/边聊边干); keep sync when they just want a task done and expect the result in this conversation.",
 			"async (single mode only) returns a handle immediately — the main session stays free; progress auto-reports and results are pushed back when done. Manage with subagent_list / subagent_collect / subagent_steer / subagent_kill.",
+			// 【不要轮询（2026-11-13 用户截图实测：主 agent 靠 `sleep 150` 硬等后台单）】
+			// 完成回传走 followUp，而 followUp 只在**回合边界**送达：轮询不但不早，反而把回传
+			// 押在队列里（用户看到的就是「Working… 排队 1 条」），比干完活就收手更慢。
+			// 模型没这个先验就会自己发明 sleep 轮询，工具描述是唯一能说清的地方。
+			"After an async dispatch: do NOT poll. No subagent_list loops, no `sleep N` / wait commands to \"check later\", no busy-waiting of any kind. Just finish what you were doing and end your turn — the completion/failure message is delivered automatically and starts a new turn. Polling keeps the turn busy, which holds that message in the queue (it is only delivered at a turn boundary), so waiting actively makes you later.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
@@ -1207,7 +1240,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `已派出 ${handle}（${agent.name}）后台执行，主会话不阻塞。\nsubagent_list 查进度 / subagent_collect ${handle} 取结果 / subagent_steer ${handle} 递话 / subagent_kill ${handle} 终止。完成或失败时会自动回传一条消息。`,
+							text: `已派出 ${handle}（${agent.name}）后台执行，主会话不阻塞。\nsubagent_list 查进度 / subagent_collect ${handle} 取结果 / subagent_steer ${handle} 递话 / subagent_kill ${handle} 终止。完成、失败、被终止都会自动回传一条消息——不要自己 sleep 轮询。`,
 						},
 					],
 					details: asyncDetails(run),
@@ -1712,7 +1745,7 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent_list",
 		label: "Subagent List",
 		description:
-			"List async subagent runs (handles, status, elapsed time, usage). Check on background agents dispatched with subagent async:true.",
+			"List async subagent runs (handles, status, elapsed time, usage). Check on background agents dispatched with subagent async:true. Do not poll it: call it only when the user asks about status.",
 		parameters: Type.Object({}),
 		async execute() {
 			const runs = [...asyncRuns.values()];
@@ -1825,10 +1858,36 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: `${run.handle} 已结束（${run.status}），无需终止。` }] };
 			}
 			killAsyncRun(run);
+			// 终止也要给主会话一个回复（2026-11-13 用户拍板）：不回传的话主 agent 还当它
+			// 在跑，要么傻等要么反复查；killed 走 steer 插队（见 reportBackToMain）
+			reportBackToMain(pi, run);
 			return {
 				content: [{ type: "text", text: `已向 ${run.handle} 发送停止（stdin EOF 优雅关闭，5s 后强杀兕底）。已产生的文件改动不会自动撤销。` }],
 			};
 		},
+	});
+
+	// ── 禁 sleep 轮询（硬拦截，2026-11-13 用户拍板「主 agent 别自己 sleep 硬等」）──
+	// 背景：异步单的完成回传走 followUp，而 followUp 只在主 agent **没有工具要调**的那一刻
+	// 才被 pi 的 agent loop 取出（agent-loop.js:197）——所以主 agent 自己 `sleep 150` 轮询
+	// 不但在浪费回合，还把回传关在门外（用户看到的就是「Working… 排队 1 条」）。
+	// 工具描述已经写了「不要轮询」，但提示词约束不等于约束，模型照旧会发明 sleep；这里用
+	// pi 原生 tool_call 钩子把「纯等待命令」直接拒掉。只拦两种条件同时成立的情形：
+	// ① 后台确有单在跑；② 整条命令就是「等」（正常命令里夹 sleep 一律放行，不干涉业务）。
+	pi.on("tool_call", (event) => {
+		if (event.toolName !== "bash") return;
+		const cmd = String((event.input as { command?: unknown } | undefined)?.command ?? "");
+		if (!cmd || !isPureWaitCommand(cmd)) return;
+		const running = [...asyncRuns.values()].filter((r) => r.status === "running").map((r) => r.handle);
+		if (running.length === 0) return; // 没在跑的后台单，等多久都与子 agent 无关，不拦
+		return {
+			block: true,
+			reason:
+				`Blocked: async subagent ${running.join(", ")} is still running, and this command only waits. ` +
+				"Do not poll. The completion / failure / killed message is delivered automatically and starts a new turn, " +
+				"but pi only drains it when you have no tool calls left — so sleeping makes you later, not earlier. " +
+				"End your turn (or do other work now).",
+		};
 	});
 
 	// 会话关闭不杀后台子进程（2026-10-30 需求文档 P0-3「父会话关闭不杀子进程」拍板）：

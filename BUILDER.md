@@ -183,3 +183,94 @@
 - **未做（记债）**：不做行内词级高亮（pi 的 renderDiff 有，逐词 diff 值不值另议）；Bar 上
   「查看改动 / 清单」两按钮在窄面板可能挤（未实测）；清单宽度不持久化（刷新回默认 236px）。
 - **待用户实测**：真实面板里开一轮改动 → 改动条「查看改动」→ 核对计数/并排色块/中文路径。
+
+## 上下文用量弹层·用量与花费（2026-11-05 用户三轮纠偏后定稿：**pi 算的，壳只搬**）
+
+- **踩过的两个坑（记档防复蹈）**
+  1. 第一版从 `getMessages()` 累加 usage → 压缩后旧消息被摘要顶掉、`usage` 类型条目压根不在
+     messages 里、toolResult 的 usage 也漏 → 会话一压缩账就少一截（用户当场看出「瞎算」）。
+  2. 第二版按模型价目表重算分项并「归一」到总额 → 壳在自己造钱，必然与 pi 分叉（用户否掉）。
+- **定稿口径**（用户原话「能复用就复用呗，为啥要自己搞一套」）
+  - 合计金额 = `getSessionStats().cost` —— pi 遍历**全部 session entries**（message / usage /
+    compaction / branch_summary / toolResult 五类）累加的 usage.cost.total，**就是页脚那个 $**。
+  - 四类 token = `getSessionStats().tokens`（input 非缓存 / cacheRead / cacheWrite / output）。
+  - 分项金额 = pi 逐条 `usage.cost.{input,output,cacheRead,cacheWrite}` 的累加（piClient.getUsageDetail：
+    与 getSessionStats 同一批 entries、同一份 pi 结果，pi 只是没把它汇总成分类；壳只做加法）。
+  - 壳唯二的动作：**货币换算**（× 汇率）与空值兜底。不定价、不归一、不缩放。
+  - 缺省语义：`priced=false`（pi 没算出钱/免费模型）→ 只显 token；`splitKnown=false`（分项全零）
+    → 隐藏分项金额。
+- **货币（用户：国内用 DeepSeek，账单是元）**：默认 `cny`，按**用户可改汇率**折算（`piChat.usdCnyRate`，
+  默认 7.2），弹层右上明写「按 1 USD = 7.2 CNY 折算」；设置菜单新增「花费显示货币 / USD→CNY 汇率」两项，
+  改完即时重发弹层数据（`piCore.pushContextDetail`）。pi 目录价是 USD（docs/models-configuration.md 明写），
+  换算只是显示层，不改 pi 的数。
+- **pi 数字偏小的可能原因（不改壳）**：pi 的模型目录价可能落后于服务商现行价（尤其国内 provider）。
+  我们照搬 pi 的数；发现对不上账单应报 pi / 改 pi 的 models 配置，壳不擅自修正。
+- **价目自检（2026-11-05 用户「不应该只是改一个 ds，启动插件后可以自动查一次」）**：piClient
+  `getModelPricing()` 读 pi 的 `model.cost`（目录价 + 用户在 pi 配置里的覆盖，USD/百万 token，零网络）；
+  piCore 在 **boot done 之后**与 **model_select** 各查一次（`refreshModelPricing`），结果写诊断日志
+  `price: <provider>/<id> input=… cacheRead=… cacheWrite=… output=… USD/M (pi catalog)`，并随 ctxDetail
+  下发，弹层底部常驻一行「pi 价目 · <模型>: 输入 … · 缓存命中 … · 输出 …」（按弹层货币换算）——
+  对账锚点：pi 算的钱对不对，先看它用的是哪套价。
+- **联网那一半（2026-11-05 用户「加」）**：不抓 provider 价目页（改版即崩、代理/离线报错），改走
+  **pi 自己的目录刷新**——`pi update --models`（docs/models.md:15 官方入口，远端 pi.dev 目录）。
+  `piSetup.refreshModelCatalog()`：真 node + 内置 cli 跑一次（无 node 退 PATH pi），90s 超时，回报输出；
+  设置菜单新增「检查模型价目更新（联网，走 pi 的 pi.dev 目录）」，**只在用户点它时联网**，不静默。
+  实测：`node vendor/pi/dist/bundle/cli.js update --models` → `Model catalogs refreshed`（exit 0）。
+  边界：进程内 runtime 是启动时载入的目录，**不会热重读**——文案明说「新价从下个会话/重载起生效，
+  当前会话仍按旧目录价算」，不假装立刻生效（试过在 panel 里比对 before/after，结果是永远相等 = 死路径，已删）。
+- **实时性（2026-11-05 用户：「这个百分比不是实时的，pi 本身好像是实时的」）**：根因是弹层只靠 `state`
+  帧刷新，而 state 只在轮次边界发（refreshState 挂在 agent_settled / model_select），流式期间数字冻住。
+  修法：弹层开着时 webview 每 1s 发一次 `ctxQuery{light:true}` 心跳；宿主 light 分支只重算
+  总量/花费/阈值（getSessionStats + usage entries 遍历，都便宜），分类明细复用上次 `bd` 按新总量缩放
+  ——跳过 `getMessages()` 的整树 JSON 克隆（大会话每秒一次会卡）。心跳随弹层关闭/视图 dispose 停；
+  换会话与 compaction_end 会作废 `ctxBreakCache`（消息树变了，旧估算不作数）。
+  验证：无头探针数消息流（#ctx-tick → ctxQuery=3 light=2，1s 节奏正确）。
+- **验证**：`test:usage` 9 例（透传不重算、分项和≠总额也照原样、汇率换算与兜底、priced/splitKnown、
+  脏数据），全套 12 支回归绿；无头截图核对（`make-changes-preview.mjs#ctx`，分项和 == 合计）。
+
+
+- **背景**：弹层原有的「分类百分比」（系统提示词/工具定义/对话消息…）是**积分式**读法，答不了
+  「这次花了多少钱、缓存省了多少」；用户口径「现在这种比较适合积分统计方式，不适合我们这种 api 的」。
+- **数据面零自研定价**：pi 每条 assistant 消息的 `usage` 已带四类 token（`input` 非缓存 /
+  `cacheRead` / `cacheWrite` / `output`）**和 pi 按模型价目表算好的分项成本**
+  （`usage.cost.{input,cacheRead,cacheWrite,output,total}`，供应商回传实付时 `totalFromProvider=true`）。
+  新增纯函数叶 `src/domain/usageTotals.ts`（`sumUsage`，零 import）：只做加法，总额优先取
+  `cost.total`（实付）而非分项和——两者相加就是重复计费。
+- **落地**：`CtxDetailMsg.usage`（protocol 新字段）+ piCore 复用它已经取到的消息 → `sumUsage`；
+  webview 弹层在分类图例下方新增「用量与花费」：缓存命中 / 缓存写入 / 非缓存输入 / 输出
+  （token + 金额），末行合计 + 「估算/实付」标；无价目模型只显 token（不显假 $0）。
+- **验证**：`test:usage` 8 例（累加、total 优先不重复、分项兜底、totalTokens 兜底、实付标记、
+  脏数据、无价目）；全套 12 支回归绿；无头截图核对排版（`make-changes-preview.mjs#ctx`）。
+- **思考项（等用户拍板）**：分类百分比要不要降级/去掉——现在两段并列，若用户只要花费视角，
+  可把分类折进「对话消息」明细或做成折叠。
+
+## 技能调用规则注入·切掉「全盘搜 SKILL.md」（2026-11-12 用户拍板：不修上游，只管装本插件的人）
+
+- **现象**：装了 `superpowers` 包的会话，agent 每个新会话 / 每次上下文压缩后都先去 `find` /
+  `grep` 全盘搜 SKILL.md，卡在 bash 上不干活（面板显示「已中断当前任务」）。用户原话：
+  「superpowers 这垃圾玩意在哪个 agent 都会掉」/「就管使用这个插件的，把我们的完善好吧」。
+- **根因（实测，不是措辞问题）**——两条叠加：
+  1. `~/.pi/agent/git/github.com/obra/superpowers/.pi/extensions/superpowers.ts` 在
+     `session_start` / `session_compact` 往消息最前面**伪造一条 user 消息**（using-superpowers 全文），
+     要求「任何回复、任何行动（含澄清问题、翻代码）之前必须先调技能，1% 可能适用也必须调」，
+     还配 Red Flags 表封杀「我先干活」；`agent_end` 才关闭 → 每轮新会话重置，所以「不止一次」。
+  2. 它 **14/14** 个技能的 frontmatter 全标了 `disable-model-invocation: true`，而 pi 的
+     `formatSkillsForPrompt` 会用该字段过滤 → 系统提示 `<available_skills>` 里一条 superpowers
+     技能都没有（实测 `getSkills()` 15 条 → 提示里只剩 1 条项目技能）。模型既被要求必须调技能、
+     又看不到技能名和路径，唯一出路就是扫盘。Claude Code 有 `Skill` 工具兜底，搬到 pi 就露馅。
+- **修法（插件层，对所有用户生效）**：pi 原生宿主钩子 `resourceLoaderOptions.appendSystemPromptOverride`
+  （与既有 `extensionFactories` 同一处口子，SDK 给宿主用，pi 内核零改动、superpowers 包零改动 ——
+  它更新也不会冲掉）。新文件 `src/pi/skillInvocationRules.ts` 放规则文本 + 完整根因注释
+  （含「别改回去的理由」）；`piClient.createServices` 里 `appendSystemPromptOverride: (base) => [...base, SKILL_INVOCATION_RULES]`。
+  规则要点：只能人工触发的技能不在清单里是正常的 / 禁止 find·grep 全盘搜 SKILL.md / 清单里有的直接
+  read `<location>` / 技能失败就跳过继续干活 / 用户说「直接干活」跳过一切技能前置流程 / **与任何
+  「必须调用技能」「1% 可能就要调用」的注入冲突时以本节为准**。
+- **为什么不只靠用户 AGENTS.md**：那只是我的个人补丁，别的装本插件的人没有。同理没删 superpowers
+  的注入消息——它是别人的扩展，我们只压优先级（system 层 > 伪造的 user 消息）。
+- **验证**：`npm run compile` 绿（typecheck:webview + tsc 零报错）；冒烟脚本用真实
+  `DefaultResourceLoader` + 同名 override 确认 `appendSystemPrompt` 段数 1 且含规则全文；源头核对
+  bundle 里 `this.appendSystemPrompt = this.appendSystemPromptOverride ? override(baseAppend) : baseAppend`
+  链路，`appendSystemPrompt` 进 system prompt 的 `addendum` 段。
+- **边界 / 未做**：只对**新会话**生效（已在跑的面板要重开）；若下一轮发现 system 层仍压不住
+  （模型偶尔更听伪造的 user 消息），再加一道 `context` 事件钩子直接改写那条消息 —— 先观察，别一次上两层。
+  用户机器的 `~/.pi/agent/AGENTS.md` 另加了「技能调用」三条做个人双保险（不进仓库）。

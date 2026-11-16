@@ -125,20 +125,38 @@ if (windowed) {
   eq("总量 20", windowed.tasks[0].activityCount, 20);
 }
 
-/* 第 7 组：流式中间态 stopReason（0.111 事故回归）——中间回合 toolCall 不是完成 */
+/* 第 7 组：流式中间态 stopReason（0.111 事故回归 + 2026-11-13 枚举写错事故）——
+   中间回合不是完成。pi 的 StopReason 真值是 "toolUse"（docs/message-types.md）；
+   旧代码认的 "toolCall" 是内容块类型，从来不是收尾原因——那份判定等于没生效，
+   同步单从第一个工具回合起就顶着 ✓ 完成（用户：浮窗说完成、主 agent 半天没回复）*/
 const midTurn = subagentSnapshot({
   mode: "single",
-  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "toolCall", usage: {}, messages: [{ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: {} }] }] }],
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "toolUse", usage: {}, messages: [{ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: {} }] }] }],
 });
-ok("toolCall 中间态识别", midTurn !== null);
-if (midTurn) eq("toolCall → running", midTurn.tasks[0].status, "running");
+ok("toolUse 中间态识别", midTurn !== null);
+if (midTurn) eq("toolUse → running", midTurn.tasks[0].status, "running");
+
+const legacyMid = subagentSnapshot({
+  mode: "single",
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "toolCall", usage: {}, messages: [] }],
+});
+ok("旧载荷 toolCall 识别", legacyMid !== null);
+if (legacyMid) eq("toolCall → running（旧载荷兼容）", legacyMid.tasks[0].status, "running");
+
+/* 显式真值优先于启发式：异步 run 中途 stopReason 可能是 stop，但 status=running 就是没完 */
+const explicitRunning = subagentSnapshot({
+  mode: "single",
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "stop", status: "running", running: true, usage: {}, messages: [] }],
+});
+ok("显式 running 识别", explicitRunning !== null);
+if (explicitRunning) eq("status=running → running", explicitRunning.tasks[0].status, "running");
 
 const endTurn = subagentSnapshot({
   mode: "single",
-  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "end", usage: {}, messages: [{ role: "assistant", content: [{ type: "text", text: "完事" }] }] }],
+  results: [{ agent: "a", task: "t", exitCode: 0, stopReason: "stop", usage: {}, messages: [{ role: "assistant", content: [{ type: "text", text: "完事" }] }] }],
 });
-ok("end 收尾识别", endTurn !== null);
-if (endTurn) eq("end → done", endTurn.tasks[0].status, "done");
+ok("stop 收尾识别", endTurn !== null);
+if (endTurn) eq("stop → done", endTurn.tasks[0].status, "done");
 
 /* 第 8 组：两层分离（2026-09-24 拍板）——展示显示调用名（随便取），派发归 pi 分类
    （不然老报名字错误）；台账按任务文本对号，缺则回退分类名 */

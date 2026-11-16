@@ -162,9 +162,13 @@ export interface WvQueuedRetrieveMsg {
  * 数据全在宿主：总 token/窗口走 pi 原生 getSessionStats().contextUsage，分类明细由
  * piCore 按 system 消息的分节结构自己拆（见 piCore.collectContextDetail 头注释），
  * 压缩阈值走 settingsManager.getCompactionSettings（pi 原生 getter）。webview 只渲染。 */
-/** 打开/刷新上下文用量弹层（webview 点页脚百分比） */
+/** 打开/刷新上下文用量弹层（webview 点页脚百分比）。
+ *  light=true = 弹层开着时的 1s 心跳（2026-11-05 用户「百分比不是实时的，pi 本身是实时的」）：
+ *  只重算总量/花费（getSessionStats 很便宜），分类明细复用上一次的估算结果按新总量缩放，
+ *  跳过 getMessages 的全量快照（大会话每秒克隆一次会卡）。 */
 export interface WvCtxQueryMsg {
   type: "ctxQuery";
+  light?: boolean;
 }
 /** 拖动压缩阈值滑块：宿主写 pi settings.json 的 compaction.reserveTokens（pi 自己的
  *  FileSettingsStorage 锁），回 ctxDetail 刷新 */
@@ -570,6 +574,49 @@ export interface CtxDetailMsg {
   segments: CtxSegment[];
   /** 缩放前的估算合计（诊断用：only 用于算 scale，不必展示） */
   estimated: number;
+  /** 当前模型生效价目（pi 的 model.cost，USD/百万 token；含用户在 pi 配置里的覆盖）。
+   *  用途：让用户一眼判断 pi 算的钱是不是老价——壳只显示，不参与计算。 */
+  pricing?: CtxPricingMsg;
+  /** 会话用量与花费（2026-11-05：缓存/非缓存分开 + 各自金额）。数据源是 pi 每条 assistant
+   *  消息的 usage（含 pi 按价目表算好的分项 cost），宿主只做加法（domain/usageTotals.ts）；
+   *  拿不到消息时缺省，webview 隐藏这一段 */
+  usage?: CtxUsageMsg;
+}
+/** 当前模型价目（pi 的 model.cost 原样，USD / 百万 token） */
+export interface CtxPricingMsg {
+  provider: string;
+  id: string;
+  name: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+/** 会话用量/花费（对应 domain/usageTotals.ts 的 UsageSummary）。
+ *  **全部来自 pi**：tokens/cost = getSessionStats()；分项金额 = pi 逐条 usage.cost 累加。
+ *  壳只做货币换算（cny 时乘用户设置的汇率），不做定价、不做归一。 */
+export interface CtxUsageMsg {
+  /** 非缓存输入 token（pi 已归一化，不含缓存读写） */
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tokens: number;
+  costInput: number;
+  costOutput: number;
+  costCacheRead: number;
+  costCacheWrite: number;
+  /** 合计金额 = pi 的 cost（已按 currency 换算） */
+  cost: number;
+  currency: "usd" | "cny";
+  /** 实际使用的汇率（usd 时 1；cny 时 = 用户设置/默认 7.2） */
+  fx: number;
+  /** false = pi 没算出钱（界面只显 token，不显 ¥0 的假账） */
+  priced: boolean;
+  /** false = pi 的分项成本全零（只有总额，界面隐藏分项金额） */
+  splitKnown: boolean;
+  /** 缓存命中率（0~1）= cacheRead / (cacheRead + cacheWrite + input)；null = 还没有输入 */
+  cacheHitRate: number | null;
 }
 /** 工单十八：切页签/真相重拉的原子快照——postUiState 原先连发 render/liveSync/busy/mode/
  *  banner/queuedClear/queuedAdd 七条消息，webview 各区域各自更新，中间态混搭（消息区 B、

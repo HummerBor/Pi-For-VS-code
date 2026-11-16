@@ -2,7 +2,7 @@
   "name": "pi-for-vscode",
   "displayName": "Pi For VSC",
   "description": "VS Code 图形界面 for pi coding agent（进程内直连）",
-  "version": "0.1.46",
+  "version": "0.1.52",
   "publisher": "HummerBor",
   "license": "MIT",
   "repository": {
@@ -167,6 +167,24 @@
           ],
           "default": "one-at-a-time",
           "description": "插话送达方式（启动 pi 时自动应用，⚙ 菜单可切换）"
+        },
+        "piChat.costCurrency": {
+          "type": "string",
+          "enum": [
+            "cny",
+            "usd"
+          ],
+          "enumDescriptions": [
+            "元：把 pi 的 USD 价目按下方汇率折算成元（国内服务商账单是元）",
+            "美元：pi 的价目原值，不折算"
+          ],
+          "default": "cny",
+          "description": "上下文用量弹层里花费的显示货币（金额本身来自 pi 的 getSessionStats，壳只做汇率换算）"
+        },
+        "piChat.usdCnyRate": {
+          "type": "number",
+          "default": 7.2,
+          "description": "USD → CNY 汇率（仅在显示货币为元时用于折算；按你实际结汇/记账口径改）"
         }
       }
     }
@@ -184,6 +202,7 @@
     "test:errclass": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/errorClass.test.mts",
     "test:diffview": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/diffView.test.mts",
     "test:changespage": "node scripts/test/changesPage.test.mjs",
+    "test:usage": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/usageTotals.test.mts",
     "test:replay": "node scripts/test/subagentReplay.test.mjs",
     "test:html": "node scripts/test/html.test.mjs",
     "test:ctx": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/ctxBreakdown.test.mts",

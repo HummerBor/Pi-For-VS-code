@@ -301,21 +301,50 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return core;
   }
 
-  /** 左侧会话列表点击（2026-10-20 二轮拍板：「点击 = 中间编辑区新打开一个页签，
-   *  不用切换」）：
-   *  · 未打开 → 中间区开新编辑器标签装它（绝不就地换掉活动标签的会话）；
-   *  · 已打开 → 切到持有者（副栏后台持有先切页签再聚焦）——占用守卫同在此，绝开第二份；
-   *  副栏「当前会话内切换」是另一条链路（副栏自己的 🕐 选择器），用户拍板不动 */
+  /** 左侧会话列表点击（2026-11-16 用户拍板三条路由，替代 2026-10-20 二轮拍板的无条件版
+   *  「未打开→中间开新页签 / 已打开→切到持有者」——那条在「副栏关掉、人在编辑区」时
+   *  会把右栏整个拉出来夺焦点，用户实测报 bug）。
+   *  核心语义（用户口径）：**「打开」永远是「新增一个视图」，从不就地替换**——
+   *  ① 已开（编辑区标签 / 副栏页签）→ **定位到那里**（副栏隐藏时不算，见④）；
+   *  ② 没开 → **编辑区新开一个标签**。左侧列表与外部命令这一侧的地盘就是编辑区，
+   *     绝不往副栏里塞（副栏的会话由它自己的 ＋ / ⏱ 产生）；
+   *  ③ 副栏页签自己选历史（⏱）走另一条 app: applySessionPick → 副栏新页签；
+   *  ④ 副栏隐藏时它挂着的会话**不算占用**（findHolderForOpen），所以隐藏的副栏永远
+   *     不会被"定位"到——只剩一种例外：那个页签正在跑任务（它真的在写文件），不抢，
+   *     拉出副栏给用户看 */
   static async openOrFocusSession(file: string, label?: string): Promise<void> {
-    const holder = ChatPanelProvider.findHolder(file);
+    const sb = ChatPanelProvider.sidebar;
+    const holder = ChatPanelProvider.findHolderForOpen(file);
     if (holder) {
-      if (holder.p === ChatPanelProvider.sidebar && holder.tabId !== holder.p.activeTabId) {
-        holder.p.handleTabSwitch(holder.tabId);
+      if (holder.p === sb && sb && !sb.view?.visible) {
+        // 走到这里只可能是"正在跑"（findHolderForOpen 已过滤空闲的隐藏页签）
+        sb.post({ type: "notice", text: sb.L.sessionRunningRight });
+        sb.focusSelf();
+        return;
       }
+      // ① 已开：定位到持有者（副栏后台页签先切过去再聚焦）
+      if (holder.p === sb && sb && holder.tabId !== sb.activeTabId) sb.handleTabSwitch(holder.tabId);
       holder.p.focusSelf();
       return;
     }
+    // ② 没开：编辑区新开一个标签（左侧列表 / 外部命令的落点，与副栏可见与否无关）
     ChatPanelProvider.factories.openEditorTab?.(file, label);
+  }
+
+  /** 重新显示时的占用对账（2026-11-16 用户拍板）：隐藏期间该页签挂着的会话可能已经被
+   *  别处拿去开了（隐藏不算占用，见 findHolderForOpen）——那把**这个重复的页签直接关掉**，
+   *  用户原话「编辑区提前打开的在右侧多页签里就关掉呗」。留着它再改一个新会话纯属多余。
+   *  没被抢的页签原样留着：**隐藏再显示不重载、不起 pi**。
+   *  只碰空闲页签：正在跑的页签不可能同时被别处持有（findHolderForOpen 里 busy 照算占用） */
+  private reclaimHeldElsewhere(): void {
+    for (const [tabId, core] of [...this.cores]) {
+      if (core.isBusy) continue;
+      const f = core.currentSessionFile;
+      if (!f) continue;
+      const h = ChatPanelProvider.findHolder(f);
+      if (!h || (h.p === this && h.tabId === tabId)) continue;
+      void this.handleTabClose(tabId); // 已开在别处 → 本页签作废（会话文件不删）
+    }
   }
 
   /** 子 agent 转录 tab（2026-11-03 用户拍板「新建复制主会话页面」）：
@@ -385,6 +414,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void p?.runCommand();
   }
 
+  /** 「能不能在别处打开」用的占用判定（2026-11-16 用户拍板「副栏隐藏即不占用」）：
+   *  与 findHolder 同规则，唯独**隐藏的副栏里空闲页签挂着的会话不算占用**——隐藏只是腾地方，
+   *  用户从左侧列表点它时应当照常落到编辑区。但那条 runtime 没销毁（重开副栏不重载），
+   *  所以**正在跑的页签照样算持有**（它真的在写那个文件）；待发的握手认领也算。
+   *  安全类判定（删除守卫等）请继续用 findHolder 原版，别用这个 */
+  private static findHolderForOpen(file: string): { p: ChatPanelProvider; tabId: string } | undefined {
+    for (const p of ChatPanelProvider.allProviders) {
+      const idleHidden = p === ChatPanelProvider.sidebar && !p.view?.visible;
+      for (const [tid, c] of p.cores) {
+        if (idleHidden && !c.isBusy) continue;
+        if (c.currentSessionFile && samePath(file, c.currentSessionFile)) return { p, tabId: tid };
+      }
+      // 握手空窗（认领已下、核心未起）照样算持有：否则连点两下同一会话开两份
+      if (p.pendingSessionFile && samePath(file, p.pendingSessionFile)) return { p, tabId: p.activeTabId };
+    }
+    return undefined;
+  }
+
   /** 跨实例查找持有某会话文件的核心（刀3 双开守卫）：返回所属实例与标签 id——
    *  同实例多页签的旧循环不够用了，编辑器面板是独立实例 */
   private static findHolder(file: string): { p: ChatPanelProvider; tabId: string } | undefined {
@@ -440,8 +487,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // findHolder 视角回答「是否已被别的实例/页签持有」——同 provider 同页签自己问
       // 不算占用（幂等重开无害）。findHolder 读的 currentSessionFile 含 piCore 的
       // 提前认领量（claimedFile），boot 空窗期也看得见持有者
+      // 打开语义的占用闸：隐藏的空闲副栏页签不算（同 openOrFocusSession，见 findHolderForOpen）
       isSessionHeld: (file, selfTabKey) => {
-        const h = ChatPanelProvider.findHolder(file);
+        const h = ChatPanelProvider.findHolderForOpen(file);
         return !!h && !(h.p === this && h.tabId === selfTabKey);
       },
       // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
@@ -839,10 +887,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     };
     view.onDidChangeVisibility(() => {
-      if (view.visible && !this.sessionPickerShown) {
-        this.sessionPickerShown = true;
-        prewarm();
+      if (view.visible) {
+        if (!this.sessionPickerShown) {
+          this.sessionPickerShown = true;
+          prewarm();
+        }
+        // 隐藏期间被别处抢走会话的页签：直接关掉那个重复页签（见 reclaimHeldElsewhere）
+        this.reclaimHeldElsewhere();
+        this.bootRestored(this.activeTabId);
+        return;
       }
+      // 隐藏 = 只是腾地方：运行时与挂载全部保留，重开副栏不重载、不起 pi
+      // （"隐藏不占用"由 findHolderForOpen 保证，见其注释）
     });
     if (view.visible && !this.sessionPickerShown) {
       this.sessionPickerShown = true;
@@ -989,6 +1045,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.ensureCore(id).ensureClient();
   }
 
+  /** 副栏里「新开一个页签装这个会话」（2026-11-16 用户拍板：选历史 = 新开一个页签，
+   *  永不就地换掉当前页签——就地换看着像聊天内容被人换了）。页签走 freshTab 语义
+   *  （先新会话再切到目标文件，绝不 -c 接上别人正在写的那份） */
+  private async openInNewTab(file: string): Promise<void> {
+    this.handleTabNew();
+    const nc = this.ensureCore(this.activeTabId);
+    if (!nc.claimSession(file)) {
+      // 认领失败=空窗里被别处抢走（实践上只剩"重启恢复时两个页签记忆撞同一文件"）：
+      // 把用户送到持有者，顺手把刚开出来的空页签收掉——什么都不发生，就不需要解释什么
+      const empty = this.activeTabId;
+      ChatPanelProvider.findHolder(file)?.p.focusSelf();
+      void this.handleTabClose(empty);
+      return;
+    }
+    const r = await nc.ensureClient().switchSession(file);
+    if (r?.cancelled) { nc.releaseSessionClaim(); this.post({ type: "notice", text: this.L.switchCancelled }); return; }
+    const d = await nc.ensureClient().getMessages();
+    this.post({ type: "render", messages: d?.messages ?? [] });
+    // 不再发「已恢复会话: xxx」：新页签已经切过去、内容当场就在，再提示一句是噪音
+    //（2026-11-16 用户口径：已经做到的动作用界面反馈，不再另发通知）
+    // 切完补回每标签模型/思考记忆并同步页脚（刀3 语义补全）
+    await nc.reapplyModelMemory();
+    notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
+  }
+
   /** 工单十八：空页签的原子空快照——原先散发 state/render（部分分支还漏 queuedClear/banner/
    *  busy:false），A 页签的 Working/排队/横幅残留到 B（串显/两套 DOM）。一条 uiState 打包
    *  全部区域的空值，漏发在架构上不可能 */
@@ -1062,7 +1143,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.freshTabs.add(nid);
         this.activeTabId = nid;
         this.postEmptyUiState(nid);
-        this.ensureCore(nid).ensureClient(); // 同 handleTabNew：立即起会话恢复模型记忆
+        this.ensureCore(nid).ensureClient(); // 空页签当场起会话（模型/思考记忆立刻上屏，不等首发消息）
       }
       const next = this.cores.get(this.activeTabId);
       // 工单24 架构归位：转移后的活动页签不再盲发快照——webview 树若未建，
@@ -1297,98 +1378,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     await this.applySessionPick(pick);
   }
 
-  /** ⏱ 选择器选中项的落地链（单一真相）：占用守卫 → 就地切换/切到持有页签/忙碌才开
-   *  新并行标签 → 渲染链 + 记忆补回。副栏 🕐 选择器用它（副栏「当前会话内切换」用户
-   *  拍板 2026-10-20 保持不动）；左侧列表点击不走这里——列表 = 中间区新页签打开，
-   *  见 openOrFocusSession 二轮拍板（2026-10-20） */
+  /** ⏱/会话标题 选择器选中项的落地链（2026-11-16 用户口径）：
+   *  · 该会话已开着 → **直接把用户送到它那儿**（别实例→聚焦、其他页签→切过去、就是本页签
+   *    →什么都不做）。已经切过去了就不再弹「已在其他标签中打开」——那是纯噪音；
+   *  · 没人开过 → **新开一个页签装它**（副栏→副栏新页签，编辑区标签→编辑区新标签），
+   *    绝不替换当前页签（"替换"被明确否掉：看着像聊天内容被人换了）。
+   *  占用守卫仍在：同一 jsonl 两个 runtime 会双写（2026-09-20 事故），所以"开第二份"
+   *  这条路压根不存在，只有"送过去"和"新开一个空的承载页签"两种结果 */
   private async applySessionPick(pick: {
     label: string;
     action: "file" | "newTab" | "all" | "delete";
     file?: string;
     busy?: boolean;
   }): Promise<void> {
-    const client = this.core.ensureClient();
     try {
       if (pick.action === "newTab") {
         // 入口收敛后唯一的「开新标签」选择器项（头部＋同款语义）
         this.handleTabNew();
         return;
-      } else if (pick.action === "all") {
+      }
+      if (pick.action === "all") {
         void this.pickSession("all");
         return;
-      } else if (pick.file) {
-        // 工单十五刀3/4：同一会话文件禁止被两个标签同时打开（双窗口写冲突等价）。
-        // 刀3 升级为跨实例守卫：编辑器面板是独立 provider 实例，持有者在别实例 → 聚焦过去
-        const holder = ChatPanelProvider.findHolder(pick.file);
-        if (holder) {
-          if (holder.p !== this) {
-            holder.p.focusSelf();
-            this.post({ type: "notice", text: this.L.sessionOpenInTab });
-            return;
-          }
-          if (holder.tabId !== this.activeTabId) {
-            this.handleTabSwitch(holder.tabId);
-            this.post({ type: "notice", text: this.L.sessionOpenInTab });
-            return;
-          }
-          // 双写者事故（2026-09-20 用户实测「我切了会话，另外的会话也变成了你好」）：
-          // 活动标签自己持有且 busy 时，原 code 破守卫落到下方 busy 分支 handleTabNew——
-          // 同一个 jsonl 开进第二棵页签，两个页签同名同内容双写（pi 双进程同文件追加）。
-          // 占用守卫必须盖住 busy 分支：会话已在本页签，提示即收，绝不开第二棵
-          if (this.core.isBusy) {
-            this.post({ type: "notice", text: this.L.sessionOpenHere });
-            return;
-          }
-          // 活动标签自己持有且空闲：幂等重开无害，走正常切换（不 break，直接下到主路径）
-        }
-        if (this.core.isBusy) {
-          // busy 中选历史：开进新并行标签，不中断当前任务（用户直令 2026-09-14）。
-          // 新标签 freshTab=true → SessionManager.create 后立刻 switch 到目标文件
-          // 刀3：面板实例的新并行标签 = 新编辑器标签（带首开会话），本面板不内生页签
-          if (this.editorPanel) {
-            ChatPanelProvider.factories.openEditorTab?.(pick.file);
-            return;
-          }
-          this.handleTabNew();
-          const nc = this.ensureCore(this.activeTabId);
-          if (!nc.claimSession(pick.file)) {
-            ChatPanelProvider.findHolder(pick.file)?.p.focusSelf();
-            this.post({ type: "notice", text: this.L.sessionOpenInTab });
-            return;
-          }
-          const r2 = await nc.ensureClient().switchSession(pick.file);
-          if (r2?.cancelled) { nc.releaseSessionClaim(); this.post({ type: "notice", text: this.L.switchCancelled }); return; }
-          const d2 = await nc.ensureClient().getMessages();
-          this.post({ type: "render", messages: d2?.messages ?? [] });
-          const name2 = (pick.label ?? "").replace(/^\$\(history\) /, "");
-          this.post({ type: "notice", text: this.L.sessionRestored + name2 });
-          // 切完补回每标签模型/思考记忆并同步页脚（刀3 语义补全，同下方主路径口径）
-          await nc.reapplyModelMemory();
-          notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
-          return;
-        }
-        // 闸与认领（2026-10-22）：上方 findHolder 是 check，这里 claimSession 原子地
-        // 复查并提前认领——认领后其他实例立刻看得见，不等 refreshState 真值回填
-        if (!this.core.claimSession(pick.file)) {
-          ChatPanelProvider.findHolder(pick.file)?.p.focusSelf();
-          this.post({ type: "notice", text: this.L.sessionOpenInTab });
-          return;
-        }
-        const r = await client.switchSession(pick.file);
-        if (r?.cancelled) {
-          this.core.releaseSessionClaim();
-          this.post({ type: "notice", text: this.L.switchCancelled });
-          return;
-        }
-        const d = await client.getMessages();
-        this.post({ type: "render", messages: d?.messages ?? [] });
-        const name = (pick.label ?? "").replace(/^\$\(history\) /, "");
-        this.post({ type: "notice", text: this.L.sessionRestored + name });
       }
-      // 工单15刀3 记忆语义补全：switchSession 会把模型重置为会话文件里存的值，
-      // 页签上自选的模型/思考等级要在切完后补回（用户报「一切会话模型就变了」）
-      await this.core.reapplyModelMemory();
-      notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
+      if (!pick.file) return;
+      const holder = ChatPanelProvider.findHolderForOpen(pick.file);
+      if (holder) {
+        // 已开着：送到它那儿就是全部反馈，不再发任何提示
+        if (holder.p !== this) { holder.p.focusSelf(); return; }
+        if (holder.tabId !== this.activeTabId) { this.handleTabSwitch(holder.tabId); return; }
+        return; // 就是本页签正在显示的会话：点它 = 无事发生（也不重拉、也不提示）
+      }
+      // 没人开过：新开一个页签装它（副栏新页签 / 编辑区新标签），当前页签原样不动
+      if (this.editorPanel) { ChatPanelProvider.factories.openEditorTab?.(pick.file); return; }
+      await this.openInNewTab(pick.file);
     } catch (err: any) {
       this.post({ type: "notice", text: this.L.sessionOpFail + (err?.message ?? err) });
     }
@@ -1913,6 +1936,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       label: this.L.sAuthPanel,
       run: async () => {
         this.post({ type: "authPanelOpen" });
+      },
+    });
+    // 用量弹层的花费显示（2026-11-05 用户口径：金额用 pi 的，货币/汇率可改）
+    items.push({
+      label: this.L.sCostCurrency + (cfg.get<string>("costCurrency", "cny") === "usd" ? "USD" : "CNY"),
+      run: async () => {
+        const pick = await vscode.window.showQuickPick(["CNY", "USD"], { placeHolder: this.L.sCostCurrency });
+        if (!pick) return;
+        await cfg.update("costCurrency", pick.toLowerCase(), vscode.ConfigurationTarget.Global);
+        this.core.pushContextDetail();
+      },
+    });
+    items.push({
+      label: this.L.sCostRate + String(cfg.get<number>("usdCnyRate", 7.2)),
+      run: async () => {
+        const v = await vscode.window.showInputBox({
+          prompt: this.L.sCostRate,
+          value: String(cfg.get<number>("usdCnyRate", 7.2)),
+        });
+        if (v === undefined) return;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return;
+        await cfg.update("usdCnyRate", n, vscode.ConfigurationTarget.Global);
+        this.core.pushContextDetail();
+      },
+    });
+    // 价目自检的「联网那一半」：走 pi 自己的目录刷新（不抓网页、不静默联网，点了才跑）
+    items.push({
+      label: this.L.sPriceRefresh,
+      run: async () => {
+        this.post({ type: "notice", text: this.L.priceRefreshing });
+        const r = await this.piSetup.refreshModelCatalog();
+        if (!r.ok) {
+          this.post({ type: "notice", text: this.L.priceRefreshFail + (r.out || "") });
+          return;
+        }
+        // 进程内 runtime 是启动时载入的目录，不会自热重读——新价从下个会话/重载窗口起生效，
+        // 所以在文案里说清，别让人以为当前这轮的金额立刻变了
+        this.post({ type: "notice", text: this.L.priceRefreshed });
       },
     });
     items.push({

@@ -76,6 +76,16 @@
         <div class="cp-sum"><span class="cp-pct">—</span><span class="cp-used"></span><span class="cp-at"></span></div>
         <div class="cp-bar"></div>
         <ul class="cp-legend"></ul>
+        <!-- 用量与花费（2026-11-05 用户：积分式百分比不适合 API 计费——缓存/非缓存分开看，
+             各自多少钱）。数据来自 pi 每条消息的 usage.cost（宿主只做加法）。 -->
+        <div class="cp-cost" style="display:none">
+          <div class="cp-cost-head"><span class="cp-cost-title">{{t:ctxCostTitle}}</span><span class="cp-cost-tag"></span></div>
+          <ul class="cp-cost-list"></ul>
+          <div class="cp-cost-foot"><span>{{t:ctxCostTotal}}</span><span class="cp-cost-hit"></span><span class="cp-cost-amount">—</span></div>
+          <div class="cp-cost-note" style="display:none">{{t:ctxCostNoPrice}}</div>
+          <!-- 当前模型生效价目（pi 的 model.cost）：让用户一眼判断 pi 算的钱是不是老价 -->
+          <div class="cp-price" style="display:none"></div>
+        </div>
         <div class="cp-foot">
           <div class="cp-throw"><span class="cp-thlabel">{{t:ctxCompactHint}}</span><span class="cp-thval">—</span></div>
           <!-- 三段档位（2026-11-05 用户拍板）：滑块只能停在这三档上，下面的刻度可点 -->

@@ -167,9 +167,16 @@ function capText(s: string, max: number): string {
 
 /**
  * 结束态判定。官方 isFailedResult（exitCode!==0 / stopReason error|aborted）只用于**最终结果**；
- * 流式中间态不能照搬——扩展每回合结束都更新 stopReason，中间回合调工具时是 "toolCall"
- * （正常收尾才是 "end"），照搬会把运行中误判成 done：浮窗 ✓、头部图标不转（0.111 实测事故，
- * 用户看着图标全程没动）。修法："toolCall" 明确视为 running，未知收尾值保守回 running。
+ * 流式中间态不能照搬——扩展每回合结束都更新 stopReason，中间回合调工具时是 "toolUse"
+ * （正常收尾才是 "stop"），照搬会把运行中误判成 done：浮窗 ✓、头部图标不转（0.111 实测事故，
+ * 用户看着图标全程没动）。修法："toolUse" 明确视为 running，未知收尾值保守回 running。
+ *
+ * 【枚举写错的历史事故 2026-11-13】原判定写的是 "toolCall"——那是内容块类型，pi 的
+ * StopReason 是 "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred"
+ * （pi-coding-agent/docs/message-types.md），从来没有 "toolCall"。于是 0.111 那刀等于没生效，
+ * 中间回合的 "toolUse" 掉到最后一条 "非空即 done" —— 同步单从第一个工具回合起就顶着 ✓ 完成，
+ * 真跑完还要 90 多秒，用户看到的就是「浮窗说完成、主 agent 半天没回复」（同步单阻塞回合，
+ * 主 agent 此刻本来就该没回复）。两个值都认，旧载荷不吃亏。
  */
 function taskStatus(r: Record<string, unknown>): "running" | "done" | "failed" {
   // 显式真值优先（2026-10-23 实测事故「跑着的子 agent 浮窗显示 ✓」）：扩展 asyncDetails
@@ -183,7 +190,7 @@ function taskStatus(r: Record<string, unknown>): "running" | "done" | "failed" {
   const stop = r.stopReason;
   if (exitCode !== 0 && typeof exitCode === "number") return "failed";
   if (stop === "error" || stop === "aborted") return "failed";
-  if (stop === "toolCall") return "running";
+  if (stop === "toolUse" || stop === "toolCall") return "running"; // toolUse = pi 真值；toolCall 兜旧载荷
   if (typeof stop === "string" && stop) return "done";
   return "running";
 }
