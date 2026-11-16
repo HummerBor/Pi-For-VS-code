@@ -185,19 +185,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         if (ctxPopEl.style.display === 'block') vpost({ type: 'ctxQuery' });
       }, 400);
     }
-    // 弹层开启期间的 1s 心跳（2026-11-05 用户：「这个百分比不是实时的，pi 本身好像是实时的」）。
-    // 只靠 state 帧刷新的话，流式输出期间数字会冻住（state 只在轮次边界发）；心跳带 light 标记，
-    // 宿主只重算总量/花费（getSessionStats 便宜），分类明细复用上次估算，不每秒克隆整个消息树。
+    // 弹层/跑活期间的 1s 心跳（2026-11-05 用户：「这个百分比不是实时的，pi 本身好像是实时的」）。
+    // 只靠 state 帧刷新的话，流式输出期间数字会冻住（state 只在轮次边界发）。
+    // 【2026-11-16 用户实测】原先只在弹层 hover 时心跳 → 页脚那个「28.6% · $0.43」
+    // 平时是冻的，**鼠标一移上去（弹层打开）数字才动**，看着就像页脚跟着弹层走。
+    // 现在两个条件任一成立就心跳：弹层开着 ∪ 本会话在跑活（busy）。
+    var ctxBusy = false;
     var ctxTick: any = null;
     function startCtxTick() {
       if (ctxTick) return;
       ctxTick = setInterval(function () {
-        if (ctxPopEl.style.display !== 'block') { stopCtxTick(); return; }
         vpost({ type: 'ctxQuery', light: true });
+        if (!ctxBusy && ctxPopEl.style.display !== 'block') stopCtxTick();
       }, 1000);
     }
     function stopCtxTick() {
       if (ctxTick) { clearInterval(ctxTick); ctxTick = null; }
+    }
+    /** 心跳开关唯一入口：弹层开着或 busy 才跑 */
+    function syncCtxTick() {
+      if (ctxBusy || ctxPopEl.style.display === 'block') startCtxTick();
+      else stopCtxTick();
     }
   var toolEls = {}; var queuedItems = [];
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
@@ -368,21 +376,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ctxPopEl.style.display = 'block';
       if (ctxDetail) renderCtxDetail(ctxDetail); // 先用上次真值垫一帧，等宿主回包再替换（避免闪空）
       vpost({ type: 'ctxQuery' });
-      startCtxTick(); // 开着就每秒跟一次真值（pi 的 percent 每轮都在动）
+      syncCtxTick(); // 弹层开着期间每秒跟一次真值（pi 的 percent 每轮都在动）
     }
     function closeCtxPopLater() {
       if (ctxCloseTimer) clearTimeout(ctxCloseTimer);
       ctxCloseTimer = setTimeout(function () {
         ctxCloseTimer = null;
         ctxPopEl.style.display = 'none';
-        stopCtxTick();
+        syncCtxTick();
       }, 280);
     }
     usageEl.addEventListener('mouseenter', openCtxPop);
     usageEl.addEventListener('mouseleave', closeCtxPopLater);
     ctxPopEl.addEventListener('mouseenter', openCtxPop);
     ctxPopEl.addEventListener('mouseleave', closeCtxPopLater);
-    cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; stopCtxTick(); });
+    cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; syncCtxTick(); });
     // 滑块 = 三段吸附（2026-11-05 用户：滑动好使点，档位不用手调）。
     // input 只本地重算（零延迟、不写盘），change（放手）才落库
     cpRangeEl.addEventListener('input', function () {
@@ -1535,11 +1543,30 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var win = m.window || 0;
     var budget = budgetOverride || m.budget || win;
     var p = budget > 0 && m.used !== null && m.used !== undefined ? (m.used / budget) * 100 : null;
+    // 弹层关着时也会有 ctxDetail（busy 期间每秒一帧心跳）：只刷页脚圆环，整块弹层 DOM
+    // 等打开时再画（openCtxPop 会用最新 ctxDetail 重渲一遍）——不白干活也不抖
+    if (ctxPopEl.style.display !== 'block' && !budgetOverride) {
+      if (m.usage && m.usage.priced !== false) {
+        lastUsageCost = Number(m.usage.cost) || 0;
+        lastUsageSign = m.usage.currency === 'cny' ? '\u00a5' : '$';
+        lastUsageFromDetail = true;
+      }
+      if (p !== null) paintUsage(p, lastUsageCost, lastUsageSign);
+      return;
+    }
     cpPctEl.textContent = p === null ? L.ctxNoData : (Math.round(p * 10) / 10) + '%';
     cpPctEl.classList.toggle('hot', p !== null && p >= 100);
     // 页脚圆环用同一份数据重画：用户实测「弹层 19.8% / 页脚 19.6%」——两处各自采样各的时刻
     // 必然差一截。ctxDetail 是真值帧，圆环跟着它走（拖阈值时也走这条，所以零延迟）。
-    if (p !== null) paintUsage(p, lastUsageCost);
+    // 【2026-11-16 用户实测】页脚的「· $0.43」也要跟着真值帧走：原先它只吃 state 帧的
+    // stats.cost（轮次边界才发）—→ 金额平时冻着，只有弹层（hover）重画时才连带变一下。
+    // 金额与货币取 m.usage（= 弹层合计同一份数，已是用户在设置里选的货币）。
+    if (m.usage && m.usage.priced !== false) {
+      lastUsageCost = Number(m.usage.cost) || 0;
+      lastUsageSign = m.usage.currency === 'cny' ? '\u00a5' : '$';
+      lastUsageFromDetail = true;
+    }
+    if (p !== null) paintUsage(p, lastUsageCost, lastUsageSign);
     cpUsedEl.textContent = m.used === null || m.used === undefined || !budget ? '' : L.ctxUsed + ' ' + fmtTok(m.used) + '/' + fmtTok(budget);
     cpUsedEl.title = win ? L.ctxWindowLabel + ' ' + fmtTok(win) : '';
     // 分段条：满宽 = 压缩预算（不是窗口），这样条子越满 = 越接近自动压缩
@@ -1677,11 +1704,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
 
   /** 圆环周长：SVG r=8 → 2πr；dashoffset 按占比推进 */
   var RING_C = 2 * Math.PI * 8;
-  /** 最近一次已知成本（圆环与弹层共用：拖阈值时圆环也要跟着重画，但成本只在 state 帧里有） */
+  /** 最近一次已知成本（圆环与弹层共用：拖阈值时圆环也要跟着重画）。
+   *  2026-11-16：改成以 ctxDetail 的真值帧为准（含用户设的显示货币），state 帧只在
+   *  还没拿到过 ctxDetail 时当兜底——否则流式期间页脚金额永远是上一次轮次边界的旧值。 */
   var lastUsageCost = 0;
+  var lastUsageSign = '$';
+  var lastUsageFromDetail = false;
   /** 圆环 + 百分比文字的唯一画笔。三条入口都走这里，保证页脚永远只有一个数、一个时刻：
    *  ① state 帧（renderUsageRing）② 弹层数据到达（renderCtxDetail）③ 拖阈值（本地预算重算） */
-  function paintUsage(p, cost) {
+  function paintUsage(p, cost, sign) {
     if (p === null || p === undefined) {
       ringFillEl.style.strokeDashoffset = String(RING_C); // 无数据 = 空环
       usageTxtEl.textContent = '';
@@ -1691,13 +1722,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var pct = Math.max(0, Math.min(100, p));
     ringFillEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
     ringFillEl.style.stroke = pct >= 90 ? '#e05a5a' : pct >= 70 ? '#e8912d' : 'var(--vscode-charts-blue, #3b82f6)';
-    usageTxtEl.textContent = (Math.round(p * 10) / 10) + '%' + (cost ? ' · $' + Number(cost).toFixed(2) : '');
+    usageTxtEl.textContent = (Math.round(p * 10) / 10) + '%' + (cost ? ' · ' + (sign || '$') + Number(cost).toFixed(2) : '');
     usageEl.title = L.ctxTitle + ' ' + (Math.round(p * 10) / 10) + '%';
   }
   /** 页脚圆环（state 帧入口）：分母与弹层同一口径（压缩预算 = 窗口 − reserveTokens），
    *  stats.contextLimit 缺失（老帧/压缩关闭）时退回 pi 原生的窗口百分比。 */
   function renderUsageRing(stats) {
-    lastUsageCost = stats && stats.cost ? Number(stats.cost) : 0;
+    // 金额优先给 ctxDetail 真值帧（同一份 pi cost，已是用户设的显示货币）；
+    // 还没拿到过弹层数据时兜底用 state 帧的 pi 原值（USD）
+    if (!lastUsageFromDetail) {
+      lastUsageCost = stats && stats.cost ? Number(stats.cost) : 0;
+      lastUsageSign = '$';
+    }
     var budget = stats ? Number(stats.contextLimit || stats.contextWindow || 0) : 0;
     var p = null;
     if (stats && stats.contextTokens !== null && stats.contextTokens !== undefined && budget > 0) {
@@ -1705,7 +1741,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     } else if (stats && stats.contextPercent !== null && stats.contextPercent !== undefined) {
       p = Number(stats.contextPercent);
     }
-    paintUsage(p, lastUsageCost);
+    paintUsage(p, lastUsageCost, lastUsageSign);
   }
 
   function handleFiles(files, dt) {
@@ -2105,7 +2141,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       applyState(m);
       scheduleCtxQuery(); // 同上：弹层开着时跟真相走
     }
-    else if (m.type === 'busy') setBusy(m.value, m.elapsedMs);
+    else if (m.type === 'busy') { ctxBusy = !!m.value; syncCtxTick(); setBusy(m.value, m.elapsedMs); }
     else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
@@ -2177,7 +2213,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }, { passive: true });
     // 点消息区 = 点到浮层外：收起上下文用量弹层（标准浮层行为；监听挂在 root 上，
     // 视图销毁即随 DOM 一起走，不往 document 上挂——那会按页签数累加并泄漏）
-    root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; stopCtxTick(); });
+    root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; syncCtxTick(); });
     bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
@@ -2190,7 +2226,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       hasPage: function () { return chgPageEl.style.display !== 'none'; },
       closePage: closeChgPage,
       /** 上下文用量弹层：Esc / 点消息区收起（与变更页同级的浮层语义，弹层优先关） */
-      closeCtxPop: function () { ctxPopEl.style.display = 'none'; stopCtxTick(); },
+      closeCtxPop: function () { ctxPopEl.style.display = 'none'; syncCtxTick(); },
       isCtxPopOpen: function () { return ctxPopEl.style.display === 'block'; },
       dispose: function () {
         stopCtxTick();
