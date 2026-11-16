@@ -12,6 +12,10 @@ vendor/
 # 归档.md
 # 施工方.md
 
+# 探针截图/预览产物（make-changes-preview.mjs 等，勿进 dist/：
+# .vscodeignore 已把 dist/ 白名单收口到 webview/）
+scripts/.preview/
+
 # webview vite 构建产物
 dist/
 webview-body.tmp

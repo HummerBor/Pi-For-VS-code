@@ -5,6 +5,11 @@ scripts/**
 node_modules/**
 out/**/*.map
 dist/**/*.map
+# dist 只放 webview 构建产物（2026-11-16 事故：探针脚本把截图写进 dist/*.png，
+# 14 个文件 616KB 悄悄进包，vsix 从 3.7M 涨到 4.1M）——白名单收口，dist 里除
+# webview/ 一概不进包；探针截图请写到 scripts/.preview/（见 .gitignore）
+dist/**
+!dist/webview/**
 dist/webview/preview.html
 vite.config.mts
 HANDOVER.md
