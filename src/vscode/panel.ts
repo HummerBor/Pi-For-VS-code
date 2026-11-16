@@ -432,6 +432,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return undefined;
   }
 
+  /** 同一会话只许一处活着（2026-11-16 用户截图实测的双开）：用户主动打开成功后，
+   *  把 keep 之外**正空闲地**持有该文件的实例就地让出——副栏页签关掉、编辑器标签整块关。
+   *  正在跑的绝不碰（运行中的那个才算真持有）。调用点只有两处（用户主动打开的两条链），
+   *  自动恢复不走这里——它是被 isSessionHeld 严格闸拦住的 */
+  private static enforceExclusive(file: string, keep: ChatPanelProvider, keepTabId: string): void {
+    for (const p of ChatPanelProvider.allProviders) {
+      for (const [tid, c] of [...p.cores]) {
+        if (p === keep && tid === keepTabId) continue;
+        if (c.isBusy) continue;
+        if (!c.currentSessionFile || !samePath(c.currentSessionFile, file)) continue;
+        dbgLog("[独占] 关掉重复持有者 " + (p.editorPanel ? "editor:" : "sidebar:") + tid + " file=" + file);
+        if (p.editorPanel) void p.editorPanel.dispose();
+        else void p.handleTabClose(tid);
+      }
+    }
+  }
+
   /** 跨实例查找持有某会话文件的核心（刀3 双开守卫）：返回所属实例与标签 id——
    *  同实例多页签的旧循环不够用了，编辑器面板是独立实例 */
   private static findHolder(file: string): { p: ChatPanelProvider; tabId: string } | undefined {
@@ -486,10 +503,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 跨实例会话双开守卫的闸（宿主侧实现，核心经 claimSession 调用）：
       // findHolder 视角回答「是否已被别的实例/页签持有」——同 provider 同页签自己问
       // 不算占用（幂等重开无害）。findHolder 读的 currentSessionFile 含 piCore 的
-      // 提前认领量（claimedFile），boot 空窗期也看得见持有者
-      // 打开语义的占用闸：隐藏的空闲副栏页签不算（同 openOrFocusSession，见 findHolderForOpen）
+      // 提前认领量（claimedFile），boot 空窗期也看得见持有者。
+      // 【2026-11-16 用户实测重复打开后改回严格版】这里必须用 findHolder（**隐藏的副栏
+      // 也算占用**）：这条闸管的是「启动恢复/切换历史时的自动附着」，自动的一律不许双开
+      // ——重启时副栏与编辑区标签各自的记忆可能指向同一个 jsonl，宽松版会让两边都恢复成功
+      // （用户截图：左右两个面板同时显示同一个会话）。用户**主动**打开（列表点击/⏱ 选
+      // 历史）才用宽松的 findHolderForOpen，事后靠 reclaimHeldElsewhere 对账去重
       isSessionHeld: (file, selfTabKey) => {
-        const h = ChatPanelProvider.findHolderForOpen(file);
+        const h = ChatPanelProvider.findHolder(file);
         return !!h && !(h.p === this && h.tabId === selfTabKey);
       },
       // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
@@ -784,6 +805,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
               const d = await this.core.clientRef?.getMessages();
               this.post({ type: "render", messages: d?.messages ?? [] });
               await this.core.reapplyModelMemory();
+              ChatPanelProvider.enforceExclusive(f, this, this.activeTabId);
             } catch (err) {
               this.core.releaseSessionClaim();
               dbgLog("openEditorTab switch FAIL: " + String(err));
@@ -1067,6 +1089,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     //（2026-11-16 用户口径：已经做到的动作用界面反馈，不再另发通知）
     // 切完补回每标签模型/思考记忆并同步页脚（刀3 语义补全）
     await nc.reapplyModelMemory();
+    // 独占：别处若还空闲地持有同一个 jsonl（副栏隐藏时握着、编辑器标签开着），就地关掉
+    ChatPanelProvider.enforceExclusive(file, this, this.activeTabId);
     notifySessionsChanged(); // 刀4：左侧会话列表跟随（会话归属变化）
   }
 
