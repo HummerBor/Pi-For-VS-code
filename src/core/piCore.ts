@@ -414,7 +414,10 @@ export class PiCore {
     // 只会把「最近一条会话」强加给空页签（还会和原页签双写同一文件）；无记忆一律 [] 新建。
     this.restoreBlocked = false;
     let mem = this.freshTab ? undefined : this.getSessionForWs(cwd);
-    if (mem && fs.existsSync(mem) && this.caps.isSessionHeld?.(mem, this.tabKey)) {
+    // 用严格闸（isSessionHeldForRestore）：自动恢复绝不许双开——隐藏的副栏也算占用。
+    // 用户主动打开走 claimSession → isSessionHeld（宽松版），那是另一回事
+    const heldFn = this.caps.isSessionHeldForRestore ?? this.caps.isSessionHeld;
+    if (mem && fs.existsSync(mem) && heldFn?.(mem, this.tabKey)) {
       // 双开守卫上闸（2026-10-22）：boot 此前压根不问 findHolder——重启后副栏 t1 与
       // 编辑器标签 p{n} 各自的记忆可能指向同一文件，各自恢复 = 双开双写。被占即视同
       // 无记忆（H 刀口径）：不 -c、不 openTarget，新建会话——绝不让两个 pi 实例追写

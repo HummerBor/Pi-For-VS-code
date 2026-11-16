@@ -49,6 +49,11 @@ export interface HostCapabilities {
    *  selfTabKey = 询问方自己的 tabKey（同 provider 同页签自己问不算占用——幂等重开无害）。
    *  可选：宿主没有多实例信息时省略，核心退化为不过闸（单实例行为不变） */
   isSessionHeld?(file: string, selfTabKey: string): boolean;
+  /** **自动恢复**专用的严格闸（2026-11-16 用户实测后拆出来）：boot 时按记忆附着会话属于
+   *  「自动」——这里一律严格（隐藏的副栏也照样算占用），两边记忆撞同一 jsonl 时必须只让
+   *  一边恢复成功。与 isSessionHeld（用户主动打开用，宽松：隐藏的副栏不挡）是两个口径，
+   *  别合并。可选：不实现就退回 isSessionHeld */
+  isSessionHeldForRestore?(file: string, selfTabKey: string): boolean;
   /** agent 目录（getAgentDir，~/.pi/agent）：subagent 台账读取用（段 3）。可选：
    *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
   getAgentDir?(): string | null;

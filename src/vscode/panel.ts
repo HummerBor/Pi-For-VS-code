@@ -504,12 +504,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // findHolder 视角回答「是否已被别的实例/页签持有」——同 provider 同页签自己问
       // 不算占用（幂等重开无害）。findHolder 读的 currentSessionFile 含 piCore 的
       // 提前认领量（claimedFile），boot 空窗期也看得见持有者。
-      // 【2026-11-16 用户实测重复打开后改回严格版】这里必须用 findHolder（**隐藏的副栏
-      // 也算占用**）：这条闸管的是「启动恢复/切换历史时的自动附着」，自动的一律不许双开
-      // ——重启时副栏与编辑区标签各自的记忆可能指向同一个 jsonl，宽松版会让两边都恢复成功
-      // （用户截图：左右两个面板同时显示同一个会话）。用户**主动**打开（列表点击/⏱ 选
-      // 历史）才用宽松的 findHolderForOpen，事后靠 reclaimHeldElsewhere 对账去重
+      // 两个口径必须分开（2026-11-16 用户两次实测逼出来的）：
+      // · 用户**主动打开**（列表点击/⏱ 选历史 → claimSession）→ 宽松 findHolderForOpen：
+      //   隐藏的副栏不得挡住「我要在编辑区开它」（否则又跳回右边，就是用户报的 bug）。
+      //   开成功后由 enforceExclusive 把重复持有者清掉。
+      // · **自动恢复**（boot 按记忆附着）→ 严格 findHolder，见 isSessionHeldForRestore。
       isSessionHeld: (file, selfTabKey) => {
+        const h = ChatPanelProvider.findHolderForOpen(file);
+        return !!h && !(h.p === this && h.tabId === selfTabKey);
+      },
+      isSessionHeldForRestore: (file, selfTabKey) => {
         const h = ChatPanelProvider.findHolder(file);
         return !!h && !(h.p === this && h.tabId === selfTabKey);
       },
