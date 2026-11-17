@@ -5,6 +5,7 @@ import type { GetMessagesResult, GetSessionStatsResult, GetStateResult } from ".
 import { loadPiSdk } from "./piSdk";
 import { makeSubagentNameGuard } from "../domain/subagentNameGuard";
 import { ensureSubagentHarness } from "./ensureSubagentHarness";
+import { ensureBundledSkills } from "./ensureBundledSkills";
 import { SKILL_INVOCATION_RULES } from "./skillInvocationRules";
 
 /** S 刀：模块级调试落盘（与 piCore 的 dbg 同一文件，经注入的写入器；默认 stderr-noop） */
@@ -105,6 +106,9 @@ function createServices(sdk: any, cwd: string): Promise<any> {
     // extensions 目录加载 harness（详见 ensureSubagentHarness.ts 头注释）
     try {
       ensureSubagentHarness(sdk.getAgentDir());
+      // 内置技能同步（2026-11-17）：分时段价目表维护技能（截图 → 加价）跟着插件走，
+      // 同样必须早于 services 创建——skills 目录在这次加载里被扫（详见 ensureBundledSkills.ts）
+      ensureBundledSkills(sdk.getAgentDir());
     } catch {
       /* 观测面不阻会话创建 */
     }
@@ -579,9 +583,47 @@ export class PiClient {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     costTotal: number;
     costSplit: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    /** 本会话实际产生过用量的模型 id（去重、按出现顺序）。弹层价目行靠它反推单价——
+     *  不能用 session.model（当前模型）：换过模型的会话两者会不一致，标签就撒谎了 */
+    models: string[];
+    /** 按「模型 × 整点」聚合的用量桶（2026-11-17 分时段估算）：厂商按时段计价，
+     *  要算对钱就必须把 token 按时段拆开。整点对齐 = 厂商时段边界都对得上（09:00/18:00），
+     *  只多出“每小时一条”的数组，心跳每秒算一次也不心疼。 */
+    buckets: { model: string; hourStart: number; input: number; cacheRead: number; cacheWrite: number; output: number }[];
   }> {
     return this.ready().then(() => {
       const split = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const models: string[] = [];
+      const buckets = new Map<string, { model: string; hourStart: number; input: number; cacheRead: number; cacheWrite: number; output: number }>();
+      const currentModel = (): string => {
+        const m: any = this.session.model;
+        return typeof m?.id === "string" ? m.id : "";
+      };
+      const hourOf = (e: any, msg: any): number => {
+        const t = Date.parse(String(e?.timestamp ?? "")) || Number(msg?.timestamp) || 0;
+        return Math.floor(t / 3600000) * 3600000;
+      };
+      const addBucket = (e: any, msg: any, u: any): void => {
+        if (!u) return;
+        const model = (typeof msg?.model === "string" && msg.model) || currentModel();
+        if (!model) return;
+        const hourStart = hourOf(e, msg);
+        if (!hourStart) return;
+        const key = model + "@" + hourStart;
+        let b = buckets.get(key);
+        if (!b) {
+          b = { model, hourStart, input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+          buckets.set(key, b);
+        }
+        b.input += Number(u.input) || 0;
+        b.cacheRead += Number(u.cacheRead) || 0;
+        b.cacheWrite += Number(u.cacheWrite) || 0;
+        b.output += Number(u.output) || 0;
+      };
+      const addModel = (v: unknown): void => {
+        const id = typeof v === "string" ? v : (v as any)?.id;
+        if (typeof id === "string" && id && !models.includes(id)) models.push(id);
+      };
       const add = (u: any): void => {
         if (!u) return;
         const c = u.cost || {};
@@ -594,11 +636,15 @@ export class PiClient {
       const entries: any[] = typeof sm?.getEntries === "function" ? sm.getEntries() : [];
       for (const e of entries) {
         if (!e) continue;
-        if (e.type === "usage") add(e.usage);
+        if (e.type === "usage") { add(e.usage); addModel(e.model ?? e.usage?.model); }
         else if ((e.type === "branch_summary" || e.type === "compaction") && e.usage) add(e.usage);
         if (e.type !== "message") continue;
         const msg = e.message;
         if (msg && (msg.role === "assistant" || msg.role === "toolResult")) add(msg.usage);
+        if (msg && msg.usage) addModel(msg.model);
+        // 只有真正发过模型的请求才进桶（assistant）：toolResult 没有 usage，压缩/摘要条目
+        // 没有 timestamp 精度和模型归属，进桶只会造不出账
+        if (msg && msg.role === "assistant") addBucket(e, msg, msg.usage);
       }
       const st: any = this.session.getSessionStats();
       return {
@@ -611,6 +657,8 @@ export class PiClient {
         },
         costTotal: Number(st?.cost) || 0,
         costSplit: split,
+        models,
+        buckets: [...buckets.values()],
       };
     });
   }

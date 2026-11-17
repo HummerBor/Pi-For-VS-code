@@ -83,13 +83,16 @@
           <ul class="cp-cost-list"></ul>
           <div class="cp-cost-foot"><span>{{t:ctxCostTotal}}</span><span class="cp-cost-hit"></span><span class="cp-cost-amount">—</span></div>
           <div class="cp-cost-note" style="display:none">{{t:ctxCostNoPrice}}</div>
+          <!-- 分时段估算（2026-11-17 方案 A）：厂商高峰/空闲两档价，pi 目录只有一套（≈高峰价）
+               ——这一行才是「跟账单对得上」的数，合计行保持 pi 记账当对账锚点 -->
+          <div class="cp-est" style="display:none"></div>
           <!-- 当前模型生效价目（pi 的 model.cost）：让用户一眼判断 pi 算的钱是不是老价 -->
           <div class="cp-price" style="display:none"></div>
         </div>
         <div class="cp-foot">
           <div class="cp-throw"><span class="cp-thlabel">{{t:ctxCompactHint}}</span><span class="cp-thval">—</span></div>
-          <!-- 三段档位（2026-11-05 用户拍板）：滑块只能停在这三档上，下面的刻度可点 -->
-          <input type="range" class="cp-range" min="0" max="2" step="1" value="2">
+          <!-- 滑动 = 连续（旋钮位置永远 = 真实阈值）；下面三个刻度是预设点，点一下跳过去 -->
+          <input type="range" class="cp-range" min="0" max="1000" step="1" value="1000">
           <div class="cp-ticks"><span></span><span></span><span></span></div>
         </div>
       </div>

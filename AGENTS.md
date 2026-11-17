@@ -92,6 +92,16 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
   ephemeral（piClient 遇之显式抛错，禁令焊死在适配器入口）——会话文件是 pi 操作的唯一
   审计痕迹，「无痕模式」删文件等破坏性操作无从追查。piChat.sessionMode 只留 continue/new，
   旧 settings.json 的 ephemeral 残值归一为 continue（安全降级）。
+- **钱的显示：pi 记账 + 时段估算两行并存（2026-11-17 用户拍板方案 A，2026-11-05 的
+  「pi 算的、壳只搬」为止部分废止）**：pi 的 models 目录每模型只有**一套价**（≈厂商高峰价），
+  而 DeepSeek 按时段计价 → 空闲时段干活时账单只有 pi 数的一半。所以弹层「合计」保持 pi
+  `getSessionStats().cost` 当**对账锚点**不动，另加一行「时段价估算」按 `domain/priceTable.ts`
+  （高峰/空闲两档、按 usage 桶的整点时间戳判定）算「与账单同口径」的那份钱；页脚恒美元、
+  显示估算值，pi 记账进 title。价目表在 `<agentDir>/pi-vscode-pricing.json`（⚙ 菜单/命令
+  `piChat.openPriceTable` 打开，坏文件逐项回落内置），表里没有的模型**不估价**（标「无价目」）。
+  换模型加价走内置技能 `harness/skills/pricing-table`（用户截图 → agent 写 JSON），别改代码；
+  也别把估算塞进 pi 的 models.json（那是 pi 自己的配置，插件只读它）。
+  对账实测：2026-11-17 08:52–08:58 = 61 次 / 13,207,373 tok → 空闲价 ¥0.601，平台 ¥0.60。
 
 ## 命令
 
@@ -113,11 +123,14 @@ src/            宿主侧四层归位（5180d8c 纯移动）：
                         ensureSubagentHarness.ts 内置 subagent 扩展同步
                 domain/ subagentSnapshot.ts 子 agent 监控快照 / subagentNames.ts 显示名台账/归位 /
                         subagentNameGuard.ts 派发分类归位钩子 / toolDetail.ts 共享摘要 /
-                        patchRevert.ts edit patch 逆向还原（工单七）/ errorClass.ts
+                        patchRevert.ts edit patch 逆向还原（工单七）/ errorClass.ts /
+                        usageTotals.ts 用量与花费换算 / priceTable.ts 分时段价目表与估算（方案 A）
                 vscode/ extension.ts 入口 / panel.ts VS Code adapter / webview-html.ts 装配 /
                         sessionsView.ts / sessionCache.ts / piSetup.ts / fileFinder.ts / changes.ts
-harness/        subagent 扩展源码归属（内置随插件分发，约定见上）：
+harness/        subagent 扩展 / 内置技能源码（随插件分发）：
                 harness/subagent/{index.ts, agents.ts, runsLedger.ts, harness.json}
+                harness/skills/pricing-table/{SKILL.md, skill.json}（换模型加价的技能，
+                src/pi/ensureBundledSkills.ts 按 skill.json 版本门同步到 <agentDir>/skills/）
 webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
 dist/webview/   vite 构建产物（不进 git，进 vsix）
 out/            tsc 产物（不进 git，进 vsix）

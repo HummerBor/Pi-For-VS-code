@@ -11,7 +11,7 @@
  * 运行：npm run test:usage（Node ≥23.6 原生跑 TS，零依赖，不进 tsc 门禁）
  */
 import assert from "node:assert";
-import { buildUsage } from "../../src/domain/usageTotals.ts";
+import { buildUsage, deriveUnitPrices } from "../../src/domain/usageTotals.ts";
 
 let n = 0;
 function ok(name: string, fn: () => void): void {
@@ -131,6 +131,27 @@ ok("缓存命中率：全命中也算 100%、全未命中算 0%（不除零、�
     fx: 1,
   });
   assert.strictEqual(allMiss.cacheHitRate, 0);
+});
+
+ok("反推单价：用本会话用量算出 USD/百万 token（标签与金额同源）", () => {
+  // 2026-11-16 事故真实取值：deepseek-flash 一次会话累计
+  const p = deriveUnitPrices(
+    { input: 251000, output: 49000, cacheRead: 4131000, cacheWrite: 0 },
+    { input: 0.07517, output: 0.05877, cacheRead: 0.02479, cacheWrite: 0 },
+  )!;
+  assert.ok(p, "有分项金额就必须算得出来");
+  assert.ok(Math.abs(p.input - 0.2995) < 0.002, "输入≈0.3 USD/M（deepseek-flash 目录价）");
+  assert.ok(Math.abs(p.cacheRead - 0.006) < 0.0005, "缓存命中≈0.006 USD/M");
+  assert.ok(Math.abs(p.output - 1.1994) < 0.005, "输出≈1.2 USD/M");
+  assert.strictEqual(p.cacheWrite, 0, "没有缓存写入 token 时分量为 0，不除零、不 NaN");
+});
+
+ok("反推单价：无分项金额/全零时返回 null（调用方退回目录价或隐藏）", () => {
+  assert.strictEqual(deriveUnitPrices({ input: 100 }, null), null);
+  assert.strictEqual(
+    deriveUnitPrices({ input: 100 }, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+    null,
+  );
 });
 
 console.log("usageTotals: " + n + " passed");

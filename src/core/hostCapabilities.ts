@@ -57,6 +57,12 @@ export interface HostCapabilities {
   /** agent 目录（getAgentDir，~/.pi/agent）：subagent 台账读取用（段 3）。可选：
    *  sdk 未加载/宿主不支持时返回 null，核心退化为不发台账，不影响主链路 */
   getAgentDir?(): string | null;
+  /** 分时段价目表文件原文（`<agentDir>/pi-vscode-pricing.json`，2026-11-17）。
+   *  核心不碰 fs：读到原文后交给 domain/priceTable.parsePriceTable 解析（坏文件逐项回落）。
+   *  可选：不实现则只用内置价目表（deepseek 官方价） */
+  getPricingTableJson?(): string | null;
+  /** 打开（不存在则创建模板）价目表文件给用户/agent 编辑。可选 */
+  openPricingTable?(): void;
   /** 子 agent 终态时通知宿主刷新列表（2026-11-02）：左侧「主会话→子会话」嵌套靠它
    *  自动出现，不用用户手点刷新。可选：不实现就不刷（核心不依赖） */
   onSubagentSettled?(): void;

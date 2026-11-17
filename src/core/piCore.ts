@@ -14,6 +14,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { PiClient } from "../pi/piClient";
 import { STRINGS, NATIVE_KEYS, bb, fmt, fmt2, type Lang } from "./i18n";
+import type { CtxEstimateMsg, CtxPricingMsg } from "./protocol";
 import type {
   BannerPayload,
   CtxDetailMsg,
@@ -27,7 +28,8 @@ import type {
 } from "./protocol";
 import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
 import { estimateContextBreakdown } from "../domain/ctxBreakdown";
-import { buildUsage } from "../domain/usageTotals";
+import { buildUsage, deriveUnitPrices } from "../domain/usageTotals";
+import { estimateCost, parsePriceTable, type PriceTable } from "../domain/priceTable";
 import { samePath } from "../domain/pathKey";
 import { readLedgerRows } from "./subagentLedger";
 import { toolDetail } from "../domain/toolDetail";
@@ -91,6 +93,8 @@ export interface FootData {
    *  对不上就是错） */
   stats: {
     contextPercent: number | null;
+    /** 会话累计花费，**USD 原值**（= pi 的 cost，与 pi 原生 TUI 状态行同一个数）。
+     *  页脚恒显美元（2026-11-16 用户拍板）；弹层里才按汇率估人民币，见 usageTotals 注释 */
     cost: number;
     contextTokens?: number | null;
     contextWindow?: number | null;
@@ -2315,9 +2319,9 @@ export class PiCore {
   private modelPricing: { provider: string; id: string; name: string; input: number; output: number; cacheRead: number; cacheWrite: number } | null = null;
   private pricingLoggedFor = "";
 
-  /** 启动/换模型时**自动查一次**价目（用户 2026-11-05：「不应该只是改一个 ds，启动插件后可以自动查一次」）。
-   *  查的是 pi 自己的 model.cost（目录价 + 用户覆盖），零网络；结果进诊断日志 + 弹层展示，
-   *  用户对账时能立刻看到「pi 现在按多少钱在算」，价目老了该改的是 pi 的 models 配置。 */
+  /** 当前模型**目录价**（pi 的 model.cost，含用户在 pi 配置里的覆盖；零网络）。
+   *  2026-11-16 起身份变了：弹层价目行改为「按本会话用量反推」（见 deriveUnitPrices），
+   *  本方法只在会话还没有任何用法时当兜底，以及在诊断日志里留一行「pi 现在按多少钱在算」。 */
   async refreshModelPricing(): Promise<void> {
     const client = this.client;
     if (!client) return;
@@ -2353,7 +2357,11 @@ export class PiCore {
       // ignore
     }
     const comp = (await this.compactInfo()) ?? (await client.getCompactionInfo().catch(() => null));
-    if (!this.modelPricing) await this.refreshModelPricing();
+    // 价目只在「还没有用法可以反推」时才当兜底；但兜底本身也不能是旧模型的：
+    // 启动期模型切换事件可能赶在宿主接线之前（用户实测 3 秒内切过一次），
+    // 所以这里比一次 modelKey，不一致就重查（零网络、只读 pi 自己的 model.cost）。
+    const pricingKey = this.modelPricing ? this.modelPricing.provider + "/" + this.modelPricing.id : "";
+    if (!this.modelPricing || pricingKey !== this.modelKey()) await this.refreshModelPricing();
     let bd = this.ctxBreakCache;
     if (!light || !bd) {
       const d = await client.getMessages().catch(() => null);
@@ -2390,17 +2398,40 @@ export class PiCore {
     } catch {
       usageDetail = null; // pi 侧异常就整段隐藏，宁缺勿造
     }
-    const curRaw: string = this.caps.getConfig("piChat", "costCurrency", "cny");
     const fxRaw = Number(this.caps.getConfig("piChat", "usdCnyRate", 7.2));
+    // 货币口径（2026-11-16 用户拍板）：**弹层恒为人民币估算**（页脚另行：恒美元，见 webview
+    // paintUsage）。piChat.costCurrency 退役——页脚跟 pi 原生 TUI 的 $ 对齐，弹层里折成元并
+    // 标注「估算」，两处不再跟随一个开关各自漂移。
     const usage = usageDetail
       ? buildUsage({
           tokens: usageDetail.tokens,
           costTotal: usageDetail.costTotal,
           costSplit: usageDetail.costSplit,
-          currency: curRaw === "usd" ? "usd" : "cny",
+          currency: "cny",
           fx: Number.isFinite(fxRaw) && fxRaw > 0 ? fxRaw : 7.2,
         })
       : undefined;
+    // 价目行（2026-11-16 修 bug）：**从本会话实际用量反推**，而不是读当前模型的目录价。
+    // 理由见 domain/usageTotals.deriveUnitPrices 的注释：标签与金额必须同源，否则换过模型
+    // 的会话会自相矛盾（用户实测：标签 MiMo ¥1.01/M，金额只有按 deepseek ¥2.16/M 才算得出）。
+    // 无用法记录时（新会话）才退回目录价，此时金额本来就是 0，不会撒谎。
+    const unit = usageDetail ? deriveUnitPrices(usageDetail.tokens, usageDetail.costSplit) : null;
+    const usedModels = usageDetail?.models ?? [];
+    const pricing: CtxPricingMsg | null = unit
+      ? {
+          provider: this.modelPricing?.provider ?? "",
+          id: usedModels.join(",") || (this.modelPricing?.id ?? ""),
+          name: this.modelPricing?.name ?? usedModels.join(" + "),
+          input: unit.input,
+          output: unit.output,
+          cacheRead: unit.cacheRead,
+          cacheWrite: unit.cacheWrite,
+          derived: true,
+          models: usedModels.length ? usedModels : undefined,
+        }
+      : this.modelPricing
+        ? { ...this.modelPricing, derived: false }
+        : null;
     const segments: CtxSegment[] = [
       { key: "prompt", tokens: tk(bd.prompt), percent: pct(tk(bd.prompt)) },
       { key: "tools", tokens: tk(bd.tools), percent: pct(tk(bd.tools)) },
@@ -2410,6 +2441,22 @@ export class PiCore {
       { key: "project", tokens: tk(bd.project), percent: pct(tk(bd.project)) },
       { key: "other", tokens: other, percent: pct(other) },
     ];
+    // 分时段估算（2026-11-17 方案 A）：厂商高峰/空闲两档价，pi 目录只有一套（≈高峰价）。
+    // 价目表优先读宿主文件（用户/agent 可直接编辑；坏文件逐项回落内置），缺省用内置 deepseek 官方价。
+    // 表里查不到的模型不猜价——只算 token，界面标「无价目」。
+    const est = usageDetail
+      ? estimateCost(usageDetail.buckets, this.priceTable(), Date.now())
+      : null;
+    const estimate: CtxEstimateMsg | null = est
+      ? {
+          cny: est.cny,
+          usd: est.cny / (Number.isFinite(fxRaw) && fxRaw > 0 ? fxRaw : 7.2),
+          band: est.currentBand,
+          peakCny: est.peak.cny,
+          offpeakCny: est.offpeak.cny,
+          unpriced: est.unpriced,
+        }
+      : null;
     return {
       type: "ctxDetail",
       percent: used != null ? pct(used) : null,
@@ -2423,8 +2470,26 @@ export class PiCore {
       segments,
       estimated: bd.estimated,
       ...(usage ? { usage } : {}),
-      ...(this.modelPricing ? { pricing: this.modelPricing } : {}),
+      ...(pricing ? { pricing } : {}),
+      ...(estimate ? { estimate } : {}),
     };
+  }
+
+  /** 价目表（文件优先，内置兜底）：按文件原文缓存，已解析就不重复 JSON.parse。
+   *  文件是用户/agent 手写的（内置技能会写它）：改完不必重载窗口——下一次 1s 心跳就读到新表。 */
+  private priceTableCache: { raw: string; table: PriceTable } | null = null;
+  priceTable(): PriceTable {
+    const raw = this.caps.getPricingTableJson?.() ?? "";
+    if (this.priceTableCache && this.priceTableCache.raw === raw) return this.priceTableCache.table;
+    const table = parsePriceTable(raw);
+    this.priceTableCache = { raw, table };
+    return table;
+  }
+
+  /** ⚙ 菜单/命令入口：打开（不存在则建模板）价目表文件。
+   *  写盘/建文件是宿主的事（核心不碰 fs）；写完不用推帧——心跳下一轮就拿到新表 */
+  openPriceTable(): void {
+    this.caps.openPricingTable?.();
   }
 
   /** 弹层查询入口：算好就回一条 ctxDetail（拿不到 client 时回空segments，不让弹层永久转圈） */

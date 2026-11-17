@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "note": "内置技能版本门：只升不降、不覆写用户改过的副本。改 harness/skills/<name>/SKILL.md 后必须 bump 这里，否则已装副本不会更新。"
+}

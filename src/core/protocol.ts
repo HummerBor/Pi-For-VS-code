@@ -479,6 +479,7 @@ export interface StateMsg {
    *  limit = contextWindow - compaction.reserveTokens（压缩关闭时等于 window）。 */
   stats?: {
     contextPercent?: number | null;
+    /** 会话累计花费，USD 原值（页脚恒用美元显示，与 pi 原生 TUI 状态行同一个数） */
     cost?: number;
     contextTokens?: number | null;
     contextWindow?: number | null;
@@ -574,15 +575,37 @@ export interface CtxDetailMsg {
   segments: CtxSegment[];
   /** 缩放前的估算合计（诊断用：only 用于算 scale，不必展示） */
   estimated: number;
-  /** 当前模型生效价目（pi 的 model.cost，USD/百万 token；含用户在 pi 配置里的覆盖）。
-   *  用途：让用户一眼判断 pi 算的钱是不是老价——壳只显示，不参与计算。 */
+  /** 价目行（驱动弹层那一行字）：derived 时是**本会话实际用量反推**的成交单价，
+   *  否则是新会话尚无用法时的当前模型目录价。用途：让用户一眼判断 pi 算的钱是不是老价
+   *  ——壳只显示，不参与计算。字段为 USD/百万 token（展示时再乘汇率）。 */
   pricing?: CtxPricingMsg;
   /** 会话用量与花费（2026-11-05：缓存/非缓存分开 + 各自金额）。数据源是 pi 每条 assistant
    *  消息的 usage（含 pi 按价目表算好的分项 cost），宿主只做加法（domain/usageTotals.ts）；
    *  拿不到消息时缺省，webview 隐藏这一段 */
   usage?: CtxUsageMsg;
+  /** 按时段价估算（2026-11-17 方案 A）：与平台账单同口径的那份钱。
+   *  拿不到用量桶（老 pi / 无价目）时缺省，界面不显示这一行 */
+  estimate?: CtxEstimateMsg;
 }
-/** 当前模型价目（pi 的 model.cost 原样，USD / 百万 token） */
+/** 分时段价估算（2026-11-17 方案 A）：厂商高峰/空闲两档价，pi 目录只有一套（≈高峰价），
+ *  所以壳另外算一份「对齐账单口径」的钱。**不替掉** pi 记的账：两个数在弹层里都摆着。 */
+export interface CtxEstimateMsg {
+  /** 估算总额（元） */
+  cny: number;
+  /** 同一笔换算成美元（页脚恒美元显示；用弹层的汇率反算） */
+  usd: number;
+  /** 此刻落在哪一档（一句话标注） */
+  band: "peak" | "offpeak";
+  peakCny: number;
+  offpeakCny: number;
+  /** 价目表里没有的模型（没算钱，界面标一句） */
+  unpriced: string[];
+}
+
+/** 价目行（`pi 价目` / `估算单价`）。
+ *  - derived=true：**由本会话实际用量反推**的成交单价（USD/百万 token）。这是常态，
+ *    标签与金额同源，换过模型的会话也不会自相矛盾（2026-11-16 修）。
+ *  - derived=false：新会话还没有用法时退回当前模型的目录价（pi 的 model.cost）。 */
 export interface CtxPricingMsg {
   provider: string;
   id: string;
@@ -591,6 +614,10 @@ export interface CtxPricingMsg {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** true = 按本会话用量反推（非目录价） */
+  derived?: boolean;
+  /** 本会话实际产生过用量的模型 id（derived 时用于展示） */
+  models?: string[];
 }
 /** 会话用量/花费（对应 domain/usageTotals.ts 的 UsageSummary）。
  *  **全部来自 pi**：tokens/cost = getSessionStats()；分项金额 = pi 逐条 usage.cost 累加。

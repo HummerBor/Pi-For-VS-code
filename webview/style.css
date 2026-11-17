@@ -2243,6 +2243,16 @@ details.think.compaction-flash>summary {
   opacity: .5;
 }
 
+/* 分时段估算（与账单同口径的那一行）：比价目行显眼，比合计略弱——它是「真钱」，
+   但合计行仍是对账锚点，不能抢它的位置 */
+#ctxpop .cp-est {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: .78;
+  font-variant-numeric: tabular-nums;
+}
+
 #ctxpop .cp-cost-note {
   margin-top: 4px;
   font-size: 11px;

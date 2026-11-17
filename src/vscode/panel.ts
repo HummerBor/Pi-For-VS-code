@@ -11,6 +11,7 @@ import { getAgentDirSync, findBundledPiCli, findNodeRuntime, findPiOnPath } from
 import { openTranscriptTab, pushTranscript, pushTranscriptStream } from "./transcriptTab";
 import { markWebviewAttached } from "./webviewGuard";
 import { displayNameFor } from "../domain/subagentNames";
+import { PRICE_TABLE_TEMPLATE } from "../domain/priceTable";
 import { setDisplayNameLookup } from "../domain/subagentSnapshot";
 // S 刀：piClient 的 bench 调试行与 panel 同落一个 debug log（dbgLog 为函数声明，提升可用）
 setPiClientDebug(dbgLog);
@@ -519,6 +520,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       },
       // subagent 台账读取（段 3）：agentDir 由 piSdk 加载时缓存，未加载时 null（核心退化）
       getAgentDir: () => getAgentDirSync(),
+      // 分时段价目表（2026-11-17 方案 A）：核心不碰 fs，只读原文/请宿主开文件。
+      // 文件路径固定 <agentDir>/pi-vscode-pricing.json，内置技能与用户编辑都认这一个位置
+      getPricingTableJson: () => readPricingTable(),
+      openPricingTable: () => void openPricingTable(),
       // 子 agent 展开回看另开页签（2026-11 用户反馈）：不顶当前会话
       openSessionInTab: (file, title) => void ChatPanelProvider.openOrFocusSession(file, title),
       // 子 agent 转录页（2026-11-03 用户拍板「页面也分开」）：只读 Markdown 预览，
@@ -1966,16 +1971,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.post({ type: "authPanelOpen" });
       },
     });
-    // 用量弹层的花费显示（2026-11-05 用户口径：金额用 pi 的，货币/汇率可改）
-    items.push({
-      label: this.L.sCostCurrency + (cfg.get<string>("costCurrency", "cny") === "usd" ? "USD" : "CNY"),
-      run: async () => {
-        const pick = await vscode.window.showQuickPick(["CNY", "USD"], { placeHolder: this.L.sCostCurrency });
-        if (!pick) return;
-        await cfg.update("costCurrency", pick.toLowerCase(), vscode.ConfigurationTarget.Global);
-        this.core.pushContextDetail();
-      },
-    });
+    // 用量弹层的花费显示（2026-11-16 用户拍板：页脚恒美元、弹层恒人民币估算）
+    // 币种开关（piChat.costCurrency）已退役——页脚跟 pi 原生 TUI 的 $ 对齐，弹层里换算成元，
+    // 两处不再各自漂移；只留汇率一个旋钮。
     items.push({
       label: this.L.sCostRate + String(cfg.get<number>("usdCnyRate", 7.2)),
       run: async () => {
@@ -1988,6 +1986,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (!Number.isFinite(n) || n <= 0) return;
         await cfg.update("usdCnyRate", n, vscode.ConfigurationTarget.Global);
         this.core.pushContextDetail();
+      },
+    });
+    // 分时段价目表（2026-11-17）：换模型/厂商改价时，把新价加一条即可——不改代码
+    items.push({
+      label: this.L.sPriceTable,
+      run: async () => {
+        this.core.openPriceTable();
       },
     });
     // 价目自检的「联网那一半」：走 pi 自己的目录刷新（不抓网页、不静默联网，点了才跑）
@@ -2300,4 +2305,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 function dbgLog(msg: string): void {
   // 实现已合一到 core 的 dbgAppend（双实现必漂移）；容量铁律/测试隔离见彼处注释
   dbgAppend(msg);
+}
+
+/* ── 分时段价目表（2026-11-17 用户拍板方案 A）───────────────────────────────────
+ * 为什么放 <agentDir>/pi-vscode-pricing.json 而不是 VS Code 的设置/globalStorage：
+ *   用户要的入口是「截个图就能把新模型的价格加进去」——这事由 agent 读图后代写文件完成。
+ *   agent 整天在 ~/.pi/agent 里活动（settings.json / extensions / skills 都在这），
+ *   一个显眼的 JSON 文件它找得到、写得进去；globalStorage 那串 AppData 路径对人/AI 都不友好。
+ * 读失败/没价目表一律回落内置表（domain/priceTable.defaultPriceTable），绝不阻弹层。 */
+function pricingTablePath(): string | null {
+  const dir = getAgentDirSync();
+  return dir ? path.join(dir, "pi-vscode-pricing.json") : null;
+}
+
+function readPricingTable(): string | null {
+  const p = pricingTablePath();
+  if (!p) return null;
+  try {
+    return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null;
+  } catch {
+    return null; // 读不到就用内置表，不影响任何链路
+  }
+}
+
+/** 打开价目表：不存在则按模板建好再打开（用户/agent 一眼就知道要填什么）。
+ * 导出供命令面板入口复用（extension.ts 注册 piChat.openPriceTable） */
+export async function openPricingTable(): Promise<void> {
+  const p = pricingTablePath();
+  if (!p) {
+    void vscode.window.showWarningMessage("pi agent 目录未就绪，暂时打不开价目表");
+    return;
+  }
+  try {
+    if (!fs.existsSync(p)) fs.writeFileSync(p, PRICE_TABLE_TEMPLATE, "utf8");
+    const doc = await vscode.workspace.openTextDocument(p);
+    await vscode.window.showTextDocument(doc, { preview: false });
+  } catch (e) {
+    void vscode.window.showErrorMessage("打开价目表失败: " + String(e));
+  }
 }

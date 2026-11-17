@@ -11,11 +11,51 @@
  *   ① 从 `getMessages()` 累加 → 压缩后旧消息被摘要替代、usage 条目不在 messages 里，账直接少一截；
  *   ② 按模型价目表重算 + 归一 → 那是壳自己算钱，与 pi 的数不可避免地分叉。
  *
- * 货币：pi 的价目表是 USD，用户在国内用 DeepSeek（账单是元）。展示层提供 cny，按**用户可改的
- * 汇率**（设置 piChat.usdCnyRate，默认 7.2）折算，界面上标「≈」——换算写在明面上，不藏在代码里。
+ * 货币（2026-11-16 用户拍板）：**页脚恒为美元、弹层恒为人民币估算**。两处不再跟随
+ * 设置里的币种开关（piChat.costCurrency 已退役）：页脚跟 pi 原生 TUI 状态行的 $ 对齐
+ * （同一个数、同一个符号，省得用户两边对账），弹层里按用户可改的汇率（piChat.usdCnyRate，
+ * 默认 7.2）折成人民币并标注「估算」——那不是账单，账单要看服务商控制台。
  * 本文件只做「单位换算 + 缺省兜底」，不参与金额计算。
  * 纯函数零 import（webview 共享编译 / node 裸跑用例两处都要能用）。
  */
+
+/** 单价（USD / 百万 token）。四个分量分开算，因为它们的价差可达 50 倍（缓存命中 vs 未命中）。 */
+export interface UnitPrices {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * 由**本会话实际用量**反推成交单价，而不是去读「当前模型」的目录价。
+ *
+ * 为什么必须反推（2026-11-16 事故）：弹层的「pi 价目」行原先取 `session.model.cost`（当前模型），
+ * 而「用量与花费」的金额是**每条 usage 记录按它当时的价目算好后累加**的。两者一旦不同源就会
+ * 自相矛盾——用户实测那一屏标签写 MiMo ¥1.01/M，金额却只有按 deepseek ¥2.16/M 才算得出
+ * （会话 19:00:31 以默认模型 MiMo 起、19:00:34 切 deepseek，价目缓存的刷新事件赶在宿主接线
+ * 之前，停在了旧模型）。反推之后标签与金额永远是同一套数，也不再依赖 model_select 的时序。
+ *
+ * 返回 null = 没有分项金额（免费模型/无价目），调用方据此退回目录价或隐藏这一行。
+ */
+export function deriveUnitPrices(
+  tokens: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
+  costSplit: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | null,
+): UnitPrices | null {
+  if (!costSplit) return null;
+  const sum = num(costSplit.input) + num(costSplit.output) + num(costSplit.cacheRead) + num(costSplit.cacheWrite);
+  if (sum <= 0) return null;
+  const perM = (cost: unknown, tok: unknown): number => {
+    const t = num(tok);
+    return t > 0 ? (num(cost) / t) * 1e6 : 0;
+  };
+  return {
+    input: perM(costSplit.input, tokens.input),
+    output: perM(costSplit.output, tokens.output),
+    cacheRead: perM(costSplit.cacheRead, tokens.cacheRead),
+    cacheWrite: perM(costSplit.cacheWrite, tokens.cacheWrite),
+  };
+}
 
 export interface UsageSummary {
   /** 四类 token（pi 原值） */

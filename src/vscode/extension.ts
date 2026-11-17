@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { ChatPanelProvider } from "./panel";
+import { ChatPanelProvider, openPricingTable } from "./panel";
 import { registerSessionsView, setSessionsView, notifySessionsChangedNow } from "./sessionsView";
 import { invalidateListMemo } from "./sessionCache";
 import { prewarmPiServices } from "../pi/piClient";
@@ -218,6 +218,11 @@ export function activate(ctx: vscode.ExtensionContext): void {
     // 点「稍后」不会把真正的自检静默掉；点主按钮才会真关 VS Code 清缓存。
     vscode.commands.registerCommand("piChat.swGuardPreview", async () => {
       await previewRepairNotice(ctx, lang0);
+    }),
+    // 分时段价目表（2026-11-17 方案 A）：命令面板也能直接打开，跟 ⚙ 菜单同一入口。
+    // 用途是「换个新模型 → 截个价目表图 → 让 agent 往里加一条」，不必改代码/重发版
+    vscode.commands.registerCommand("piChat.openPriceTable", async () => {
+      await openPricingTable();
     })
   );
   startWebviewGuard(ctx, lang0);

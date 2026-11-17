@@ -168,10 +168,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var cpCostAmtEl = q('#ctxpop .cp-cost-amount'); var cpCostTagEl = q('#ctxpop .cp-cost-tag');
     var cpCostNoteEl = q('#ctxpop .cp-cost-note'); var cpCostHitEl = q('#ctxpop .cp-cost-hit');
     var cpPriceEl = q('#ctxpop .cp-price');
+    var cpEstEl = q('#ctxpop .cp-est');
     /** 顶部「压缩点」读数（拖动滑块时原地联动，不等宿主回包） */
     var cpAtEl = q('#ctxpop .cp-at');
     /** 最近一条 ctxDetail 真值（拖动滑块时以它为基准局部重算，不必等宿主回包） */
     var ctxDetail: any = null;
+    /** 用户正在动阈值（拖滑块 / 点刻度）的本地真值 + 时间戳。
+     *  事故（2026-11-16 用户「改后直接不能用了」）：弹层开着时宿主每秒发一帧 ctxDetail
+     *  （心跳），而 renderCtxDetail 每次都拿宿主值回填滑块 —— 拖到一半被每秒弹回去，
+     *  看着就是「滑不动」。编辑窗口期内一律以本地值为准，别拿回包盖用户的手。 */
+    var ctxEditTh: any = null;
+    var ctxEditAt = 0;
     /** 弹层补查节流（state/uiState 帧到了才补查一次）：弹层开着时跟着宿主真相走。
      *  事故（2026-11-05 用户报「上面数字有延迟」）：弹层只在 hover 打开那一刻查一次，
      *  之后 agent 干活、页脚圆环跟着 state 帧动，弹层却冻在打开瞬间 —— 看着就像卡住。 */
@@ -374,9 +381,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if (ctxCloseTimer) { clearTimeout(ctxCloseTimer); ctxCloseTimer = null; }
       if (ctxPopEl.style.display === 'block') return;
       ctxPopEl.style.display = 'block';
+      positionCtxPop();
       if (ctxDetail) renderCtxDetail(ctxDetail); // 先用上次真值垫一帧，等宿主回包再替换（避免闪空）
       vpost({ type: 'ctxQuery' });
       syncCtxTick(); // 弹层开着期间每秒跟一次真值（pi 的 percent 每轮都在动）
+    }
+    /** 弹层贴在**输入区上方**（不是底栏上方）：2026-11-05 用户截图实锤，原先 bottom:32px
+     *  一开就把输入框右下角的发送按钮盖住，鼠标从页脚圆环往上挪去点发送，点到的是弹层。
+     *  这里按输入区 + 底栏的实际高度定位，面板变高/输入框长高都自适。 */
+    function positionCtxPop() {
+      var comp = view.querySelector('#composer') as HTMLElement;
+      var bar = view.querySelector('#bottombar') as HTMLElement;
+      ctxPopEl.style.bottom = ((comp ? comp.offsetHeight : 0) + (bar ? bar.offsetHeight : 0) + 10) + 'px';
     }
     function closeCtxPopLater() {
       if (ctxCloseTimer) clearTimeout(ctxCloseTimer);
@@ -384,26 +400,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         ctxCloseTimer = null;
         ctxPopEl.style.display = 'none';
         syncCtxTick();
-      }, 280);
+      }, 420);
     }
     usageEl.addEventListener('mouseenter', openCtxPop);
     usageEl.addEventListener('mouseleave', closeCtxPopLater);
     ctxPopEl.addEventListener('mouseenter', openCtxPop);
     ctxPopEl.addEventListener('mouseleave', closeCtxPopLater);
     cpCloseEl.addEventListener('click', function () { ctxPopEl.style.display = 'none'; syncCtxTick(); });
-    // 滑块 = 三段吸附（2026-11-05 用户：滑动好使点，档位不用手调）。
-    // input 只本地重算（零延迟、不写盘），change（放手）才落库
+    // 滑块是**连续**的（0..1000 → [首档..窗口]），刻度只是三个预设点：
+    // 事故（2026-11-05 用户「？？？」截图）：滑块曾按档位吸附，pi 默认 reserve 16K 时真值
+    // 183.6K 被吸附到「拉满 200K」——旋钮在最右、数字却说 183.6K，自相矛盾。
+    // 现在旋钮位置 = 真值位置，永不撒谎；想省事就点下面的刻度。
     cpRangeEl.addEventListener('input', function () {
-      var stops = ctxStops();
-      if (!stops.length) return;
-      var idx = Math.max(0, Math.min(stops.length - 1, Number(cpRangeEl.value)));
-      applyStop(idx, false);
+      renderCtxDetail(ctxDetail, rangeToThreshold(Number(cpRangeEl.value)));
+      markNearestTick(rangeToThreshold(Number(cpRangeEl.value)));
     });
     cpRangeEl.addEventListener('change', function () {
-      var stops = ctxStops();
-      if (!stops.length) return;
-      var idx = Math.max(0, Math.min(stops.length - 1, Number(cpRangeEl.value)));
-      applyStop(idx, true);
+      if (!ctxDetail || !ctxDetail.window) return;
+      var th = rangeToThreshold(Number(cpRangeEl.value));
+      vpost({ type: 'ctxSetReserve', reserveTokens: Math.round(ctxDetail.window - th) });
     });
     thinkEl.addEventListener('click', function () { vpost({ type: 'pickThinking' }); });
     modeBadge.addEventListener('click', function () { vpost({ type: 'pickMode' }); });
@@ -1471,11 +1486,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 金额格式：币种由宿主下发（cny/usd）；钱小的时候给足小数位，否则 ¥0.00 会把小额看成「免费」 */
   function fmtCost(v, currency) {
     if (v === null || v === undefined || !isFinite(v)) return L.ctxNoData;
-    var sign = currency === 'cny' ? '¥' : '$';
-    if (v <= 0) return sign + '0';
-    if (v >= 1) return sign + v.toFixed(2);
-    if (v >= 0.01) return sign + v.toFixed(3);
-    return sign + v.toFixed(4);
+    return (currency === 'cny' ? '\u00a5' : '$') + fmtMoneyNum(v);
+  }
+  /** 金额数字部分（不带符号）：≥1 两位、≥0.01 三位、其余四位。页脚与弹层共用同一套小数位，
+   *  否则「页脚 $0.2 / 弹层 $0.183」会被当成两个数。 */
+  function fmtMoneyNum(v) {
+    if (v === null || v === undefined || !isFinite(v) || v <= 0) return '0';
+    if (v >= 1) return v.toFixed(2);
+    if (v >= 0.01) return v.toFixed(3);
+    return v.toFixed(4);
   }
   /** 用量与花费（2026-11-05 用户：积分式百分比不适合 API 计费）：
    *  缓存命中 / 缓存写入 / 非缓存输入 / 输出 四行，各显 token 与金额，末行合计。
@@ -1510,24 +1529,45 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     cpCostAmtEl.textContent = money ? fmtCost(u.cost, u.currency) : fmtTok(u.tokens) + ' tokens';
     cpCostAmtEl.title = u.tokens ? u.tokens.toLocaleString() + ' tokens' : '';
   }
-  /** 当前模型价目（2026-11-05 用户：「启动插件后可以自动查一次」）：
-   *  显示 pi 此刻生效的单价（目录价 + 你在 pi 配置里的覆盖），单位按弹层货币换算。
-   *  这一行是**对账锚点**——pi 算出来的钱对不对，看它就知道 pi 用的是哪套价。 */
+  /** 价目行：derived=true 时是**本会话实际用量反推**的成交单价（与金额同源），
+   *  否则是新会话还没有用法时的当前模型目录价。单位按弹层货币换算（估算）。
+   *  这一行是「对账锚点」——pi 算出来的钱对不对，看它就知道 pi 用的是哪套价。 */
   function renderCtxPrice(p, u) {
     if (!cpPriceEl) return;
     if (!p) { cpPriceEl.style.display = 'none'; return; }
     var currency = (u && u.currency) || 'cny';
     var fx = (u && u.fx) || 1;
     function perM(v) { return fmtCost((v || 0) * fx, currency) + '/M'; }
+    if (p.derived && !(p.input || p.output || p.cacheRead || p.cacheWrite)) {
+      cpPriceEl.style.display = 'none'; // 免费模型/无分项：没有"单价"可谈，不编排一行 0
+      return;
+    }
     cpPriceEl.style.display = 'block';
+    var models = (p.models && p.models.length ? p.models.join(' + ') : p.name || p.id);
     cpPriceEl.textContent =
-      L.ctxPriceLine
-        .replace('{m}', p.name || p.id)
+      (p.derived ? L.ctxPriceLineDerived : L.ctxPriceLine)
+        .replace('{m}', models)
         .replace('{i}', perM(p.input))
         .replace('{c}', perM(p.cacheRead))
         .replace('{w}', perM(p.cacheWrite))
         .replace('{o}', perM(p.output));
-    cpPriceEl.title = p.provider + '/' + p.id;
+    cpPriceEl.title = p.derived ? models : p.provider + '/' + p.id;
+  }
+  /** 分时段估算（2026-11-17 方案 A）：厂商高峰/空闲两档价，pi 目录只有一套（≈高峰价），
+   *  所以这一行才是「跟账单对得上」的数。合计行不动（pi 记账 = 对账锚点），两个数都摆着。
+   *  表里没有的模型不估价，标一句「无价目，未计」。 */
+  function renderCtxEstimate(e, u) {
+    if (!cpEstEl) return;
+    if (!e) { cpEstEl.style.display = 'none'; return; }
+    var currency = (u && u.currency) || 'cny';
+    var band = e.band === 'peak' ? L.ctxEstPeak : L.ctxEstOffpeak;
+    var line = L.ctxEstLine.replace('{v}', fmtCost(e.cny, currency)).replace('{band}', band);
+    if (e.unpriced && e.unpriced.length) {
+      line += ' · ' + L.ctxEstUnpriced.replace('{m}', e.unpriced.join(' + '));
+    }
+    cpEstEl.style.display = 'block';
+    cpEstEl.textContent = line;
+    cpEstEl.title = L.ctxEstNote;
   }
   function cpCostRow(label, tokens, cost, showMoney, currency, kind) {
     return '<li><i class="cp-cc cp-cc-' + kind + '"></i><span class="cp-lb">' + esc(label) + '</span>' +
@@ -1541,14 +1581,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function renderCtxDetail(m, budgetOverride?: number) {
     ctxDetail = m;
     var win = m.window || 0;
-    var budget = budgetOverride || m.budget || win;
+    if (budgetOverride !== undefined) { ctxEditTh = budgetOverride; ctxEditAt = Date.now(); }
+    // 编辑窗口 1.5s：拖完/松手后留给宿主回包的时间，期间不回填、不覆写用户刚设的值
+    var editing = budgetOverride !== undefined || (ctxEditTh !== null && Date.now() - ctxEditAt < 1500);
+    if (!editing) ctxEditTh = null;
+    var budget = editing ? Number(ctxEditTh) : (m.budget || win);
     var p = budget > 0 && m.used !== null && m.used !== undefined ? (m.used / budget) * 100 : null;
     // 弹层关着时也会有 ctxDetail（busy 期间每秒一帧心跳）：只刷页脚圆环，整块弹层 DOM
     // 等打开时再画（openCtxPop 会用最新 ctxDetail 重渲一遍）——不白干活也不抖
     if (ctxPopEl.style.display !== 'block' && !budgetOverride) {
       if (m.usage && m.usage.priced !== false) {
-        lastUsageCost = Number(m.usage.cost) || 0;
-        lastUsageSign = m.usage.currency === 'cny' ? '\u00a5' : '$';
+        // 页脚恒美元；金额优先用**分时段估算**（与账单同口径），pi 台账进 title 对账
+        lastPiCost = usdOf(m.usage);
+        lastUsageCost = m.estimate ? Number(m.estimate.usd) || lastPiCost : lastPiCost;
+        lastUsageSign = '$';
         lastUsageFromDetail = true;
       }
       if (p !== null) paintUsage(p, lastUsageCost, lastUsageSign);
@@ -1560,10 +1606,12 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 必然差一截。ctxDetail 是真值帧，圆环跟着它走（拖阈值时也走这条，所以零延迟）。
     // 【2026-11-16 用户实测】页脚的「· $0.43」也要跟着真值帧走：原先它只吃 state 帧的
     // stats.cost（轮次边界才发）—→ 金额平时冻着，只有弹层（hover）重画时才连带变一下。
-    // 金额与货币取 m.usage（= 弹层合计同一份数，已是用户在设置里选的货币）。
+    // 金额取 m.usage（= 弹层合计同一份 pi cost），但**换成美元**再打：页脚恒美元（2026-11-16
+    // 用户拍板），弹层里那份人民币只是按汇率的估算，跳得刺眼。
     if (m.usage && m.usage.priced !== false) {
-      lastUsageCost = Number(m.usage.cost) || 0;
-      lastUsageSign = m.usage.currency === 'cny' ? '\u00a5' : '$';
+      lastPiCost = usdOf(m.usage);
+      lastUsageCost = m.estimate ? Number(m.estimate.usd) || lastPiCost : lastPiCost;
+      lastUsageSign = '$';
       lastUsageFromDetail = true;
     }
     if (p !== null) paintUsage(p, lastUsageCost, lastUsageSign);
@@ -1590,26 +1638,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       rows += '<li><i style="background:' + CP_SEGS[j].color + '"></i><span class="cp-lb">' + esc(L[CP_SEGS[j].label]) + '</span><span class="cp-lv">' + lv + '</span></li>';
     }
     cpLegendEl.innerHTML = rows;
-    renderCtxCost(m.usage);
-    renderCtxPrice(m.pricing, m.usage);
+    // 拖动阈值（budgetOverride）时只重算「随预算变」的那几块：金额/价目与阈值无关，
+    // 每次 input 都重建它们纯属给主线程添堵（用户实测拖动卡）
+    if (budgetOverride === undefined) {
+      renderCtxCost(m.usage);
+      renderCtxPrice(m.pricing, m.usage);
+      renderCtxEstimate(m.estimate, m.usage);
+    }
     // 阈值滑块（真相 = pi 的 compaction.reserveTokens，webview 这边用“触发点占窗口百分比”表达）
     cpThLabelEl.textContent = m.compactEnabled ? L.ctxCompactHint : L.ctxCompactOff;
     var usable = m.compactEnabled && win > 0;
     cpRangeEl.disabled = !usable;
     cpTicksEl.classList.toggle('disabled', !usable);
     if (win > 0 && m.compactAt !== null && m.compactAt !== undefined) {
-      if (!budgetOverride) {
+      if (!editing) {
         renderTicks(); // 刻度标签随窗口/语言刷新（点刻度 = 直接跳档并写盘）
-        // 档位回填：取离当前阈值最近的一档（默认 reserve 16K 时天然落在末档 = 拉满）
-        var stops = ctxStops();
-        var idx = 0;
-        var best = Infinity;
-        for (var si = 0; si < stops.length; si++) {
-          var d = Math.abs(stops[si] - m.compactAt);
-          if (d < best) { best = d; idx = si; }
-        }
-        cpRangeEl.value = String(idx);
-        markActiveTick(idx);
+        cpRangeEl.value = String(thresholdToRange(m.compactAt)); // 旋钮 = 真值位置
+        markNearestTick(m.compactAt);
       }
       syncThresholdUi(budget);
     } else {
@@ -1623,6 +1668,36 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function ctxStops() {
     // 纯计算在 domain（有独立用例锁行为）：webview 只负责取值/渲染
     return compactionStops(ctxDetail && ctxDetail.window ? ctxDetail.window : 0);
+  }
+  /** 滑块区间：首档（窗口 1/3）→ 窗口。旋钮位置按此线性映射，永远反映真值 */
+  function rangeBounds() {
+    var stops = ctxStops();
+    var win = ctxDetail && ctxDetail.window ? Number(ctxDetail.window) : 0;
+    if (!stops.length || !win) return null;
+    return { lo: stops[0], hi: win };
+  }
+  function rangeToThreshold(v) {
+    var b = rangeBounds();
+    if (!b) return 0;
+    var r = Math.max(0, Math.min(1000, isFinite(v) ? v : 0)) / 1000;
+    return b.lo + (b.hi - b.lo) * r;
+  }
+  function thresholdToRange(th) {
+    var b = rangeBounds();
+    if (!b) return 1000;
+    var r = (th - b.lo) / (b.hi - b.lo);
+    return Math.round(Math.max(0, Math.min(1, r)) * 1000);
+  }
+  /** 阈值落在某个预设点上（±0.5% 窗口）才高亮那个刻度；否则三个都不亮 ——
+   *  宁可没有选中态，也不许把 183.6K 标成「拉满 200K」（用户截图里就是这么被骗的） */
+  function markNearestTick(th) {
+    var stops = ctxStops();
+    var win = ctxDetail && ctxDetail.window ? Number(ctxDetail.window) : 0;
+    if (!stops.length || !win) { markActiveTick(-1); return; }
+    for (var i = 0; i < stops.length; i++) {
+      if (Math.abs(stops[i] - th) <= win * 0.005) { markActiveTick(i); return; }
+    }
+    markActiveTick(-1);
   }
   /** 三段刻度：标签 = 档位 token 数（点一下直接跳档并写盘） */
   function renderTicks() {
@@ -1646,6 +1721,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var stops = ctxStops();
     if (idx < 0 || idx >= stops.length) return;
     var th = stops[idx];
+    cpRangeEl.value = String(thresholdToRange(th)); // 旋钮跟着档位走（否则滑块与数字又对不上）
     if (!commit) { renderCtxDetail(ctxDetail, th); markActiveTick(idx); return; }
     renderCtxDetail(ctxDetail, th); // 先本地重算，宿主回 ctxDetail 时以真值为准
     markActiveTick(idx);
@@ -1705,11 +1781,20 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 圆环周长：SVG r=8 → 2πr；dashoffset 按占比推进 */
   var RING_C = 2 * Math.PI * 8;
   /** 最近一次已知成本（圆环与弹层共用：拖阈值时圆环也要跟着重画）。
-   *  2026-11-16：改成以 ctxDetail 的真值帧为准（含用户设的显示货币），state 帧只在
-   *  还没拿到过 ctxDetail 时当兜底——否则流式期间页脚金额永远是上一次轮次边界的旧值。 */
+   *  2026-11-16：改成以 ctxDetail 的真值帧为准，state 帧只在还没拿到过 ctxDetail 时当兜底。
+   *  单位：**美元**（页脚恒 USD，与 pi 原生 TUI 状态行一致；人民币只在弹层里估算）。 */
   var lastUsageCost = 0;
   var lastUsageSign = '$';
   var lastUsageFromDetail = false;
+  /** pi 记账的金额（美元）：页脚显示的是「时段估算」，pi 台账放 title 里当对账锚点 */
+  var lastPiCost = 0;
+  /** 页脚金额 = pi 的 USD 原值：usage.cost 已是按汇率折出的人民币，除回 fx 就是 pi 那个数。
+   *  为什么不追一个 usd 字段：边界上只留一份金额，避免两套四舍五入各跑各的。 */
+  function usdOf(u) {
+    var cost = Number(u && u.cost) || 0;
+    var fx = Number(u && u.fx) || 1;
+    return fx > 0 ? cost / fx : cost;
+  }
   /** 圆环 + 百分比文字的唯一画笔。三条入口都走这里，保证页脚永远只有一个数、一个时刻：
    *  ① state 帧（renderUsageRing）② 弹层数据到达（renderCtxDetail）③ 拖阈值（本地预算重算） */
   function paintUsage(p, cost, sign) {
@@ -1722,16 +1807,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var pct = Math.max(0, Math.min(100, p));
     ringFillEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
     ringFillEl.style.stroke = pct >= 90 ? '#e05a5a' : pct >= 70 ? '#e8912d' : 'var(--vscode-charts-blue, #3b82f6)';
-    usageTxtEl.textContent = (Math.round(p * 10) / 10) + '%' + (cost ? ' · ' + (sign || '$') + Number(cost).toFixed(2) : '');
-    usageEl.title = L.ctxTitle + ' ' + (Math.round(p * 10) / 10) + '%';
+    usageTxtEl.textContent = (Math.round(p * 10) / 10) + '%' +
+      (cost ? ' · ' + (sign || '$') + fmtMoneyNum(Number(cost)) : '');
+    usageEl.title = L.ctxTitle + ' ' + (Math.round(p * 10) / 10) + '%' +
+      (lastPiCost ? ' · ' + L.ctxPiLedger + ' $' + fmtMoneyNum(lastPiCost) : '');
   }
   /** 页脚圆环（state 帧入口）：分母与弹层同一口径（压缩预算 = 窗口 − reserveTokens），
-   *  stats.contextLimit 缺失（老帧/压缩关闭）时退回 pi 原生的窗口百分比。 */
+   *  stats.contextLimit 缺失（老帧/压缩关闭）时退回 pi 原生的窗口百分比。
+   *  金额**恒显美元**（2026-11-16 用户拍板「页脚用美元」）：stats.cost 就是 pi 的 USD 原值，
+   *  与 pi 原生 TUI 状态行的 $ 是同一个数；人民币只在弹层里按汇率估算。 */
   function renderUsageRing(stats) {
-    // 金额优先给 ctxDetail 真值帧（同一份 pi cost，已是用户设的显示货币）；
-    // 还没拿到过弹层数据时兜底用 state 帧的 pi 原值（USD）
+    // 金额优先给 ctxDetail 真值帧（同一份 pi cost，已换成美元）；
+    // 还没拿到过弹层数据时兜底用 state 帧的 pi 原值（本来就是 USD）
     if (!lastUsageFromDetail) {
-      lastUsageCost = stats && stats.cost ? Number(stats.cost) : 0;
+      lastPiCost = stats && stats.cost ? Number(stats.cost) : 0;
+      lastUsageCost = lastPiCost;
       lastUsageSign = '$';
     }
     var budget = stats ? Number(stats.contextLimit || stats.contextWindow || 0) : 0;
