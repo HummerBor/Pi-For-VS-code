@@ -5,9 +5,9 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/core/i18n";
-import type { HostToWebviewTagged, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
+import type { HostToWebviewTagged, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo } from "../src/core/protocol";
 // 跨功能共享状态（活动页签 / 每视图 busy、变更页数据）与变更页整块逻辑：见 core/state.ts 头注释
-import { createViewState, getActiveTabId, setActiveTabId } from "./core/state";
+import { createViewState, getActiveTabId } from "./core/state";
 import { initChangesPage } from "./features/changesPage";
 import { initCtxPopover } from "./features/ctxPopover"; // 上下文用量弹层 + 页脚圆环（原住本文件）
 import { initSubagentDock } from "./features/subagentDock"; // 子 agent 浮窗（原住本文件，第 3 刀）
@@ -20,6 +20,7 @@ import { initSticky } from "./features/sticky"; // 最后一问钉住折叠（�
 import { initOutline } from "./features/outline"; // 右缘消息大纲轨道（原住本文件，第 5 刀 5g）
 import { initMessageList } from "./features/messageList"; // 整树重绘 / 用户气泡 / toast（原住本文件，第 5 刀 5d）
 import { initRenderQueue } from "./features/renderQueue"; // 渲染队列：重绘/续接排队 + 重绘窗口期流式事件排队（原住本文件，第 5 刀 5f）
+import { initTabs, getTabTag, getTabsList } from "./features/tabs"; // 页签与路由：views 表/路由/页签切换/标签条/两个页面级监听（原住本文件，第 6 刀 6a）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -30,10 +31,10 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var vscodeApi = acquireVsCodeApi();
   // ── 工单十五：tabId 收发桥（协议见 src/protocol.ts TabTag）──
   // webview→宿主的消息统一带活动标签的 tabId（tabNew/tabSwitch/tabClose 自带目标标）；
-  // tabId 跟随活动标签变化（activateTab 更新），宿主 tabs 回包是最终事实源
-  var tabId: string | null = null;
+  // tabId 的写口（activateTab / routeMsg）随 6a 进了 features/tabs.ts，本文件只经 getTabTag()
+  // 读它打标；宿主 tabs 回包是最终事实源
   var vscode = {
-    postMessage: function (m: any) { if (tabId !== null && m.tabId === undefined) m.tabId = tabId; vscodeApi.postMessage(m); },
+    postMessage: function (m: any) { var tid = getTabTag(); if (tid !== null && m.tabId === undefined) m.tabId = tid; vscodeApi.postMessage(m); },
     getState: function () { return vscodeApi.getState(); },
     setState: function (s: unknown) { vscodeApi.setState(s); }
   };
@@ -549,7 +550,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // J 刀：页头优先用宿主 tabs 标题（唯一事实源：空会话「新会话」/时区本地化都在宿主
     // fmtSessionTitle 收口），fmtSession 只作 tabs 未到时的兑底
     var hostTitle = '';
-    for (var hTi = 0; hTi < tabsList.length; hTi++) if (tabsList[hTi].id === getActiveTabId()) { hostTitle = tabsList[hTi].title; break; }
+    var tl = getTabsList();
+    for (var hTi = 0; hTi < tl.length; hTi++) if (tl[hTi].id === getActiveTabId()) { hostTitle = tl[hTi].title; break; }
     var sessName = hostTitle || fmtSession(m.sessionFile, m.sessionName);
     sessionEl.textContent = L.sessionLabel + sessName;
     sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
@@ -739,30 +741,30 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     };
   }
 
-  var views: Record<string, ReturnType<typeof makeSessionView>> = {};
-  // 变更页 Esc 关页（焦点不在输入框时的兑底：点了清单/diff 后焦点不在 composer）
-  document.addEventListener('keydown', function (e: KeyboardEvent) {
-    if (e.key !== 'Escape' || e.isComposing || getActiveTabId() === null) return;
-    var v = views[getActiveTabId()];
-    // Esc 先关浮层（上下文用量弹层），没有浮层才关整页
-    if (v && v.isCtxPopOpen()) { v.closeCtxPop(); return; }
-    if (v && v.hasPage()) v.closePage();
+  // ── 页签与路由（第 6 刀 6a）：views 表 / 消息路由 / 页签切换 / 标签条 / 宿主清单 / 两个
+  // 页面级监听（document Esc 关页、window message 入口）整块在 features/tabs.ts ──
+  // 唯一持有者是该模块（本文件不再持有 views / tabsList / tabId 任何一个）。别名供视图内调用点
+  // （codechip 点击、codeCtx 分支、handleMsg 不可达的 tabs 分支、drop、subDock.refreshBusy、
+  // renderQ 回灌）按原符号名调，正文零改（口径同 4/5 刀的别名）。
+  // 装配位置刻意留在原 Esc 监听处：document keydown 的注册顺序 = 本页签 Esc → 凭证页 Esc
+  // （后者在下方立即执行的 IIFE 里绑），交换就等于改「Esc 先关谁」的语义。
+  // 活动页签 id 本身住 core/state.ts（getActiveTabId/setActiveTabId）：document 级监听与
+  // 路由都跨视图读写它，单一读写口在那边。
+  var tabs = initTabs({
+    makeView: makeSessionView, lang: L,
+    post: function (m) { vscode.postMessage(m); },
+    el: el, ico: ico, shorten: shorten,
+    // 以下各项初始化晚于本装配点（页面元素/子 agent 浮窗都在本文件中段）：一律转调，调用时现取
+    getSessionEl: function () { return sessionEl; },
+    applySubTab: function (tid) { subDock.applyTab(tid); },
+    subagentUpdate: function (m) { subDock.handleUpdate(m); },
+    subagentLedger: function (rows) { subDock.setLedger(rows); },
+    // 函数声明（已提升）：直接给引用
+    showAuthPanel: showAuthPanel, renderAuthProviders: renderAuthProviders, applyDuck: applyDuck,
+    setWebviewState: function (s) { vscodeApi.setState(s); }
   });
-  function viewFor(tid: string) { return views[tid] || (views[tid] = makeSessionView(tid)); }
-  /** codeCtx 是页面级数据：变更时循环各视图重渲 chip（三期⑥） */
-  function renderCodeChipAll() { for (var vid in views) views[vid].renderCodeChip(); }
-  /** 消息路由（三期）：后台只挡焦点类，其余各归各的视图——串写结构上不可能 */
-  function routeMsg(m: HostToWebviewTagged) {
-    var tid = m.tabId !== undefined ? m.tabId : getActiveTabId();
-    if (tid === null || tid === undefined) return;
-    if (getActiveTabId() === null) { setActiveTabId(tid); tabId = tid; }
-    if (tid !== getActiveTabId() && m.type === 'fillInput') return; // 后台页签只挡焦点类（回填+focus）
-    viewFor(tid).handleMsg(m);
-  }
-  // 活动页签 id 已抽到 core/state.ts（getActiveTabId/setActiveTabId）：document 级监听与
-  // 路由都跨视图读写它，单一读写口在那边
-  var tabsList: TabInfo[] = [];
-  var tabbarEl = document.getElementById('tabbar') as HTMLElement;
+  var viewFor = tabs.viewFor; var renderCodeChipAll = tabs.renderCodeChipAll;
+  var routeMsg = tabs.routeMsg; var handleTabs = tabs.handleTabs;
   // 下区原型：启动时按页签克隆（元素 ID 在各视图内重复，查询一律 scope 到视图）
   var sessionArea = document.getElementById('session-area') as HTMLElement;
   var protoView = sessionArea.querySelector('.session-view') as HTMLElement;
@@ -1012,117 +1014,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && getActiveTabId() !== null && ((dt.files && dt.files.length) || dt.getData('text/uri-list') || dt.getData('resourceurls'))) viewFor(getActiveTabId()).handleFiles(dt.files || [], dt); });
   // 重绘窗口期到达的流式事件排队与按原序重放（pendingStream / deferDuringRender /
   // drainPendingStream）随 5f 进 features/renderQueue.ts，各视图一个实例（renderQ）。
-  /** 页签切换（刀5）：本地只换芯片高亮，内容现场由宿主 postUiState 重拉（pi 会话=唯一真相，
-   *  webview 零影子状态——切回页签丢失现场在架构上不可能，因为根本不存在本地副本） */
-  /** 页签切换（工单24 架构归位二期）：整个下区视图换可见性 O(1)。每个控件的实时状态都已在
-   *  各自视图里活渲染（后台也一样），这里没有任何重渲——只有页头会话标题（页面级）和
-   *  代码上下文 chip（页面级数据）需要补一下；跟随标志为真则补拉底（后台滚不动，见 scroll） */
-  function activateTab(tid: string) {
-    if (getActiveTabId() === tid) { renderTabs(); return; }
-    setActiveTabId(tid); tabId = tid;
-    var v = viewFor(tid); // 三期：闭包原始值不走对象属性，必须方法访问器
-    for (var vid in views) views[vid].show(vid === tid); // 换可见性 O(1)，零重渲零重拉
-    // 页头会话标题是页面级，切页签时从宿主清单对齐（会话名即标签题）
-    for (var ti = 0; ti < tabsList.length; ti++) {
-      if (tabsList[ti].id === tid) { sessionEl.textContent = L.sessionLabel + tabsList[ti].title; break; }
-    }
-    v.renderCodeChip(); // codeCtx 是页面级数据，新视图的 chip 可能还是原型态
-    // 残留清扫（白 Working 事故兑底）：按本页签真相重渲状态行，不残留历史漂移写口
-    v.refreshBusy();
-    // 后台视图期间内容在长而滚不动（display:none 无布局），跟随标志为真则切回后补拉底
-    if (v.isFollowing()) v.forceScrollToBottom();
-    subDock.applyTab(tid); // 子 agent 浮窗/图标随页签切换（该页签的快照缓存恢复或收起）
-    renderTabs();
-    // 未建树的页签向宿主要一次快照（webview 重载后未轮到的后台页签/重启恢复页签）；
-    // 已建树的不重拉——切页签零快照窗口，竞态整类消失
-    if (!v.isBuilt()) vscode.postMessage({ type: 'tabSwitch', tabId: tid, needState: true });
-  }
-
-  /** 标签条渲染：宿主 tabs 消息是唯一事实源（id/title/busy/unread）；≤1 会话默认隐藏（用户定调） */
-  function renderTabs() {
-    tabbarEl.innerHTML = '';
-    if (tabsList.length <= 1) { tabbarEl.classList.remove('has-tabs'); return; }
-    tabbarEl.classList.add('has-tabs');
-    for (var i = 0; i < tabsList.length; i++) {
-      (function (t: TabInfo) {
-        var chip = el('span', 'tab-chip' + (t.id === getActiveTabId() ? ' active' : '') + (t.busy ? ' busy' : '') + (t.unread && t.id !== getActiveTabId() ? ' unread' : ''));
-        chip.title = t.title;
-        chip.appendChild(el('span', 'tab-dot'));
-        chip.appendChild(el('span', 'tab-title', shorten(t.title, 14)));
-        var x = el('span', 'tab-x', '\u00d7');
-        x.title = L.tabCloseTitle;
-        if (t.busy) x.className = 'tab-x always'; // busy 中关标签宿主会弹确认，× 常显提醒
-        x.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'tabClose', tabId: t.id }); });
-        chip.appendChild(x);
-        chip.addEventListener('click', function () {
-          if (t.id === getActiveTabId()) return;
-          activateTab(t.id); // 本地先切（零延迟），宿主 postUiState 拉真相回填
-          vscode.postMessage({ type: 'tabSwitch', tabId: t.id });
-        });
-        tabbarEl.appendChild(chip);
-      })(tabsList[i]);
-    }
-    // ＋入口变迁：2026-09-14 曾按用户拍板收敛到头部（当时吐槽点：与标签条＋撞脸）；
-    // 2026-09-20 用户拍板恢复——页签末尾要 add 按钮开新标签会话，头部＋保留，双入口并存
-    var add = el('span', 'tab-add');
-    add.innerHTML = ico('plus', 12);
-    add.title = L.tabNewTitle;
-    add.addEventListener('click', function () { vscode.postMessage({ type: 'tabNew' }); });
-    tabbarEl.appendChild(add);
-  }
-
-  /** 宿主标签清单（唯一事实源）：未读点由宿主记账（后台跑完置位，切回时清） */
-  function handleTabs(m: TabsMsg) {
-    tabsList = m.tabs || [];
-    // J 刀：页头随宿主标题刷新（宿主是标题唯一事实源）；无标题不覆盖，applyState 仍兑底
-    for (var tTi = 0; tTi < tabsList.length; tTi++) {
-      if (tabsList[tTi].id === getActiveTabId() && tabsList[tTi].title) {
-        sessionEl.textContent = L.sessionLabel + tabsList[tTi].title;
-        break;
-      }
-    }
-    if (getActiveTabId() === null || m.activeTabId !== getActiveTabId()) {
-      // 宿主驱动换页签（新建/关标签转移/重启重建）：同款 O(1) 换根+账本重渲；
-      // 换的是非活动标签时 activateTab 内部直接返回
-      activateTab(m.activeTabId);
-    }
-    renderTabs();
-    // 三期：已关闭页签的视图随手 dispose（清三 timer + 摘 DOM；宿主清单是事实源）
-    for (var id in views) {
-      var alive = false;
-      for (var ti = 0; ti < tabsList.length; ti++) { if (tabsList[ti].id === id) { alive = true; break; } }
-      if (!alive) { views[id].dispose(); delete views[id]; }
-    }
-  }
-  window.addEventListener('message', function (ev: MessageEvent) {
-    var m = ev.data as HostToWebviewTagged;
-    // 凭证配置页（2026-11-05）：页面级覆盖层，与页签无关，先于 tabId 过滤截获
-    if (m.type === 'authPanelOpen') { showAuthPanel(); return; }
-    if (m.type === 'authState') { renderAuthProviders(((m as any).providers || []) as any[]); return; }
-    // 标签清单先于 tabId 过滤处理（宿主是事实源）
-    if (m.type === 'tabs') { handleTabs(m); return; }
-    // 子 agent 快照在页签过滤前截获：后台页签的流虽不渲染但必须缓存，
-    // 否则切回时该页签的浮窗/图标状态丢失；活动页签则实时渲染
-    if (m.type === 'subagentUpdate') { subDock.handleUpdate(m); return; }
-    // 台账行（段 3 刀 2）：全局推送无页签归属——覆盖缓存并重绘当前浮窗
-    if (m.type === 'subagentLedger') { subDock.setLedger((m as any).rows || []); return; }
-    // 鸭子换图是页面级（图源与页签无关），不过路由
-    if (m.type === 'duck') { applyDuck(m.uri); return; }
-    // 刀3 编辑器面板：tabKey 存进 webview state 快照（VS Code 序列化面板时捕获，
-    // 重启后 serializer 传回宿主 → 面板按原 tabKey 恢复原会话）。纯存储不渲染
-    if (m.type === 'panelInfo') {
-      vscodeApi.setState({ tabKey: (m as any).tabKey });
-      // 2026-10-20 拍板（图1 红框退役）：中间编辑区页头整行隐藏——会话标题/历史/新建/
-      // 菜单（含 logo）全部移交左侧会话列表（列表点击=打开&切换、＋=新增、齿轮=菜单）。
-      // panelInfo 只发给编辑器实例（panel.ts webviewReady），副栏页头原样保留；
-      // subind（子 agent 收合开关）是页头唯一活控件，updateSubInd 露出 subind-live 行保功能
-      document.body.classList.add('editor-panel');
-      return;
-    }
-    // tabId 路由（工单24 架构归位）：非活动页签的消息照收——写进该页签自己的隐藏树
-    // （现场累加，切回即现，不再依赖切回重拉）；页面控件类后台只记账不渲染（bgMode 守卫）
-    routeMsg(m);
-  });
   // 启动握手：通知宿主 webview 已就绪，宿主拉会话历史重绘（防止设置 HTML 后立刻 postMessage 被丢的竞态）
   vscode.postMessage({ type: 'webviewReady' });
 
