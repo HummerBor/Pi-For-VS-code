@@ -75,6 +75,13 @@ export class SessionsViewProvider implements vscode.WebviewViewProvider {
       else if (m.type === "svRefresh") void this.sendItems();
       else if (m.type === "svNew") void vscode.commands.executeCommand("piChat.openInEditor");
       else if (m.type === "svMore") ChatPanelProvider.moreFromList(); // ⚡ 菜单（2026-10-20 图2：中间区 ✳ 移列）
+      else if (m.type === "svCopyPath" && m.file) {
+        // 右键复制 jsonl 路径（把原生 cut/copy/paste 菜单换掉）：写剪贴板走宿主侧，
+        //  webview 的 navigator.clipboard 要焦点/权限，不可靠
+        await vscode.env.clipboard.writeText(m.file);
+        // 用状态栏提示而不是弹通知：右键复制是高频小动作，弹窗会一直挂着烦人
+        vscode.window.setStatusBarMessage(bb("svPathCopied") + m.file, 2500);
+      }
       else if (m.type === "svOpen" && m.file) {
         // 子会话走单独页面（2026-11-03 用户拍板「页面也分开」）：只读转录预览，
         // 绝不把子会话套进主会话聊天页（那要建 SessionManager，会往子进程正在写的文件里写）

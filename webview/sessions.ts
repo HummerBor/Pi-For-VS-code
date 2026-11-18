@@ -159,6 +159,17 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     vscode.postMessage({ type: "svOpen", file, label: items[ridx] ? items[ridx].label : undefined });
   });
 
+  // 右键 = 复制该会话的 jsonl 路径（2026-11-19 用户拍板：原生 cut/copy/paste 菜单在这个
+  //  列表里没屌用——行文字不可编辑）。必须 preventDefault 才能压掉 VS Code webview 自带的
+  //  原生菜单；复制走宿主（vscode.env.clipboard），webview 侧不碰 navigator.clipboard。
+  listEl.addEventListener("contextmenu", (e) => {
+    const row = (e.target as HTMLElement).closest(".row") as HTMLElement | null;
+    if (!row) return; // 空白处保留原生菜单（搜索框的复制粘贴还要用）
+    e.preventDefault();
+    const file = row.getAttribute("data-file") || "";
+    if (file) vscode.postMessage({ type: "svCopyPath", file });
+  });
+
   // 键盘导航：↑↓ 移动选中（带过滤态换算）、Enter 打开、Esc 清选
   qEl.addEventListener("keydown", (e) => {
     const list = filtered();

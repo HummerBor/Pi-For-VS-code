@@ -74,6 +74,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     svDelete: "删除会话",
     svSubGroup: "子智能体",
     svSubOrphans: "未归属子会话",
+    // 右键：原生 cut/copy/paste 菜单在这个列表里没意义（行文字不可编辑），换成复制 jsonl 路径
+    svCopyPath: "复制 jsonl 路径",
+    svPathCopied: "已复制路径: ",
     delSessionFail: "删除失败: ",
     switchCancelled: "切换会话被扩展取消",
     sessionRestored: "已恢复会话: ",
@@ -609,6 +612,8 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     svDelete: "Delete session",
     svSubGroup: "Subagents",
     svSubOrphans: "Unattached subagents",
+    svCopyPath: "Copy jsonl path",
+    svPathCopied: "Path copied: ",
     delSessionFail: "Delete failed: ",
     switchCancelled: "Session switch was cancelled by an extension",
     sessionRestored: "Session restored: ",
