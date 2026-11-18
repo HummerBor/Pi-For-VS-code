@@ -2259,44 +2259,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     chip.textContent = '⚙ ' + topName;
     chip.title = L.smTitle;
   }
-  /** 台账历史行（段 3 刀 2）：完整活动流在子会话文件里，此处仅状态徽标/任务摘要/相对
-   *  时间（无下钻——点开会话文件的「展开回看」是刀 3）。死亡行直显死因，不许靠猜 */
-  function renderLedgerRow(r: any): HTMLElement {
-    var st = r.status === 'running' ? 'running' : r.status === 'completed' ? 'done' : 'failed';
-    var rowEl = el('div', 'sm-row ' + st);
-    rowEl.appendChild(elIco('sm-ico', SM_ICONS[st] || '·'));
-    var main = el('div', 'sm-row-main');
-    var line1 = el('div', 'sm-name');
-    var agEl2 = el('span', 'sm-agent', String(r.handle) + ' · ' + String(r.agent || ''));
-    agEl2.style.color = agentColor(String(r.agent || r.handle)); // 每 agent 固定色（抄 CC）
-    line1.appendChild(agEl2);
-    var stTxt = r.status === 'running' ? L.smProcessing : r.status === 'completed' ? L.smDoneGroup : String(r.deathReason || L.smFailedSt);
-    line1.appendChild(el('span', 'sm-st ' + (st === 'running' ? 'run' : st === 'failed' ? 'fail' : 'done'), stTxt));
-    main.appendChild(line1);
-    var snip = String(r.task || '').replace(/\s+/g, ' ').slice(0, 48);
-    main.appendChild(el('div', 'sm-status' + (st === 'failed' ? ' fail' : ''), snip));
-    rowEl.appendChild(main);
-    var time = (r.endedAt || r.startedAt) ? fmtRel(r.endedAt || r.startedAt) : '';
-    if (time) {
-      var tSpan = el('span', 'sm-time', time);
-      tSpan.setAttribute('data-ts', String(r.endedAt || r.startedAt));
-      rowEl.appendChild(tSpan);
-    }
-    var tips: string[] = [];
-    if (r.reported === false) tips.push(L.smUnreported);
-    // 展开回看（段 3 刀 3）：终态行点开子会话（pi 原生渲染，不自绘转录）；running/orphaned
-    // 禁点——写者只有子进程，运行中禁接管写（需求文档 P0-2 双写者红线）
-    if (r.status === 'running' || r.status === 'orphaned') {
-      tips.push(L.smProcessing);
-    } else if (r.sessionDir) {
-      rowEl.classList.add('sm-open');
-      rowEl.addEventListener('click', function () {
-        vscode.postMessage({ type: 'subagentOpenSession', sessionDir: String(r.sessionDir) });
-      });
-    }
-    if (tips.length) rowEl.title = String(r.handle) + '：' + tips.join('、');
-    return rowEl;
-  }
   function renderSubOverview(body: HTMLElement, runs: Record<string, SubRunRec>) {
     // 展平：每任务一行（parallel 拆多行，Codex 同款）；运行中在上、收尾在下
     var runningRows: any[] = []; var doneRows: any[] = [];
@@ -2307,6 +2269,27 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         (t.status === 'running' ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
       }
     }
+    // 台账行并入同一张表（2026-11-19 用户拍板）：不再单独开「历史（台账）」第二个表，
+    // 也不再露句柄——同一句柄只要有任何页签的活行就不再补（跨页签 liveSeen 去重），
+    // 补进来的行状态/时间/任务字全部取台账磁盘真值（帧断了也有终态）。
+    var liveSeen: Record<string, boolean> = {};
+    for (var tk in subRunsByTab) {
+      var tr = subRunsByTab[tk];
+      for (var rk in tr) liveSeen[rk] = true;
+    }
+    for (var li = 0; li < subLedgerRows.length; li++) {
+      var lr = subLedgerRows[li];
+      var lh = String(lr.handle || '');
+      if (liveSeen[lh]) continue;
+      var lst = lr.status === 'running' ? 'running' : lr.status === 'completed' ? 'done' : 'failed';
+      var lt = {
+        agent: String(lr.agent || lh), task: String(lr.task || ''), status: lst,
+        handle: /^sa-(?:\d+|[0-9a-f]{8})$/.test(lh) ? lh : undefined,
+        sessionDir: lr.sessionDir, reported: lr.reported, deathReason: lr.deathReason, ledger: true
+      };
+      var lrec = { snap: null, startAt: lr.startedAt || 0, endAt: lr.endedAt, final: true, ledger: true };
+      (lst === 'running' ? runningRows : doneRows).push({ runId: lh, ti: 0, t: lt, rec: lrec });
+    }
     // 最新在上（2026-10-23 用户拍板）：组内按时间倒序——收尾行取 endAt、运行中取 startAt；
     // sort 稳定，同刻（parallel 同批）保持相对序
     var byNewest = function (a: any, b: any) {
@@ -2314,7 +2297,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     };
     runningRows.sort(byNewest);
     doneRows.sort(byNewest);
-    if (runningRows.length === 0 && doneRows.length === 0 && !subLedgerRows.length) {
+    if (runningRows.length === 0 && doneRows.length === 0) {
       body.appendChild(el('div', 'sm-empty', L.smNoRuns));
       return;
     }
@@ -2341,28 +2324,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         body.appendChild(more);
       }
     }
-    // 台账历史组（段 3 刀 2）：跨会话/跨重启可见——handle 已在活表的不重复显
-    //（活行走 runs 快照带活动流，台账行补历史/死因/回传未达）；默认最新 8 条防刷屏
-    // 去重口径（2026-11-19 用户实测「为啥两个表」）：台账行只要**任何一个页签**的活表里有
-    // 同一句柄就不重复显——原来只比当前页签，于是活行落在 A 页签、台账行在 B 页签各显一次，
-    // 看着就是「同一单两个表」。跨页签用全局 seen 集合，代价 O(页签数×行数)，几十条无感。
-    var liveSeen: Record<string, boolean> = {};
-    for (var tk in subRunsByTab) {
-      var tr = subRunsByTab[tk];
-      for (var rk in tr) liveSeen[rk] = true;
-    }
-    var hist: any[] = [];
-    for (var li = 0; li < subLedgerRows.length; li++) {
-      var lr = subLedgerRows[li];
-      var lh = String(lr.handle);
-      if ((runs && runs[lh]) || liveSeen[lh]) continue;
-      hist.push(lr);
-    }
-    if (hist.length) {
-      body.appendChild(el('div', 'sm-group-title', L.smLedgerGroup));
-      for (var hi = 0; hi < hist.length && hi < 8; hi++) body.appendChild(renderLedgerRow(hist[hi]));
-    }
   }
+
   function renderSubRow(row: any): HTMLElement {
     var t = row.t;
     // 失联降级展示（2026-10-27）：running 但 30 分钟无新帧 → 徽标翻「疑似失联」、
@@ -2410,6 +2373,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       timeSpan.setAttribute('data-ts', String(row.rec.endAt || row.rec.startAt));
     }
     if (timeSpan) rowEl.appendChild(timeSpan);
+    if (t.ledger && t.reported === false) rowEl.title = L.smUnreported; // 回传未达：悬停可见，不占版面
     // （下钻按钮/明细浮层 2026-11-19 用户拍板删除：明细去子会话转录页看，浮窗只留名字/状态/任务/时间）
     // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
     // stopPropagation：别点穿成下钻
@@ -2433,6 +2397,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 句柄优先（2026-11-02：同步单现在也落独立会话，快照带 handle）：异步/同步统一走
       // 「开页签」。无句柄 = v6 之前的存量行 → 按显示名回找文件（subagentOpenLabel，
       // 宿主侧扫 session_info.name）
+      // 台账行（没有活行快照的存量单）：点开子会话文件（pi 原生渲染），不走转录页
+      if (t.ledger) {
+        if (t.sessionDir) vscode.postMessage({ type: 'subagentOpenSession', sessionDir: String(t.sessionDir) });
+        return;
+      }
       var openId = (/^sa-(?:\d+|[0-9a-f]{8})$/.test(String(t.handle || ''))) ? String(t.handle) : row.runId;
       if (/^sa-(?:\d+|[0-9a-f]{8})$/.test(openId)) {
         vscode.postMessage({ type: 'subagentOpenHandle', handle: openId });
