@@ -199,6 +199,7 @@
     "test:price": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/priceTable.test.mts",
     "test:replay": "node scripts/test/subagentReplay.test.mjs",
     "test:liveness": "node scripts/test/subagentLiveness.test.mjs",
+    "test:docktime": "node scripts/test/dockTime.test.mjs",
     "test:html": "node scripts/test/html.test.mjs",
     "test:ctx": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/ctxBreakdown.test.mts",
     "package": "node scripts/release/bump-version.mjs && npm run compile && npx @vscode/vsce package",

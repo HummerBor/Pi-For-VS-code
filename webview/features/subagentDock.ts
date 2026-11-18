@@ -207,14 +207,16 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     var h = Math.floor(m / 60);
     return h + 'h' + (m % 60 < 10 ? '0' : '') + (m % 60) + 'm';
   }
-  function fmtRel(ts: number): string {
-    var s = Math.round((Date.now() - ts) / 1000);
-    if (s < 60) return L.smJustNow;
-    var m = Math.floor(s / 60);
-    if (m < 60) return L.smMinAgo.replace('{n}', String(m));
-    var h = Math.floor(m / 60);
-    if (h < 24) return L.smHourAgo.replace('{n}', String(h));
-    return L.smDayAgo.replace('{n}', String(Math.floor(h / 24)));
+  /** 终态行的固定时刻（2026-11-18 用户：「完成后把时间换成完成的时间，不用再继续占内存数秒」）：
+   *  今天 → HH:MM；跳天 → MM-DD HH:MM。静态文本，不参与任何刷新（以前用 fmtRel 算相对时间，
+   *  所以那个 1s 定时器永远停不下来）。 */
+  function fmtClock(ts: number): string {
+    var d = new Date(ts);
+    var p2 = function (n: number) { return (n < 10 ? '0' : '') + n; };
+    var hm = p2(d.getHours()) + ':' + p2(d.getMinutes());
+    var now = new Date();
+    var sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    return sameDay ? hm : (d.getMonth() + 1) + '-' + d.getDate() + ' ' + hm;
   }
   /** 录入/更新一条运行记录（页签维度；id 同 subagentUpdate.id） */
   function updateSubRun(tab: string | null, id: string, snap: SubagentSnapshot, final: boolean, startAt?: number, endAt?: number) {
@@ -240,6 +242,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
       subRunning = false;
       d.classList.add('hidden');
       updateSubInd();
+      syncSubTick(); // 没行可测 → 停表（函数声明提升，允许前置调用）
       return;
     }
     if (!subCollapsed) dockResetPos(d); // 用户没主动拖过就回默认位，防历史漂移
@@ -260,6 +263,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     linkify(body);
     updateSubInd();
     renderSubChip();
+    syncSubTick(); // 有活行才跑表，全部收尾立即停（见 syncSubTick 头注释）
   }
   /** 主会话状态行的子 agent 摘要（2026-10-23 用户「主会话的状态应该改一下」）：
    *  常驻一行「⚙ <agent> <用时> · N 运行中」，不问也能看到子 agent 进程；点击开合浮窗。
@@ -393,19 +397,21 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     line2.title = taskSnipBase;
     main.appendChild(line2);
     rowEl.appendChild(main);
-    // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
-    // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
-    // data-el / data-ts 供 refreshSubTimes 就地刷新（见其头注释）
+    // 右侧时间：运行中=已用时长（秒表每秒重绘概览）；收尾/失联=**固定时刻**（2026-11-18 用户：
+    // 完成后显示完成时间，不再每秒算相对时间）。终态文本是静态的，不挂 data-ts、不参与刷新。
+    // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗。
     var timeSpan: HTMLElement | null = null;
+    var endTs = row.rec.endAt || row.rec.startAt;
     if (effStatus === 'running' && row.rec.startAt) {
       timeSpan = el('span', 'sm-time', fmtElapsed(Date.now() - row.rec.startAt));
       timeSpan.setAttribute('data-el', String(row.rec.startAt));
     } else if ((stale || dead) && (row.rec.lastFrameAt || row.rec.startAt)) {
-      timeSpan = el('span', 'sm-time', fmtRel(row.rec.lastFrameAt || row.rec.startAt)); // 失联停表：最后活动相对时间
-      timeSpan.setAttribute('data-ts', String(row.rec.lastFrameAt || row.rec.startAt));
-    } else if (row.rec.endAt || row.rec.startAt) {
-      timeSpan = el('span', 'sm-time', fmtRel(row.rec.endAt || row.rec.startAt));
-      timeSpan.setAttribute('data-ts', String(row.rec.endAt || row.rec.startAt));
+      var stopTs = row.rec.lastFrameAt || row.rec.startAt;
+      timeSpan = el('span', 'sm-time', fmtClock(stopTs)); // 失联停表：最后活动时刻
+      timeSpan.title = L.smStale + ' · ' + new Date(stopTs).toLocaleString();
+    } else if (endTs) {
+      timeSpan = el('span', 'sm-time', fmtClock(endTs)); // 完成时刻（静态）
+      timeSpan.title = new Date(endTs).toLocaleString();
     }
     if (timeSpan) rowEl.appendChild(timeSpan);
     if (t.ledger && t.reported === false) rowEl.title = L.smUnreported; // 回传未达：悬停可见，不占版面
@@ -451,28 +457,28 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     });
     return rowEl;
   }
-  // 秒表：运行中有概览时每秒重绘（用时列跳动）。收起（hidden）时不绘。
-  // 无运行中行时只就地刷时间文本（2026-11-18 用户反馈「时间和状态都不更新」）：原来全收尾后
-  // 重绘循环直接空转，浮窗整个冻住——「5 分钟前」可以停一整天。就地改文本不重建 DOM，
-  // 不重置滚动位置、不打断悬停/点击。
-  setInterval(function () {
-    if (!subdock || subdock.classList.contains('hidden')) return;
+  // 秒表只服务**运行中**的行（2026-11-18 用户：「完成后把时间换成完成的时间，不用再继续
+  // 占内存数秒」）：有活行才开 1s 定时器，最后一个收尾就 clearInterval 真停表——不是每秒
+  // 空转 if。终态行已是固定时刻文本，没有任何东西需要刷新。
+  // tick 内重绘走 anySubRunning（raw）而不是 anySubLive：保证 running→stale 那次翻转被画出来；
+  // 停表判定走 anySubLive（幽灵不算活），画完翻转立刻停。
+  var subTickTimer: any = null;
+  function syncSubTick() {
     var runs = subRunsOf(getActiveTabId());
-    if (runs && anySubRunning(runs)) renderSubDock();
-    else refreshSubTimes();
-  }, 1000);
-  /** 时间列就地刷新：data-el=起始时刻（跑表）/ data-ts=时间点（相对时间） */
-  function refreshSubTimes() {
-    if (!subdock) return;
-    var spans = subdock.querySelectorAll('.sd-body .sm-time');
-    for (var i = 0; i < spans.length; i++) {
-      var sp = spans[i] as HTMLElement;
-      var el0 = sp.getAttribute('data-el');
-      var ts = sp.getAttribute('data-ts');
-      var next = '';
-      if (el0 && isFinite(Number(el0))) next = fmtElapsed(Date.now() - Number(el0));
-      else if (ts && isFinite(Number(ts))) next = fmtRel(Number(ts));
-      if (next && next !== sp.textContent) sp.textContent = next;
+    var need = !!(runs && anySubLive(runs)) && !subCollapsed;
+    if (need && !subTickTimer) {
+      subTickTimer = setInterval(function () {
+        if (!subdock || subdock.classList.contains('hidden') || subCollapsed) {
+          clearInterval(subTickTimer); subTickTimer = null; return;
+        }
+        var r = subRunsOf(getActiveTabId());
+        if (!r || !anySubRunning(r)) {
+          clearInterval(subTickTimer); subTickTimer = null; return;
+        }
+        renderSubDock(); // 末尾的 syncSubTick 会在全收尾/变幽灵时停表
+      }, 1000);
+    } else if (!need && subTickTimer) {
+      clearInterval(subTickTimer); subTickTimer = null;
     }
   }
   /** 一次性事件绑定（原来住在 main.ts 的页面级头部控件段）。调用点保持原位：
