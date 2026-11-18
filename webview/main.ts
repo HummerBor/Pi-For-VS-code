@@ -5,7 +5,7 @@
  * 类型门禁：strict:false 下 tsc 零报错（已摘除 @ts-nocheck，工单一验收项）。
  */
 import { STRINGS, type Lang } from "../src/core/i18n";
-import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
+import type { HostToWebviewTagged, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
 // 跨功能共享状态（活动页签 / 每视图 busy、变更页数据）与变更页整块逻辑：见 core/state.ts 头注释
 import { createViewState, getActiveTabId, setActiveTabId } from "./core/state";
 import { initChangesPage } from "./features/changesPage";
@@ -19,6 +19,7 @@ import { initToolRows } from "./features/toolRows"; // 工具调用行（原住�
 import { initSticky } from "./features/sticky"; // 最后一问钉住折叠（原住本文件，第 5 刀 5e）
 import { initOutline } from "./features/outline"; // 右缘消息大纲轨道（原住本文件，第 5 刀 5g）
 import { initMessageList } from "./features/messageList"; // 整树重绘 / 用户气泡 / toast（原住本文件，第 5 刀 5d）
+import { initRenderQueue } from "./features/renderQueue"; // 渲染队列：重绘/续接排队 + 重绘窗口期流式事件排队（原住本文件，第 5 刀 5f）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -138,7 +139,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 本视图一套（在途气泡 / parts 表 / 流式定时器都在模块内独占，这里不再持有同名变量）。
   // 只注入消息区根、建 DOM 工具、markdown 基座、i18n 与滚动跟随——scroll 留本文件（R7：
   // 它只经 features/sticky.ts 的 pinCheck() 进钉住判定，两份滚动/钉住状态必然对不上）。别名供其余调用点
-  // （handleMsg / renderAll / setBusy / flushRender / dispose）按原符号名调，正文零改。
+  // （handleMsg / renderAll / setBusy / dispose）按原符号名调，正文零改。
   var liveStream = initLiveStream({
     root: root, el: el, renderRich: renderRich, lang: L, scroll: scroll
   });
@@ -495,7 +496,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     welcomeHTML: welcomeHTML, duckInto: duckInto, pickTip: pickTip,
     rebuildQueuebar: rebuildQueuebar, compactbarEl: compactbarEl
   });
-  // 别名：handleMsg / flushRender 的调用点按原符号名调（正文零改）
+  // 别名：handleMsg 的调用点按原符号名调（正文零改）
   var addUser = msgList.addUser; var renderAll = msgList.renderAll;
   // notice / clearNotice 用函数声明（提升）转调：composer 的 deps 在本函数更早处求值，
   // 那时 var 别名还没赋值（undefined）；函数声明不受这个顺序影响
@@ -580,30 +581,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return true;
   }
 
-  /** 重绘/续接排队（刀5b）：render 与 liveSync 同拍顺序执行（快照重绘 → 在途消息重定基），
-   *  防止 renderAll 的 liveReset 抹掉先到的重定基状态 */
-  var renderPending: SessionMessage[] | null = null;
-  var liveSyncPending: SessionMessage | null = null;
-  var renderTimer: number | null = null;
-  function scheduleRender() {
-    // 三期④：换镜舞蹈退役（原「先换回发起页签再重绘」——闭包天然绑定，无需换）
-    if (!renderTimer) renderTimer = setTimeout(function () {
-      renderTimer = null;
-      flushRender();
-    }, 0);
-  }
-  function flushRender() {
-    renderTimer = null;
-    if (renderPending) {
-      var list = renderPending; renderPending = null;
-      renderAll(list);
-    }
-    if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
-    drainPendingStream();
-  }
+  // ── 渲染队列（重绘/续接排队 + 重绘窗口期流式事件排队）：整块在 features/renderQueue.ts ──
+  // 本视图一套（renderTimer / renderPending / liveSyncPending / pendingStream 都在模块内独占，
+  // 本文件不再持有同名变量）。R10：renderTimer 只此一份——handleMsg 是否排队与 drainPendingStream
+  // 经 routeMsg 回灌都走同一实例；routeMsg 留本文件（6a 才搬），作为 deps 回调注入。
+  // renderAll 来自 features/messageList.ts（5d），applyLiveSync 来自 features/liveStream.ts（5b）。
+  var renderQ = initRenderQueue({
+    renderAll: renderAll, applyLiveSync: applyLiveSync,
+    routeMsg: function (m) { routeMsg(m); }
+  });
   function handleMsg(m: HostToWebviewTagged) {
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
-    if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
+    if (renderQ.queueDuringRender(m)) return;
     if (m.type === 'user') {
       addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
     }
@@ -644,7 +633,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       queueN = (m.queued || []).length;
       banner = m.banner;
       modeText = m.modeText || '';
-      renderPending = m.messages; liveSyncPending = m.live || null; scheduleRender(); // 复用延后一拍：render→liveSync 同拍顺序不变
+      renderQ.setRenderPending(m.messages); renderQ.setLiveSyncPending(m.live || null); renderQ.scheduleRender(); // 复用延后一拍：render→liveSync 同拍顺序不变
       compacting = m.compacting === true; // 先落 flag 再 setBusy：压缩真相决定状态栏写压缩标签还是 Working
       setBusy(m.busy, m.elapsedMs);
       renderStatus();
@@ -659,8 +648,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ctxPop.scheduleQuery(); // 同上：弹层开着时跟真相走
     }
     else if (m.type === 'busy') { ctxPop.setBusy(!!m.value); setBusy(m.value, m.elapsedMs); }
-    else if (m.type === 'render') { built = true; clearNotice(); /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
-    else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
+    else if (m.type === 'render') { built = true; clearNotice(); /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderQ.setRenderPending(m.messages); renderQ.scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'liveSync') { renderQ.setLiveSyncPending(m.message); renderQ.scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
       nativeQueuePills = [];
@@ -744,7 +733,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         ctxPop.dispose();
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         clearStreamTimer();
-        if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+        renderQ.dispose(); // 清在途的延时重绘（renderTimer 归 features/renderQueue.ts 独占）
         if (view.parentNode) view.parentNode.removeChild(view);
       }
     };
@@ -1021,25 +1010,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 三期：drop 落到活动视图。守卫不能只看 files——资源管理器拖入可能 files 为空、只有
   // text/uri-list（只认 files 时拖入被 preventDefault 白吞，输入框毫无反应，2026-10 用户实测）
   window.addEventListener('drop', function (e) { e.preventDefault(); var dt = e.dataTransfer; if (dt && getActiveTabId() !== null && ((dt.files && dt.files.length) || dt.getData('text/uri-list') || dt.getData('resourceurls'))) viewFor(getActiveTabId()).handleFiles(dt.files || [], dt); });
-  // 就被冲掉（快照基线不含它们）。实证教训：宿主侧靠 sleep 等重绘不可靠（长会话重绘能把
-  // 20ms 顶穿），顺序保证必须落在消费端。重绘进行中（renderTimer 非空）到达的流式事件
-  // 先攒着，flushRender 里 render+liveSync 之后按原序放行——顺序仍是「快照先画、事件后补」
-  var pendingStream: HostToWebviewTagged[] = [];
-  function deferDuringRender(t: string): boolean {
-    // 粘性回显刀（2026-09-23 交接 §八.1，用户令「能改就改了」）：'user' 移出延后名单。
-    // 病灶：启动渲染窗口期（renderTimer 非空）发的消息，回显被排进 pendingStream，压到重绘
-    // 落地才画——用户体感「气泡 1s 才出」。顺序风险原是「renderAll 的 liveReset 抹先到事件」，
-    // 但 addUser 追加 bubble 与 liveReset（只清 live 区）互不触碰，立即画上无序可破；
-    // 且历史重绘以 pi session.messages 为唯一真相，回显 bubble 被权威 render 覆盖是设计而非事故。
-    return t === 'delta' || t === 'thinking' || t === 'newLive' || t === 'toolCallStart' ||
-      t === 'toolCallDelta' || t === 'toolStart' || t === 'toolEnd' ||
-      t === 'queuedAdd' || t === 'queuedDelivered' || t === 'queuedRemove' || t === 'queuedClear';
-  }
-  function drainPendingStream() {
-    if (!pendingStream.length) return;
-    var q = pendingStream; pendingStream = [];
-    for (var i = 0; i < q.length; i++) routeMsg(q[i]);
-  }
+  // 重绘窗口期到达的流式事件排队与按原序重放（pendingStream / deferDuringRender /
+  // drainPendingStream）随 5f 进 features/renderQueue.ts，各视图一个实例（renderQ）。
   /** 页签切换（刀5）：本地只换芯片高亮，内容现场由宿主 postUiState 重拉（pi 会话=唯一真相，
    *  webview 零影子状态——切回页签丢失现场在架构上不可能，因为根本不存在本地副本） */
   /** 页签切换（工单24 架构归位二期）：整个下区视图换可见性 O(1)。每个控件的实时状态都已在
