@@ -566,10 +566,6 @@ export class PiCore {
 
   /** 释放全部资源（面板销毁/扩展卸载） */
   dispose(): void {
-    if (this.ledgerPulse) {
-      clearInterval(this.ledgerPulse);
-      this.ledgerPulse = undefined;
-    }
     this.client?.dispose();
     this.client = undefined;
   }
@@ -771,33 +767,16 @@ export class PiCore {
       // 台账是全局的，展示必须跟会话走（2026-11 用户实测反馈）：按本会话 handle 集过滤
       const rows = readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle));
       this.post({ type: "subagentLedger", rows });
-      // 有 running 行就挂心跳（见 syncLedgerPulse）：procAlive 是探活快照，没有心跳就永远停在
-      // 「平台推最后一次时还活着」那一刻
-      this.syncLedgerPulse(rows.some((r) => r.status === "running"));
     } catch {
       /* ignore */
     }
   }
 
-  /** 台账心跳（2026-11-18 失联判定改 pid）——为什么需要它：`procAlive` 是宿主读台账时的一次
-   *  `process.kill(pid, 0)` 探活快照，而 pushLedger 只在「有帧/有事件」时被调。子进程死掉后
-   *  不会再有帧来触发重推（真机事故：底层进程零残留，面板「处理中」跳字 13h20m 不动）——
-   *  只靠事件驱动的话，「pid 死 → 立即终态」就只在面板重载那一刻成立。
-   *  所以有 running 行时每 5s 重探一次（一次目录读 + 每行一次 kill(pid,0)，代价可忽），
-   *  全部落终态后自动停表（无 running 不空转）。纯展示面：不写台账、不影响主链路。 */
-  private ledgerPulse?: NodeJS.Timeout;
-  private syncLedgerPulse(hasRunning: boolean): void {
-    if (!hasRunning) {
-      if (this.ledgerPulse) {
-        clearInterval(this.ledgerPulse);
-        this.ledgerPulse = undefined;
-      }
-      return;
-    }
-    if (this.ledgerPulse) return;
-    this.ledgerPulse = setInterval(() => this.pushLedger(), 5000);
-    this.ledgerPulse.unref?.(); // 心跳不许挂着进程退出
-  }
+  /* 【2026-11-18 删除 5s 台账心跳】施工方 t35 加过 setInterval(pushLedger, 5000) 轮询探活，
+   * 被总监按用户拍板否掉（交接文档「踩过的坑 2」：不许用定时器兜底状态，2026-11-19 用户原话
+   * 「不是他妈的立刻吗？还加 sleep」）。状态真值已由写者保证：harness v26 的 proc.close 无条件
+   * 补终态帧，v25 kill 也补帧——正常结束/崩溃/被 kill 都有事件来触发重推。唯一无帧的剩余场景是
+   * SIGKILL/宿主崩溃，此时下次面板加载（重放路径）会重新探活一次，不需要后台空转。 */
 
   /** 重放重入锁（2026-11-03 真机日志发现）：0.1.110 把「落标记」从函数开头挪到扫完之后，
    *  顺手丢了它原来的隐式重入保护——`postUiState` 会在 4ms 内连发两次，第二次在第一次
