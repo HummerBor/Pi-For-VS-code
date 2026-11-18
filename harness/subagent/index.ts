@@ -951,6 +951,7 @@ function startAsyncRun(
 			run.error = typeof resp.error === "string" ? resp.error : "prompt rejected";
 			markRun(run.handle, { status: "failed", endedAt: Date.now(), error: run.error, deathReason: "error" });
 			killAsyncRun(run);
+			emitAsyncProgress(pi, run); // 终态帧：不发这一帧，面板那行就永远「处理中」（2026-11-19 实测幽灵行）
 			// 派单即拒也要回灌（2026-10-23）：工具已返回「已派出 sa-N」，不回灌主会话永远
 			// 不知道这单根本没起来。status 已非 running，close 收尾不会重复回灌
 			reportBackToMain(pi, run);
@@ -2020,6 +2021,9 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: `${run.handle} 已结束（${run.status}），无需终止。` }] };
 			}
 			killAsyncRun(run);
+			// 终态帧（2026-11-19 实测幽灵行）：killAsyncRun 只改内存+台账，不发帧 → 浮窗那行
+			// 永远「处理中」、秒表一直走、主会话 Working 被它钉住（30 分钟后才降级成「疑似失联」）
+			emitAsyncProgress(pi, run);
 			// 终止也要给主会话一个回复（2026-11-13 用户拍板）：不回传的话主 agent 还当它
 			// 在跑，要么傻等要么反复查；killed 走 steer 插队（见 reportBackToMain）
 			reportBackToMain(pi, run);

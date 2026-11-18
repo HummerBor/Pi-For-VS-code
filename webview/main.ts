@@ -2783,10 +2783,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
     // 台账历史组（段 3 刀 2）：跨会话/跨重启可见——handle 已在活表的不重复显
     //（活行走 runs 快照带活动流，台账行补历史/死因/回传未达）；默认最新 8 条防刷屏
+    // 去重口径（2026-11-19 用户实测「为啥两个表」）：台账行只要**任何一个页签**的活表里有
+    // 同一句柄就不重复显——原来只比当前页签，于是活行落在 A 页签、台账行在 B 页签各显一次，
+    // 看着就是「同一单两个表」。跨页签用全局 seen 集合，代价 O(页签数×行数)，几十条无感。
+    var liveSeen: Record<string, boolean> = {};
+    for (var tk in subRunsByTab) {
+      var tr = subRunsByTab[tk];
+      for (var rk in tr) liveSeen[rk] = true;
+    }
     var hist: any[] = [];
     for (var li = 0; li < subLedgerRows.length; li++) {
       var lr = subLedgerRows[li];
-      if (runs && runs[String(lr.handle)]) continue;
+      var lh = String(lr.handle);
+      if ((runs && runs[lh]) || liveSeen[lh]) continue;
       hist.push(lr);
     }
     if (hist.length) {
