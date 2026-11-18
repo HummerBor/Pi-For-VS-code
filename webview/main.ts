@@ -21,6 +21,7 @@ import { initOutline } from "./features/outline"; // 右缘消息大纲轨道（
 import { initMessageList } from "./features/messageList"; // 整树重绘 / 用户气泡 / toast（原住本文件，第 5 刀 5d）
 import { initRenderQueue } from "./features/renderQueue"; // 渲染队列：重绘/续接排队 + 重绘窗口期流式事件排队（原住本文件，第 5 刀 5f）
 import { initTabs, getTabTag, getTabsList } from "./features/tabs"; // 页签与路由：views 表/路由/页签切换/标签条/两个页面级监听（原住本文件，第 6 刀 6a）
+import { initStatusBar } from "./features/statusBar"; // 状态行/页脚/横幅 + applyState/fmtSession（原住本文件，第 6 刀 6c-1）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -84,11 +85,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 下区控件元素引用（原 72-77 行全局镜像组，三期改为建视图时一次性查询绑定）
     var q = function (sel: string) { return view.querySelector(sel) as HTMLElement; };
     var input = q('#input') as HTMLTextAreaElement; var stopBtn = q('#stop'); var sendBtn = q('#send');
-    var statusEl = q('#status'); var modeBadge = q('#modebadge'); var codechipEl = q('#codechip');
+    var modeBadge = q('#modebadge'); var codechipEl = q('#codechip');
     var modelEl = q('#model'); var thinkEl = q('#think');
     var attachEl = q('#attach'); var fileInput = q('#file') as HTMLInputElement;
     var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
-    var bannerEl = q('#banner'); var changesBarEl = q('#changesbar'); var queuebarEl = q('#queuebar');
+    var queuebarEl = q('#queuebar');
     // 变更页（2026-11-05）：页级覆盖层，随视图克隆——各页签各看各的本轮改动。
     // 整块（元素查询 / 清单与 diff 渲染 / 拖拽）已搬到 features/changesPage.ts；这里只把闭包里的
     // 上行通道、i18n、建 DOM 工具传进去，数据（chgData/chgSel）住本视图的 state。
@@ -151,12 +152,40 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var liveToolPart = liveStream.liveToolPart; var bindToolPart = liveStream.bindToolPart;
   var setPDet = liveStream.setPDet; var dropEmptyLive = liveStream.dropEmptyLive;
   var clearStreamTimer = liveStream.clearStreamTimer;
-  var busyTimer: any = null; var busyStart = 0; var queueN = 0; // 「主回合在跑」住 S.busy（原局部 streaming）
+  // ── 状态行 / 页脚 / 横幅：整块在 features/statusBar.ts（第 6 刀子刀 6c-1）──
+  // 本视图一套（Working 秒表的 busyStart/lastElapsed/roundFrozen/busyTimer 与启动秒表的
+  // bootTickTimer/bootTickStart 都在模块内独占，本文件不再持有同名变量）。别名供 handleMsg
+  // 的调用点按原符号名调（正文零改——handleMsg 整体搬迁是下一单 6c-2 的事）。
+  // 下面四个量仍住本文件：**写口在 handleMsg**（本单不许碰），所以它们是唯一一份，模块经
+  // deps 的 getter/setter 读写同一份内存，两边都不存副本（照 6a 的 getTabsList 先例）。
+  var queueN = 0; // 状态行排队计数（uiState / queue 两支同页签对齐）
   var compacting = false;
-  var lastElapsed: number | null = null;
-  var roundFrozen = ''; // 本轮总用时冻结文本（全收尾才写；新轮清零——一轮一只累计秒表）
   var modeText = 'Auto';
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
+  /** B 刀：本页签是否处在「启动占位帧」阶段（uiState.booting）——真值帧到达才置回 false。
+   *  占位存在期间，任何空闲态渲染（setBusy(false)/切回页签 refreshBusy）都不许碰状态行，
+   *  否则会三次擦掉「pi 后台启动中…」提示（见 applyState / renderBusyUi 两处守卫）。
+   *  6c-1 后写入点仍是本文件的 uiState 分支 + 模块的 applyState：同一份内存，模块经
+   *  deps.getBooting / setBootingFlag 走。 */
+  var bootPending = false;
+  var statusBar = initStatusBar({
+    viewId: id, q: q, state: S, lang: L, ico: ico, esc: esc,
+    post: vpost, postPage: function (m) { vscode.postMessage(m); },
+    getSessionEl: function () { return sessionEl; }, // 页头是页面级，初始化晚于视图构建
+    subDock: subDock, changesPage: changesPage, ctxPop: ctxPop,
+    finalizeLive: finalizeLive, liveReset: liveReset,
+    getQueueN: function () { return queueN; },
+    getCompacting: function () { return compacting; },
+    setCompactingFlag: function (v) { compacting = v; },
+    getBooting: function () { return bootPending; },
+    setBootingFlag: function (v) { bootPending = v; },
+    getModeText: function () { return modeText; }
+  });
+  var setStatus = statusBar.setStatus; var startBootTick = statusBar.startBootTick;
+  var stopBootTick = statusBar.stopBootTick; var renderStatus = statusBar.renderStatus;
+  var renderBanner = statusBar.renderBanner; var renderChanges = statusBar.renderChanges;
+  var setBusy = statusBar.setBusy; var setCompacting = statusBar.setCompacting;
+  var renderBusyUi = statusBar.refreshBusy; var applyState = statusBar.applyState;
   // 变更页数据（chgData/chgSel）已移入本视图的 state（core/state.ts 的 ViewState），
   // 读写全在 features/changesPage.ts 里
     var built = false; // uiState/render 快照是否已建树（activateTab 按此决定要不要向宿主要快照）
@@ -268,167 +297,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     root: root, outlineEl: outlineEl, q: q, el: el,
     isActiveView: function () { return id === getActiveTabId(); }
   });
-  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!S.busy) { statusEl.textContent = ''; } }
-  // N 刀（2026-09-23 用户点名「没感觉秒开，往这里加个计时器」）：启动秒表——
-  // 「正在启动 pi… Ns」实时走秒。旁路 setStatus 直写（同 ⏱/busy 帧先例）；
-  // 自守卫：状态行被任何人接管（busy 类/别的文案）即自杀停摆，杜绝「白 Working」
-  // 同款串写残留（2026-09-20 事故教训）。宿主侧 boot phase=… 分段计时与本表互为印证。
-  var bootTickTimer: any = 0;
-  var bootTickStart = 0;
-  /** B 刀：本页签是否处在「启动占位帧」阶段（uiState.booting）——真值帧到达才置回 false。
-   *  占位存在期间，任何空闲态渲染（setBusy(false)/切回页签 refreshBusy）都不许碰状态行，
-   *  否则会三次擦掉「pi 后台启动中…」提示（见 applyState / renderBusyUi 两处守卫）。 */
-  var bootPending = false;
-  function startBootTick(base) {
-    stopBootTick();
-    bootTickStart = Date.now();
-    statusEl.textContent = base;
-    bootTickTimer = setInterval(function () {
-      var cur = statusEl.textContent || '';
-      if (statusEl.classList.contains('busy') || cur.indexOf(base) !== 0) { stopBootTick(); return; }
-      statusEl.textContent = base + ' ' + fmtDur(Date.now() - bootTickStart);
-    }, 1000);
-  }
-  function stopBootTick() { if (bootTickTimer) { clearInterval(bootTickTimer); bootTickTimer = 0; } }
-  function renderStatus() { modeBadge.textContent = modeText; }
-
-  /** 面板顶部横幅（工单六）：文案宿主已组装好，这里只负责渲染；
-   *  关闭/一键压缩都上报宿主，横幅状态机在 piCore（webview 重建不丢状态） */
-  function renderBanner(b: BannerPayload | null) {
-    // 工单24 二期：横幅随页签视图走，后台直接渲进隐藏视图（切回即现，无需账本重渲）
-    if (!b) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; return; }
-    bannerEl.innerHTML = '';
-    var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = b.text;
-    bannerEl.appendChild(txt);
-    if (b.actionLabel) {
-      var act = document.createElement('button'); act.className = 'b-act'; act.textContent = b.actionLabel;
-      act.onclick = function () { vscode.postMessage({ type: 'compactSession' }); };
-      bannerEl.appendChild(act);
-    }
-    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
-    x.onclick = function () { vscode.postMessage({ type: 'bannerClose' }); };
-    bannerEl.appendChild(x);
-    bannerEl.style.display = 'flex';
-  }
-
-  /** 工单七：本轮变更文件条。宿主已算好清单，这里只渲染；
-   *  查看/关闭都上报宿主（showChanges 出 QuickPick，dismiss 宿主收口不重发） */
-  function renderChanges(files: ChangesFileInfo[]) {
-    if (!files || !files.length) { changesBarEl.style.display = 'none'; changesBarEl.innerHTML = ''; return; }
-    changesBarEl.innerHTML = '';
-    var txt = document.createElement('span'); txt.className = 'b-txt';
-    txt.textContent = L.changesCount.replace('{n}', String(files.length));
-    changesBarEl.appendChild(txt);
-    // 主入口 = 变更页（2026-11-05 用户拍板：截图那种左清单+右并排 diff）
-    var act = document.createElement('button'); act.className = 'b-act'; act.textContent = L.changesView;
-    act.onclick = function () { changesPage.open(); };
-    changesBarEl.appendChild(act);
-    // 次入口 = 原 QuickPick 清单（带「还原」与「在 VS Code 对比」——变更页未接管的能力住这里）
-    var list = document.createElement('button'); list.className = 'b-act b-act2'; list.textContent = L.chgList;
-    list.onclick = function () { vpost({ type: 'showChanges' }); };
-    changesBarEl.appendChild(list);
-    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
-    x.onclick = function () { vscode.postMessage({ type: 'changesDismiss' }); };
-    changesBarEl.appendChild(x);
-    changesBarEl.style.display = 'flex';
-  }
-  // 毫秒 → 紧凑时长（42s / 1m23s / 1h2m）；供 Working 实时计数与本轮耗时显示共用
-  function fmtDur(ms) {
-    var s = Math.floor(ms / 1000);
-    if (s < 60) return s + 's';
-    var m = Math.floor(s / 60); s = s % 60;
-    if (m < 60) return m + 'm' + (s ? s + 's' : '');
-    var h = Math.floor(m / 60); m = m % 60;
-    return h + 'h' + (m ? m + 'm' : '');
-  }
-  /** 状态栏 DOM 重渲：直接渲本页签真相（三期后无镜像；ticker 闭包只写自己捕获的元素，
-   *  白 Working 事故注释随 renderBusyUi 函数体保留） */
-  function renderBusyUi() {
-    stopBtn.style.display = S.busy ? 'inline-flex' : 'none';
-    if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-    // 一轮一只累计秒表（2026-10-23 用户拍板「主会话还有子 agent 在跑就还是 Working…」+
-    // 「直到人机一轮跑完，子 agent 时间也算累计」）：主回合 settled 但后台子 agent 仍在跑
-    // = 主会话还在干活，同一只表从 busyStart 起继续累；全收尾才落白字总用时。
-    // 事故教训：原先 settled 就换 ⏱、chip 再走自己一只表——「⏱ 8s ⚙ builder 7m30s」两只钟
-    // 数值打架，用户三连问「这是啥/上一轮的？/你看了会不会懵逼」
-    var subLiveNow = function () { var r = subDock.runsOf(id); return !!r && subDock.anyLive(r); };
-    if (S.busy || subLiveNow()) {
-      if (!busyStart) busyStart = Date.now(); // 重放/恢复的孤儿子 agent：从发现起算，不报 1970
-      roundFrozen = ''; // 本轮进行中，冻结值作废
-      statusEl.classList.remove('done');
-      statusEl.classList.add('busy');
-      var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-      var fi = 0;
-      var myStart = busyStart; // 捕获局部：原换镜时代防漂移读；今闭包常量，保留语义
-      statusEl.textContent = (compacting ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
-      var myTimer: any = setInterval(function () {
-        fi = (fi + 1) % frames.length;
-        // 白 Working 事故（2026-09-20 用户实测）：本 ticker 只写文本不动 class——镜像漂移时
-        // 会把 Working 写进**别的页签**的状态行（无 .busy 类=白字，且那个页签不 busy
-        // 便永远没人清它 → 会话结束后白 Working 永久残留走秒）。三期后镜像不存在，
-        // ticker 直接读自己视图的 S.busy/statusEl——串写在结构上不可能；
-        // 自愈保留：主回合已结束而 timer 未被正常清时自杀停摆。
-        // clearInterval 只清自己的 myTimer（不碰 busyTimer，它可能是后一轮的）
-        // 自愈条件同主判据：主回合和子 agent 全收尾才算停；停摆即渲冻结值
-        // （subagentUpdate 入口的 refreshBusy 也会接力，两条路都收敛到同一冻结值）
-        if (!S.busy && !subLiveNow()) {
-          clearInterval(myTimer);
-          if (busyTimer === myTimer) busyTimer = null;
-          renderBusyUi();
-          return;
-        }
-        // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = (compacting ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (queueN > 0 ? L.queuedCount.replace('{n}', queueN) : ''));
-      }, 120);
-      busyTimer = myTimer;
-    } else {
-      statusEl.classList.remove('busy');
-      // B 刀：占位期不清状态行（否则 setBusy(false) 会把「pi 后台启动中… Ns」刷掉，
-      // 与 applyState 的守卫成对——漏一道就还是 6 秒零反馈）
-      if (!bootPending) statusEl.textContent = '';
-      if (compacting) {
-        // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
-        statusEl.classList.add('busy');
-        statusEl.textContent = '⏳ ' + L.compacting;
-      } else {
-        // 全收尾：本轮总用时白字冻结（「完成的话就显示 83s 白色字体就行」）——与走秒同基准
-        // （busyStart 起算，含子 agent 全程），数字不跳变；下一轮 setBusy(true) 清零重来。
-        // busyStart 缺失（纯历史恢复）回退宿主实测耗时，不空窗；切走再切回由 roundFrozen 恢复现场
-        if (!roundFrozen && busyStart) roundFrozen = fmtDur(Date.now() - busyStart);
-        if (!roundFrozen && lastElapsed != null) roundFrozen = fmtDur(lastElapsed);
-        if (roundFrozen) {
-          statusEl.classList.add('done');
-          statusEl.textContent = roundFrozen;
-          statusEl.title = L.turnDuration;
-        }
-      }
-    }
-  }
-  function setBusy(v, elapsedMs) {
-    S.busy = v;
-    if (v) {
-      // 计时起点对齐宿主真相：对账/纠回时 elapsedMs 是真实已过时长，回拨起点。
-      // 否则每次 busy:true 都会把 Working 计时清小（实测 3s/1m4s 与实际不符的根源）
-      busyStart = elapsedMs != null ? Date.now() - elapsedMs : Date.now();
-      lastElapsed = null;
-      roundFrozen = ''; // 新一轮开始，上一轮的冻结用时清零（「开始之后还带着 12m04s」事故）
-    } else if (elapsedMs != null) {
-      // 本轮实测耗时入记录（切走再切回来能恢复 ⏱ 现场）
-      lastElapsed = elapsedMs;
-    }
-    if (!v) { finalizeLive(); liveReset(); }
-    renderBusyUi(); // 状态行随页签视图走，后台渲进隐藏视图（busyTimer 随换镜走）
-  }
-  /** 压缩窗口开合（宿主 CompactingMsg）：true 直接接管状态栏——手动压缩是空闲会话里的
-   *  RPC 调用，全程无 agent 事件，没有这条压缩期间零反馈。false 时不主动清：streaming 时
-   *  busyTimer 会按新 flag 重写 Working，空闲时由后续 status/settled 流程收尾 */
-  function setCompacting(v) {
-    compacting = v;
-    if (v) {
-      statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
-      statusEl.textContent = '⏳ ' + L.compacting;
-    }
-  }
 
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
@@ -509,57 +377,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   function rebuildQueuebar() {
     queuebarEl.innerHTML = '';
     for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
-  }
-  function fmtSession(file, name) {
-    if (name) return name;
-    var s = String(file || '');
-    var mm = s.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})/);
-    // J 刀：文件名时间戳是 UTC（尾缀 Z），必须转本地——裸读差一个时区（用户实测 20:00 建
-    // 的会话显示 12:00）。与宿主 fmtSessionTitle 同款口径（此处只是 tabs 未到时的兑底）
-    if (mm) {
-      var dd = new Date(mm[1] + '-' + mm[2] + '-' + mm[3] + 'T' + mm[4] + ':' + mm[5] + ':00Z');
-      var p2 = function (n) { return (n < 10 ? '0' + n : '' + n); };
-      return p2(dd.getMonth() + 1) + '-' + p2(dd.getDate()) + ' ' + p2(dd.getHours()) + ':' + p2(dd.getMinutes());
-    }
-    var base = s.split(/[\\/]/).pop();
-    // 双空 = pi 启动窗口占位，显「启动中」（E 刀拍板 3：占位冒充终值会误导「会话会丢」）。
-    // 「临时(未保存)」已随 ephemeral 判死退役（审计红线：一切会话都落盘，2026-09-22）
-    return base || L.startingSession;
-  }
-  function applyState(m) {
-    // 工单24 二期：页脚（模型/思考/用量）随页签视图走，后台直接渲进隐藏视图；
-    // 页头会话标题是页面级（只显示活动页签），后台跳过
-    // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
-    //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
-    // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
-    // B 刀（2026-11-04 用户报「提示消失后是灰状态、等一会模型才有」）：占位帧（booting）
-    // 不是终值——页脚来自模型记忆/快路径缓存，模型名和标题还得等 pi init 完。这种帧不许
-    // 收秒表、不许清状态行，否则 boot 空窗（真机日志实测 6.4s，mr-create 单项 5.3s）里
-    // 用户只看到全空页脚 + 「⚡ Auto」，零反馈。收表权只给真值帧（booting 缺省/false）。
-    // （uiState 分支已在 setBusy 之前置过同一标记，这里是 'state' 消息的入口；赋值幂等）
-    bootPending = m.booting === true;
-    if (!bootPending) {
-      stopBootTick(); // N 刀：首帧真值状态到达 = 启动结束，秒表收表（文本由下方清理）
-      if (!compacting && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
-    }
-    // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
-    modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
-    modelEl.title = m.model ? L.modelTitleCur.replace('{v}', (m.model.provider || '') + '/' + (m.model.id || '')) : L.switchModel;
-    thinkEl.textContent = L.thinkLabel + (m.thinkingLevel !== null && m.thinkingLevel !== undefined ? m.thinkingLevel : '—');
-    if (id === getActiveTabId()) {
-    // J 刀：页头优先用宿主 tabs 标题（唯一事实源：空会话「新会话」/时区本地化都在宿主
-    // fmtSessionTitle 收口），fmtSession 只作 tabs 未到时的兑底
-    var hostTitle = '';
-    var tl = getTabsList();
-    for (var hTi = 0; hTi < tl.length; hTi++) if (tl[hTi].id === getActiveTabId()) { hostTitle = tl[hTi].title; break; }
-    var sessName = hostTitle || fmtSession(m.sessionFile, m.sessionName);
-    sessionEl.textContent = L.sessionLabel + sessName;
-    sessionEl.title = m.sessionFile ? (L.curSession + m.sessionFile + '\n' + L.clickSwitchSession) : L.clickPickSession;
-    }
-
-    // 页脚用量：圆圈百分比（2026-11-05 用户指定）——圆环画占比，右侧文字只留成本；
-    // 圆环颜色随占比升档（<70 蓝 / <90 橙 / ≥90 红），与阈值预警同色语言
-    ctxPop.refreshUsage(m.stats);
   }
 
   // 回溯状态（per 视图）：histIdx=-1 未在回溯中；histDraft 存首次回溯前的草稿，
@@ -733,7 +550,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       dispose: function () {
         outline.dispose(); // 断开大纲轨道的 ResizeObserver（不断开则被观察的 root 连整棵 DOM 留活）
         ctxPop.dispose();
-        if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+        statusBar.dispose(); // 状态行两块秒表（busyTimer/bootTickTimer）归 features/statusBar.ts 独占
         clearStreamTimer();
         renderQ.dispose(); // 清在途的延时重绘（renderTimer 归 features/renderQueue.ts 独占）
         if (view.parentNode) view.parentNode.removeChild(view);
