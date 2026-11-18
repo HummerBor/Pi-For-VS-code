@@ -13,9 +13,9 @@
  *   带走它，也不许在 main.ts 再存一份；外部只经 setPDet() 写。两个模块各留一份 = 进度文案
  *   写进孤儿节点（用户看不到），是「工具行跑着跑着不再动」的现成事故形态。
  *
- * ★ 红线二（R7，scroll ↔ applySticky）：scroll 留 main.ts（它调 applySticky(stickyQ)），本模块
- *   **只经 deps.scroll 调**、绝不自己持有 scroll/stickyQ/followingEnd——两份滚动状态必然对不上
- *   （切页签回来不跟随 / 钉住气泡来回闪）。
+ * ★ 红线二（R7，scroll ↔ 钉住判定）：scroll 留 main.ts（它只经 features/sticky.ts 的 pinCheck()
+ *   进钉住判定），本模块**只经 deps.scroll 调**、绝不自己持有 scroll/stickyQ/followingEnd——
+ *   两份滚动状态必然对不上（切页签回来不跟随 / 钉住气泡来回闪）。
  *
  * ★ 红线三（流式语义）：appendDelta 的节流与合帧、appendThink 的「贴底才自动滚」、finalizeLive
  *   的收尾时机（思考块收起 / text 尾巴定型）、streamTick 的表格防劈叉与围栏行首判定，一条都
@@ -39,7 +39,7 @@ export interface LiveStreamDeps {
   renderRich: (parent: any, text: any) => void;
   /** i18n 文案表 */
   lang: Record<string, any>;
-  /** ★ 滚动跟随仍住 main.ts（R7：它调 applySticky(stickyQ)），本模块只调不持有 */
+  /** ★ 滚动跟随仍住 main.ts（R7：它只经 sticky 的 pinCheck() 进钉住判定），本模块只调不持有 */
   scroll: () => void;
 }
 

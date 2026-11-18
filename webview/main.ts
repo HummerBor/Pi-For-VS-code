@@ -6,8 +6,6 @@
  */
 import { STRINGS, type Lang } from "../src/core/i18n";
 import type { HostToWebviewTagged, SessionMessage, SlashCommand, WorkspaceFile, BannerPayload, ChangesFileInfo, TabsMsg, TabInfo } from "../src/core/protocol";
-import { toolDetail } from "../src/domain/toolDetail";
-import { isEditRetryable } from "../src/domain/errorClass"; // 余额/配额/鉴权类错误不给「修改后重试」入口
 // 跨功能共享状态（活动页签 / 每视图 busy、变更页数据）与变更页整块逻辑：见 core/state.ts 头注释
 import { createViewState, getActiveTabId, setActiveTabId } from "./core/state";
 import { initChangesPage } from "./features/changesPage";
@@ -18,6 +16,8 @@ import { initMarkdown } from "./features/markdown"; // 渲染基座（原住本�
 import { initLinkify } from "./features/linkify"; // 文件路径/符号可点（原住本文件，第 5 刀 5a）
 import { initLiveStream } from "./features/liveStream"; // live 流式增量渲染（原住本文件，第 5 刀 5b）
 import { initToolRows } from "./features/toolRows"; // 工具调用行（原住本文件，第 5 刀 5c）
+import { initSticky } from "./features/sticky"; // 最后一问钉住折叠（原住本文件，第 5 刀 5e）
+import { initMessageList } from "./features/messageList"; // 整树重绘 / 用户气泡 / toast（原住本文件，第 5 刀 5d）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -111,90 +111,19 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     histNav: histNav,
     pages: { hasPage: function () { return changesPage.hasPage(); }, close: function () { changesPage.close(); } },
     getSlashCmds: function () { return slashCmds; }, getFiles: function () { return workspaceFiles; },
-    resetNotice: function () { lastNotice = ''; }
+    resetNotice: function () { clearNotice(); }
   });
   // 别名：bindComposerOnce / bindViewEvents / histNav 的正文照旧按这些名字调（零字差异）
   var send = composer.send; var inputKeydown = composer.inputKeydown; var inputPaste = composer.inputPaste;
   var normalizeInputWidth = composer.normalizeInputWidth; var updateSuggest = composer.updateSuggest;
   var autoSize = composer.autoSize; var handleFiles = composer.handleFiles;
   var queuedItems = [];
-  // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
-  // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
-  var stickyQ: HTMLElement | null = null;
-  // 钉住态检测（工单28 追加二，用户直令 2026-09-20）：原位不折叠、钉住才折——用
-  // IntersectionObserver 观察 bubble 前的 0 高 sentinel：sentinel 滚出视口顶 = bubble 到顶（钉住）。
-  // 每视图一个 IO 实例；内容高超 3 行才折（line-clamp 自带 …），右下角「展开/收起」chip
-  // 走 attr(data-st)。零滚动监听器，IO 是浏览器原生高效回调。
-  //
-  // 追加三（闪烁修正，用户实测 2026-09-21：下滑或流式输出时气泡高频「折叠↔展开」，整页闪烁）：
-  // 根因是钉住态自激振荡——line-clamp 把 bubble 的流内高度从 _fullH 砍到 3 行，内容总高随之
-  // 缩短；若缩短后最大滚动量掉到 sentinel 偏移以下，浏览器把 scrollTop 往上一钳，sentinel 又
-  // 露头 → IO 摘钉 → 展开（总高回涨）→ scroll() 又拉到底 → 再钉……每轮重排整页 = 闪烁。
-  // 判据（stickyWants）：只有「bubble 下方内容 ≥ 一个视口高」才允许钉住折叠——此时折叠省下的
-  // 高度（最多一个 bubble 高）不足以把 sentinel 从视口上方拽回来，钉住态自洽、不再翻转。
-  // 内容还短的回合干脆不钉（短答时原样滚动，比钉一个溢出屏幕的大气泡更合适）。
-  var stickyIO: any = null;
-  function updateStickyChip(b: any) {
-    if (!b._fullH) return; // 未量到内容高（rAF 前）
-    var pinned = b.classList.contains('pinned');
-    var open = b.classList.contains('sticky-open');
-    if (pinned && b._fullH > 78) b.setAttribute('data-st', open ? L.stickyCollapse : L.stickyExpand); // 3 行 ≈ 13px×1.55×3+padding14 ≈ 74.5，取 78
-    else b.removeAttribute('data-st');
-  }
-  function stickyWants(b: any, sent: any) {
-    var rootRect = root.getBoundingClientRect();
-    var sentRect = sent.getBoundingClientRect();
-    if (sentRect.top >= rootRect.top) return false; // sentinel 仍在视口内 → 不钉
-    var flowTop = sentRect.top - rootRect.top + root.scrollTop; // sentinel 在滚动内容坐标系里的偏移
-    // 量当前实际流内高，不用 _fullH（2026-10-27 追加四同批修正）：钉住折叠后 scrollHeight 里
-    // 只剩折后 3 行高，若再拿全高 _fullH 去减会把 below 少算 (_fullH-折后高) 一大截，判据失准。
-    // offsetHeight 在原位态=全高、钉住态=折后高，两种状态都对；_fullH 只留给 chip 的超行阈值
-    var below = root.scrollHeight - (flowTop + b.offsetHeight);
-    return below >= root.clientHeight; // 折叠后 sentinel 仍在视口上方（见追加三注释）
-  }
-  // 钉住 = sticky-q（position:sticky）+ pinned（line-clamp + chip）同进同退，避免出现
-  // 「钉住但不折」把大气泡糊在视口顶的状态；短内容直接不钉，保持正常滚动
-  function applySticky(b: any) {
-    // 守卫基线取本次调用开始时的布局——必须在类切换**之前**取：钉住瞬间的自身折叠也算
-    // 收缩量，否则「钉住→折叠→钳位回顶」一次就把守卫骗开，追加三的振荡原样回归
-    var st0 = root.scrollTop; var sh0 = root.scrollHeight;
-    var want = stickyWants(b, b._sent);
-    // 追加四（闪烁修正二，用户实测 2026-10-27：单条超长消息占满视口，气泡高频「折叠↔展开」
-    // 整体闪）：钉住态的第二条自激回路——钉住折叠后**下方内容收缩**（工具完成即收盒 ~320px、
-    // prow 占位清理、同名成组隐藏），scrollHeight 被压到 scrollTop+clientHeight 以下，浏览器
-    // 把 scrollTop 向上一钳 → sentinel 被动「越界回顶」→ IO 判越界 → 摘钉展开（全高回涨）→
-    // scroll() 拉底 → below 过阈再钉 → 折叠……工具每完成一个循环一轮 = 气泡不停缩放闪烁。
-    // 追加三的 below≥视口判据只护住「钉住瞬间折叠」方向，管不着这条「钉后下方收缩」方向。
-    //
-    // 追加五（振荡修正三，用户实测 2026-10-30：往下滚时钉住气泡仍高频「展开↔折叠」）：
-    // 追加四的「距底 ≤48」判据时序敏感——钳位的 scroll 事件与流式增长跨帧交错，IO 回调读到
-    // 的是「钳位后又长了一截、跟随还没拉底」的瞬间距底值（>48）→ 守卫失效 → 摘钉展开 →
-    // 再钉 → 再钳，每条流式消息/每个工具收盒循环一轮。改判「scrollTop 回落能否被 scrollHeight
-    // 收缩解释」：钳位回落量 ≤ 收缩量（+48 容差）→ 假事件忽略；真用户回翻必然超出收缩量，
-    // 照常摘钉回原位看全文。恒等式：回落−收缩 ≈ 用户主动上翻量（钳位≈收缩、跟随拉底≈增长
-    // 两两相消），只看布局因果，不受回调/滚动事件帧间时序影响。距离判据被收缩判据覆盖废止
-    //（钳位必伴随收缩，反之不成立——无收缩的回落只可能是用户滚的）。
-    if (!want && b.classList.contains('pinned')) {
-      var dScroll = b._pinSt - st0; // 正值 = 视口上移（钳位或用户上翻）
-      var dShrink = b._pinSh - sh0; // 正值 = 内容变矮（收盒/占位清理/成组隐藏/自身折叠）
-      if (dScroll > 0 && dScroll <= dShrink + 48) return; // 回落可被收缩解释 → 钳位假事件，忽略
-    }
-    b._pinSt = st0; b._pinSh = sh0; // 基线前移（被忽略的路径不前移，继续与钉住时刻比）
-    b.classList.toggle('sticky-q', want);
-    b.classList.toggle('pinned', want);
-    updateStickyChip(b);
-  }
-  function observeSticky(sent: any, b: any) {
-    if (!stickyIO) stickyIO = new IntersectionObserver(function (es: any) {
-      for (var i = 0; i < es.length; i++) {
-        var tgt = (es[i].target as any)._stickyBubble;
-        if (!tgt) continue;
-        applySticky(tgt);
-      }
-    }, { root: root, threshold: 0 });
-    sent._stickyBubble = b; b._sent = sent;
-    stickyIO.observe(sent);
-  }
+  // ── 最后一问钉住折叠（粘性气泡）：整块在 features/sticky.ts ──
+  // 本视图一套（「当前最后一问」引用 stickyQ 与每视图一个 IntersectionObserver 都在模块内独占，
+  // 这里不再持有同名变量——stickyQ 全仓只允许声明一处，见 R7）。只注入消息区根与 i18n；
+  // scroll 留本文件，它只经 pinCheck() 进钉住判定，绝不反向持有滚动状态（两个模块各存一份 =
+  // 「钉错气泡 / 钉住态来回闪」）。追加二/三/四/五 四轮闪烁修正的判据与事故注释随逻辑进模块。
+  var sticky = initSticky({ root: root, lang: L });
   // ── 工具行（工具名 + IN/OUT 行，同名连续成组）：整块在 features/toolRows.ts ──
   // 本视图一套（工具行索引 toolEls 与成组指针 lastToolGroup 都在模块内独占，这里不再持有同名
   // 变量）。只注入消息区根、建 DOM 工具、图标、linkify 基座、i18n 与滚动跟随。别名供其余调用点
@@ -207,7 +136,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // ── live 流式（在途消息的增量渲染）：整块在 features/liveStream.ts ──
   // 本视图一套（在途气泡 / parts 表 / 流式定时器都在模块内独占，这里不再持有同名变量）。
   // 只注入消息区根、建 DOM 工具、markdown 基座、i18n 与滚动跟随——scroll 留本文件（R7：
-  // 它要调 applySticky(stickyQ)，两份滚动/钉住状态必然对不上）。别名供其余调用点
+  // 它只经 features/sticky.ts 的 pinCheck() 进钉住判定，两份滚动/钉住状态必然对不上）。别名供其余调用点
   // （handleMsg / renderAll / setBusy / flushRender / dispose）按原符号名调，正文零改。
   var liveStream = initLiveStream({
     root: root, el: el, renderRich: renderRich, lang: L, scroll: scroll
@@ -320,7 +249,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 后台视图 display:none 无布局，scrollTop 写不进去——切回时由 activateTab 按跟随标志补拉底
     if (id !== getActiveTabId()) return;
     // 追加三：回复变长后补一次钉住判定（IO 只在 sentinel 越界瞬间回调，内容从短到长时不会再触发）
-    if (stickyQ && (stickyQ as any)._sent && !stickyQ.classList.contains('pinned')) applySticky(stickyQ);
+    sticky.pinCheck(); // R7：钉住判定只有这一条路（stickyQ 住 features/sticky.ts）
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
@@ -331,6 +260,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var olAnchors: { b: HTMLElement; row: HTMLElement }[] = [];
   var olSpyQueued = false; // rAF 合顿滚动事件，一帧一次布局读
   var olSuspend = false; // renderAll 逐条 addUser 时挂起（每条全量重建 = O(N²)，重绘完一次建好）
+  /** 大纲挂起开关（olSuspend 属大纲域、住本文件，5g 未搬）：重绘在 features/messageList.ts 里
+   *  逐条 addUser 前后置位，写回经此口（R12 ③：注入 accessor，不复制状态） */
+  function setOlSuspend(v: boolean) { olSuspend = v; }
   function outlineRebuild() {
     if (olSuspend) return;
     olAnchors = [];
@@ -577,72 +509,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     }
   }
 
-  /** 历史消息 content 数组里的原图项（工单31）：pi 落盘 ImageContent {type:"image",data,mimeType}，
-   *  textOf 只拼 text，原图靠本函数另抽——重绘路径与当场回显两路同用 */
-  function imgsOf(content) {
-    var out = [];
-    if (Array.isArray(content)) {
-      for (var i = 0; i < content.length; i++) {
-        var c = content[i];
-        if (c && c.type === 'image' && c.data) out.push({ data: c.data, mimeType: c.mimeType || 'image/png' });
-      }
-    }
-    return out;
-  }
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number, images?: any[]) {
-    // 子 agent 异步回报特殊标记渲染（2026-09-18 用户拍板升级：不隐藏，改独立卡片——
-    // 防止被当成用户自己说的话；前版“直接不展示”作废）。前缀契约在 subagent 扩展的
-    // sendUserMessage 处（"[子 agent sa-N 完成|失败|已终止] agent名: 输出"），改格式三处同步
-    // （harness 发送方 / piCore message_start 正则 / 本文件 addUser + queue 两处）。
-    // 2026-11-13 补「已终止」：用户 kill 的单也会回传，否则主 agent 以为它还在跑。
-    var sm2 = (text || '').match(/^\[子 agent (\S+) (完成|失败|已终止)\] ([^:\n]*): ?/);
-    if (sm2) {
-      var card = el('div', 'subret' + (sm2[2] === '完成' ? '' : ' fail'));
-      var sh = el('div', 'subret-head', '⮑ 子 agent ' + sm2[2] + (sm2[3] ? ' · ' + sm2[3] : ''));
-      sh.appendChild(el('span', 'subret-h', ' · ' + sm2[1])); // 句柄弱化：可读可抄，不抢眼
-      card.appendChild(sh);
-      var sb = el('div', 'subret-body');
-      renderRich(sb, text.slice(sm2[0].length) || text); // 正文 markdown 渲染（回报常带表格）
-      card.appendChild(sb);
-      root.appendChild(card); followingEnd = true; scroll();
-      return;
-    }
-    var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user');
-    (b as any)._olText = text || ''; // 大纲轨道条目文案（空文本=代码上下文泡，olText 里有兑底）
-    // 工单28 追加（用户直令 2026-09-20）：迁移时旧 bubble 连 sticky-open/pinned 状态一起摘、
-    // 旧 sentinel 一并 unobserve；新 bubble 从未折叠原位态起步（钉住后才折，超 3 行才出 chip）
-    if (stickyQ) {
-      stickyQ.classList.remove('sticky-q'); stickyQ.classList.remove('sticky-open'); stickyQ.classList.remove('pinned');
-      if (stickyIO && (stickyQ as any)._sent) stickyIO.unobserve((stickyQ as any)._sent);
-    }
-    stickyQ = b; // sticky-q 由 applySticky 在「可钉」时加（追加三：短内容不钉，避免振荡）
-    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; }
-    // 工单31：原图缩略图（data URI，CSP img-src data: 已放行）——限高等比在 CSS；点击 → openImage
-    // 交宿主写临时文件走 VS Code 内置预览器开原图（自带缩放），不造 lightbox；stopPropagation
-    // 防 sticky 气泡 toggle（点击缩略图不能触发展开/折叠）
-    if (images && images.length) {
-      var th = el('div', 'thumbs');
-      for (var ti = 0; ti < images.length; ti++) {
-        (function (img0) {
-          var im = document.createElement('img');
-          im.className = 'thumb';
-          im.src = 'data:' + (img0.mimeType || 'image/png') + ';base64,' + img0.data;
-          im.addEventListener('click', function (ev) { ev.stopPropagation(); vpost({ type: 'openImage', data: img0.data, mimeType: img0.mimeType || 'image/png' }); });
-          // 工单31：img 异步加载，加载完成前量出的 _fullH 不含图高 → 钉住折叠判定失准；
-          // 加载完成后重测（工单28 口径「原位量一次完整内容高」以 img.onload 为准修正）
-          im.onload = function () { requestAnimationFrame(function () { (b as any)._fullH = (b as any).scrollHeight; updateStickyChip(b as any); }); };
-          th.appendChild(im);
-        })(images[ti]);
-      }
-      b.appendChild(th);
-    }
-    if (codeInfo) { var n1 = el('div', 'notice'); n1.innerHTML = ico('filecode', 12) + ' ' + L.attachedCode + esc(codeInfo); b.appendChild(n1); } if (fileCount) { var n3 = el('div', 'notice'); n3.innerHTML = ico('filecode', 12) + ' ' + fileCount + L.filesUnit; b.appendChild(n3); } if (imageCount && !(images && images.length)) { var n2 = el('div', 'notice'); n2.innerHTML = ico('image', 12) + ' ' + imageCount + L.imagesUnit; b.appendChild(n2); } var sent = el('div', 'sticky-sent'); root.appendChild(sent); root.appendChild(b); followingEnd = true; scroll();
-    // 原位态量一次完整内容高（未 clamp，后续钉住判定用它，不再反复读布局）；
-    // sentinel 在 bubble 前，IO 观察它判定钉住（工单28 追加二）
-    observeSticky(sent, b);
-    requestAnimationFrame(function () { (b as any)._fullH = b.scrollHeight; updateStickyChip(b as any); });
-    outlineRebuild(); // 新用户消息 → 大纲轨道补一行（历史重绘走 renderAll 出口，不在此重复）
-  }  // 主动发消息=回底意图（工单十七要点 3）
   function addQueuedDom(q) {
     var b = el('div', 'q-item');
     b.setAttribute('data-qid', q.qid);
@@ -690,195 +556,38 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var els = queuebarEl.querySelectorAll('[data-qid="' + qid + '"]');
     for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);
   }
-  // toast 跨重渲存续（用户实测「切页签回来压缩提示没了」2026-09-20）：notice 是一次性 DOM，
-  // 本页签 core 后续任何 uiState 重渲都会冲掉它。持久事实源是折叠块（jsonl compaction 条目，
-  // 恢复时从数据重建，在最顶部）；本层只是让瞬时 toast 也活过重渲——按存档重挂，发新消息即清
-  var lastNotice = '';
-  var seenCompactions = -1; // 折叠块计数基线：-1=未立基线（首渲不跳顶），增大=新压缩
-  var compactBarShownAt = -1; // 已弹过条的压缩计数（防同轮重渲重弹；dismiss 后置 = seenCompactions）
-  function notice(text) {
-    if (/扩展已加载/.test(text)) return;
-    // 同文 toast 不叠挂（插话→点暂停→点取回事故实测）：retrieveTaken 被流式思考块隔开后不再命中
-    // 下方「root 末尾同文」判定，幽灵 pill 每点一次取回就叠一条同文提示。lastNotice 在 send/render
-    // 清零 = toast 周期边界，跨回合的同文提示照常再出；已知取舍：同周期内同文只显示首条
-    //（pill/队列条自身的增删即是后续反馈）
-    if (lastNotice === text) return;
-    var last = root.lastElementChild; if (last && last.classList && last.classList.contains('notice') && last.textContent === text) return; var n = el('div', 'notice', text); linkify(n); root.appendChild(n); lastNotice = text; scroll();
-  }
-  function textOf(content) {
-    if (typeof content === 'string') return content;
-    var out = '';
-    if (Array.isArray(content)) {
-      for (var i = 0; i < content.length; i++) {
-        var c = content[i];
-        if (c && c.type === 'text' && c.text) out += c.text;
-      }
-    }
-    return out;
-  }
-  function makeThink(text) {
-    var d = document.createElement('details');
-    d.className = 'think';
-    var s = document.createElement('summary'); s.textContent = L.thinkingProcess;
-    var body = el('div', 'think-body', text);
-    d.appendChild(s); d.appendChild(body);
-    return d;
-  }
-  // 工单二十一：压缩边界折叠块（对齐 pi TUI CompactionSummaryMessageComponent）。
-  // compactionSummary 是 pi 恢复会话时把压缩点前历史折叠成的 {role, summary, tokensBefore,
-  // timestamp} 消息，webview 曾静默穿落——用户视角「以前发的消息没了」。这里复刻 makeThink 的
-  // details/summary 原生折叠交互（样式走 .think/.think-body 现有 token），默认收起、点击展开摘要正文；
-  // 收起态文案含 tokensBefore（原多少 tokens）声明边界，克服单（工单六）横幅只管「当下」的局限
-  function makeCompaction(m) {
-    var d = document.createElement('details');
-    d.className = 'think compaction'; // 追加可寻址类：压缩完成后的定位高亮用（与 thinking 块区分）
-    var s = document.createElement('summary');
-    s.textContent = L.compactionSummary.replace('{n}', (m.tokensBefore != null ? Number(m.tokensBefore).toLocaleString() : 0));
-    d.appendChild(s);
-    var body = el('div', 'think-body', '');
-    renderRich(body, String(m.summary || ''));
-    d.appendChild(body);
-    return d;
-  }
-  function renderAll(list) {
-    olSuspend = true; // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
-    root.innerHTML = '';
-    liveReset();
-    resetToolRows(); // 工具行索引作废（重绘后 DOM 全换，见 features/toolRows.ts 的 resetToolRows）
-    if (!list || !list.length) {
-      if (welcomeHTML) { root.innerHTML = welcomeHTML; duckInto(root); pickTip(root.querySelector('#welcome')); }
-      olSuspend = false;
-      outlineRebuild(); // 空会话无锚点，轨道自动隐藏
-      return;
-    }
-    linkifyEnabled = false; // 老消息不 linkify，循环到最近 15 条时再打开
-    var results = {};
-    var resultList = [];
-    for (var k = 0; k < list.length; k++) {
-      var rr = list[k];
-      if (rr.role === 'toolResult') {
-        var entry = { text: textOf(rr.content), isError: !!rr.isError, used: false, details: rr.details };
-        results[rr.toolCallId || ''] = entry;
-        resultList.push(entry);
-      }
-    }
-    function historyDetail(args: unknown) {
-      // 已并入共享实现（DIRECTOR 工单三）：与宿主流式工具行同一摘要逻辑，字段并集 + 首字符串兑底
-      return toolDetail(args);
-    }
-    // 工具组壳（历史重绘与 live 同构，用户直令 2026-09-20）：头行 工具 ×N + 收起态内容区；
-    // 点击头行开合，组内每行工具可再点开各自 IN/OUT（复用 toolStart/toolEnd 全套交互）。
-    // 同名合并的跨消息配合（探针实锤：pi 每 toolCall 一条独立 assistant 消息）：
-    // 历史渲染逐工具 toolStart/toolEnd，同名连续靠 toolStart 时的组判定 + toolEnd 的组员并入
-    // （0.1.37 起成组判定在 start，见 toolStart 头注释）；跨消息时前工具的 box 与下一工具的
-    // row 天然相邻（中间无 bubble 就不断）
-    for (var i = 0; i < list.length; i++) {
-      if (i >= list.length - 15) linkifyEnabled = true;
-      var m = list[i];
-      if (m.role === 'user') {
-        var ut = textOf(m.content); var ui = null; var ufiles = 0;
-        var ccm = ut.match(/^--- 代码上下文: (.+?) \((.+?)\) ---\n/);
-        if (ccm) {
-          ui = ccm[1] + ' ' + ccm[2];
-          var eIdx = ut.indexOf('\n--- 代码上下文结束 ---\n');
-          if (eIdx > 0) { ut = ut.slice(eIdx + '\n--- 代码上下文结束 ---\n'.length); if (ut.charAt(0) === '\n') ut = ut.slice(1); }
-          else { var ci2 = ut.lastIndexOf('\n```\n\n'); ut = ci2 > ccm[0].length ? ut.slice(ci2 + 6) : ut.slice(ccm[0].length); } // 老格式兑底
-        }
-        var am2;
-        while ((am2 = ut.match(/^--- 附件: ([^\n]*) ---\n/))) {
-          var term2 = '\n--- 附件结束: ' + am2[1] + ' ---\n';
-          var ei2 = ut.indexOf(term2);
-          if (ei2 < 0) { var fb = ut.match(/^--- 附件: [^\n]* ---\n```\n[\s\S]*?\n```\n\n/); if (!fb) break; ut = ut.slice(fb[0].length); if (ut.charAt(0) === '\n') ut = ut.slice(1); continue; }
-          ufiles++;
-          ut = ut.slice(ei2 + term2.length);
-          if (ut.charAt(0) === '\n') ut = ut.slice(1);
-        }
-        var uimgs = imgsOf(m.content); // 工单31：content 里的 image 项直画缩略图（原数图死引用已删——pi 落盘 user 消息无 attachments 字段，重开丢数字的根因）
-        addUser(ut, uimgs.length, ui, ufiles, uimgs);
-      }
-      else if (m.role === 'assistant') {
-        var b = el('div', 'bubble assistant');
-        var flushB = function () { if (b.childNodes.length) { root.appendChild(b); b = el('div', 'bubble assistant'); } };
-        if (Array.isArray(m.content)) {
-          for (var j = 0; j < m.content.length; j++) {
-            var c = m.content[j];
-            if (c && c.type === 'thinking' && c.thinking) b.appendChild(makeThink(c.thinking));
-            else if (c && c.type === 'text' && c.text) { var td = document.createElement('div'); renderRich(td, c.text); b.appendChild(td); }
-            else if (c && c.type === 'toolCall') {
-              flushB();
-              // 每个工具一行（toolStart/toolEnd 全套交互，收起态）；同名连续靠 toolStart 的
-              // 组判定成组、toolEnd 并入组头（跨消息也能接上，中间 bubble 天然断开）。
-              // 历史 OUT 截 1000 不持全量引用（老会话内存零增长，全量在 jsonl 里）
-              var hid = c.id || ('h' + i + '_' + j);
-              var det = historyDetail(c.arguments);
-              toolStart(hid, c.name, det, true);
-              var res = (c.id && results[c.id]) || null;
-              if (!res) { for (var rp = 0; rp < resultList.length; rp++) { if (!resultList[rp].used) { res = resultList[rp]; break; } } }
-              if (res) { res.used = true; toolEnd(hid, c.name, res.isError, res.text != null ? String(res.text).slice(0, 1000) : res.text, det); }
-              // 子 agent 历史重绘不建浮窗/卡片（用户拍板：消息流只留工具行，浮窗只属 LIVE）——
-              // 否则恢复会话时旧 run 的 final 快照会凭空弹出浮窗；历史看工具行 OUT 文本即可
-            }
-          }
-        } else { renderRich(b, textOf(m.content)); }
-        flushB();
-        if (m.stopReason === 'error' && m.errorMessage) {
-          var eb = el('div', 'bubble assistant errmsg');
-          eb.textContent = '✘ ' + String(m.errorMessage).slice(0, 300);
-          eb.appendChild(document.createElement('br'));
-          // 入口分流（2026-10-23 用户拍板，402 实测事故）：余额/配额/鉴权类错误改消息也没用，
-          // 挂「修改后重试」只会引导用户白撞一次请求——换指引文案；判定口径在 errorClass.ts
-          if (isEditRetryable(String(m.errorMessage))) {
-            var rb = el('span', 'errmsg-retry', L.retryEdit);
-            rb.addEventListener('click', function () { vpost({ type: 'retryFromLast' }); });
-            eb.appendChild(rb);
-          } else {
-            eb.appendChild(el('span', 'errmsg-hint', L.errNoRetryHint));
-          }
-          root.appendChild(eb);
-        }
-      }
-      else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
-      else if (m.role === 'compactionSummary') { root.appendChild(makeCompaction(m)); }
-    }
-    // 工单十八补刀3（用户实测：切页签后 queuebar 每条×2，状态栏计数是对的——pi 没双入队，
-    // 是显示层叠加）：uiState 原子分支已重建过 queuebar，本循环（远古的“重绘后恢复排队条”
-    // 职责）再追加一遍 = 翻倍。修法：先清再建，幂等——本循环与 uiState 分支谁先谁后都不叠加。
-    // 工单24 二期：queuebar 随页签视图走，后台渲进隐藏视图
+  // ── 消息渲染（用户气泡 / 整树重绘 / toast / 压缩块）：整块在 features/messageList.ts ──
+  // 本视图一套（toast 存活记录 lastNotice、压缩计数基线 seenCompactions / compactBarShownAt
+  // 都在模块内独占，本文件不再持有同名变量）。注入的全是外部引用/回调，不复制状态：
+  //   ① 队列条属队列域（5f 未搬）→ rebuildQueuebar（先清再建幂等，事故注释见该函数）；
+  //   ② 欢迎页三件是页面级启动快照 → welcomeHTML / duckInto / pickTip；
+  //   ③ 大纲轨道（5g 未搬）→ outlineRebuild + setOlSuspend（逐条 addUser 时挂起防 O(N²)）；
+  //   ④ 压缩条基线与 renderCompact 已随本刀进模块（上面两个状态就是它的全部事实源）。
+  // linkify 总闸（R13）与 followingEnd 仍是本文件唯一持有者，写入经 accessor 成对交接；
+  // stickyQ / stickyIO 不进来（R7），addUser 只经 sticky 三缝交接。
+  var msgList = initMessageList({
+    root: root, el: el, ico: ico, esc: esc, linkify: linkify, renderRich: renderRich, lang: L,
+    scroll: scroll, post: vpost,
+    adoptSticky: sticky.adoptSticky, updateStickyChip: sticky.updateStickyChip, observeSticky: sticky.observeSticky,
+    toolStart: toolStart, toolEnd: toolEnd, resetToolRows: resetToolRows, liveReset: liveReset,
+    outlineRebuild: outlineRebuild, setOlSuspend: setOlSuspend,
+    setLinkifyEnabled: setLinkifyEnabled,
+    setFollowingEnd: function (v: boolean) { followingEnd = v; },
+    welcomeHTML: welcomeHTML, duckInto: duckInto, pickTip: pickTip,
+    rebuildQueuebar: rebuildQueuebar, compactbarEl: compactbarEl
+  });
+  // 别名：handleMsg / flushRender 的调用点按原符号名调（正文零改）
+  var addUser = msgList.addUser; var renderAll = msgList.renderAll;
+  // notice / clearNotice 用函数声明（提升）转调：composer 的 deps 在本函数更早处求值，
+  // 那时 var 别名还没赋值（undefined）；函数声明不受这个顺序影响
+  function notice(text) { msgList.notice(text); }
+  function clearNotice() { msgList.clearNotice(); }
+  /** 队列条幂等重建（R12 ①）：uiState 原子分支已重建过 queuebar，重绘再追加一遍 = 每条×2
+   *（工单十八补刀3，用户实测切页签后翻倍——pi 没双入队，是显示层叠加）。先清再建，谁先谁后都不叠加；
+   *  工单24 二期：queuebar 随页签视图走，后台渲进隐藏视图 */
+  function rebuildQueuebar() {
     queuebarEl.innerHTML = '';
     for (var rq = 0; rq < queuedItems.length; rq++) addQueuedDom(queuedItems[rq]);
-    // 重挂存活的 toast（renderAll 开头清了 root；空列表 welcome 早退分支不挂——新会话无历史 toast）
-    if (lastNotice) { var ln = el('div', 'notice', lastNotice); linkify(ln); root.appendChild(ln); }
-    scroll();
-    olSuspend = false;
-    outlineRebuild(); // 整树重绘完 → 重建轨道（bubble 全新 DOM，旧锚点全作废）
-    // 压缩完成 → 浮动条（2026-09-20 用户拍板：自动跳顶难受，仿「查看改动」条浮动提示）。
-    // 折叠块在消息区最顶（压缩点前历史已被替换，它前面没有消息），平时不可见——
-    // 条常驻提示本轮有压缩，「查看压缩」定位到块（点击触发的高亮不搢流）。
-    // 首渲只立基线（恢复旧会话不弹条）；count 增大才弹（同轮重渲不重复弹）
-    var cc = 0;
-    if (list) for (var cm = 0; cm < list.length; cm++) if (list[cm].role === 'compactionSummary') cc++;
-    if (seenCompactions < 0) { seenCompactions = cc; compactBarShownAt = cc; } // 首渲立基线：恢复旧会话不弹条
-    else if (cc > seenCompactions) { seenCompactions = cc; renderCompact(); } // 新压缩 → 弹条
-  }
-  /** 压缩浮动条：文案 + 查看压缩（定位折叠块）+ 关闭；纯视图内 DOM，零协议新增 */
-  function renderCompact() {
-    var cbEl = root.querySelector('details.compaction');
-    if (!cbEl) return;
-    compactBarShownAt = seenCompactions;
-    compactbarEl.innerHTML = '';
-    var txt = document.createElement('span'); txt.className = 'b-txt'; txt.textContent = L.compactBarText;
-    compactbarEl.appendChild(txt);
-    var act = document.createElement('button'); act.className = 'b-act'; act.textContent = L.compactBarView;
-    act.onclick = function () {
-      cbEl.scrollIntoView({ block: 'center' });
-      cbEl.classList.add('compaction-flash');
-      setTimeout(function () { cbEl.classList.remove('compaction-flash'); }, 2000);
-    };
-    compactbarEl.appendChild(act);
-    var x = document.createElement('span'); x.className = 'b-close'; x.textContent = '✕'; x.title = L.bannerDismiss;
-    x.onclick = function () { compactbarEl.style.display = 'none'; compactbarEl.innerHTML = ''; compactBarShownAt = seenCompactions; };
-    compactbarEl.appendChild(x);
-    compactbarEl.style.display = 'flex';
   }
   function fmtSession(file, name) {
     if (name) return name;
@@ -1031,7 +740,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       ctxPop.scheduleQuery(); // 同上：弹层开着时跟真相走
     }
     else if (m.type === 'busy') { ctxPop.setBusy(!!m.value); setBusy(m.value, m.elapsedMs); }
-    else if (m.type === 'render') { built = true; lastNotice = ''; /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
+    else if (m.type === 'render') { built = true; clearNotice(); /* render=会话上下文整体替换（切历史/新建/fork/导入），旧 toast 属上一段会话，随边界清掉（事故：切历史后旧「已恢复会话」残留叠加——lastNotice 只在 send() 清，renderAll 又把旧 toast 重挂进新会话）。跨重渲存续只为同会话 uiState 重渲服务，此处不清会每次切换叠一条 */ renderPending = m.messages; scheduleRender(); } // 延后一拍：让刚到的用户气泡先上屏，再慢慢重绘全页
     else if (m.type === 'liveSync') { liveSyncPending = m.message; scheduleRender(); } // 刀5b：续接重定基，排在 render 之后同一拍执行（顺序由 flushRender 保证）
     else if (m.type === 'queue') {
       queueN = (m.steering ? m.steering.length : 0) + (m.followUp ? m.followUp.length : 0); renderStatus();
@@ -1199,7 +908,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     getLinkifyEnabled: getLinkifyEnabled, setLinkifyEnabled: setLinkifyEnabled,
     sessionArea: sessionArea, post: function (m) { vscode.postMessage(m); }
   });
-  // 别名：全文件其余调用点（renderRich 在 5a，notice/toolStart/toolEnd/renderAll/subagentDock 都未搬）原样不动
+  // 别名：全文件其余调用点（renderRich 在 5a，notice/renderAll 在 5d 的 features/messageList.ts，
+  // toolStart/toolEnd 在 5c，subagentDock 已搬）原样不动
   var linkify = linkifyMod.linkify;
   // markdown 的 renderRich 收尾要调 linkify，故装配排在它之后（模块内无状态，装配顺序即依赖顺序）
   var markdown = initMarkdown({ el: el, linkify: linkify });

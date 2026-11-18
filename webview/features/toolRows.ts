@@ -36,7 +36,7 @@ export interface ToolRowsDeps {
   linkify: (root: HTMLElement | null) => void;
   /** i18n 文案表 */
   lang: Record<string, any>;
-  /** ★ 滚动跟随仍住 main.ts（它调 applySticky(stickyQ)），本模块只调不持有 */
+  /** ★ 滚动跟随仍住 main.ts（它只经 sticky 的 pinCheck() 进钉住判定），本模块只调不持有 */
   scroll: () => void;
 }
 
