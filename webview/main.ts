@@ -13,6 +13,7 @@ import { createViewState, getActiveTabId, setActiveTabId } from "./core/state";
 import { initChangesPage } from "./features/changesPage";
 import { initCtxPopover } from "./features/ctxPopover"; // 上下文用量弹层 + 页脚圆环（原住本文件）
 import { initSubagentDock } from "./features/subagentDock"; // 子 agent 浮窗（原住本文件，第 3 刀）
+import { initComposer } from "./features/composer"; // 输入区（原住本文件，第 4 刀）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -153,8 +154,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var input = q('#input') as HTMLTextAreaElement; var stopBtn = q('#stop'); var sendBtn = q('#send');
     var statusEl = q('#status'); var modeBadge = q('#modebadge'); var codechipEl = q('#codechip');
     var modelEl = q('#model'); var thinkEl = q('#think');
-    var attachbarEl = q('#attachbar'); var attachEl = q('#attach'); var fileInput = q('#file') as HTMLInputElement;
-    var suggestEl = q('#suggest'); var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
+    var attachEl = q('#attach'); var fileInput = q('#file') as HTMLInputElement;
+    var plusmenuEl = q('#plusmenu'); var pmUpload = q('#pm-upload'); var pmAt = q('#pm-at');
     var bannerEl = q('#banner'); var changesBarEl = q('#changesbar'); var queuebarEl = q('#queuebar');
     // 变更页（2026-11-05）：页级覆盖层，随视图克隆——各页签各看各的本轮改动。
     // 整块（元素查询 / 清单与 diff 渲染 / 拖拽）已搬到 features/changesPage.ts；这里只把闭包里的
@@ -168,6 +169,25 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var ctxPop = initCtxPopover({ q: q, post: vpost, lang: L, esc: esc });
     // 视图内上行显式带自己的 tabId（不再借活动页签打标——换镜退役后归属唯一）
     function vpost(m: any) { if (m.tabId === undefined) m.tabId = id; vscodeApi.postMessage(m); }
+  // ── 输入区（附件 / 联想菜单 / 发送链 / 键位 / 全角归一）：整块在 features/composer.ts ──
+  // 这里只装配：元素查询、上行通道、i18n、建 DOM 工具注入进去。待发附件与联想菜单状态
+  // 归模块独占（本文件不再持有 pendingImages/pendingFiles/sg*）；页面级 sentHistory /
+  // slashCmds / workspaceFiles / codeCtx 一律注入引用或 getter，不复制（见模块头注释）。
+  var composer = initComposer({
+    q: q, post: vpost, lang: L, el: el, ico: ico, esc: esc, shorten: shorten,
+    notice: notice,
+    history: sentHistory,
+    getCodeCtx: function () { return codeCtx; }, isCodeOn: function () { return codeOn; },
+    resetHist: function () { histIdx = -1; histDraft = ''; },
+    histNav: histNav,
+    pages: { hasPage: function () { return changesPage.hasPage(); }, close: function () { changesPage.close(); } },
+    getSlashCmds: function () { return slashCmds; }, getFiles: function () { return workspaceFiles; },
+    resetNotice: function () { lastNotice = ''; }
+  });
+  // 别名：bindComposerOnce / bindViewEvents / histNav 的正文照旧按这些名字调（零字差异）
+  var send = composer.send; var inputKeydown = composer.inputKeydown; var inputPaste = composer.inputPaste;
+  var normalizeInputWidth = composer.normalizeInputWidth; var updateSuggest = composer.updateSuggest;
+  var autoSize = composer.autoSize; var handleFiles = composer.handleFiles;
   var toolEls = {}; var queuedItems = [];
   // 工单28：最后一问 sticky 悬浮——只标最后一条 user bubble 的引用（新 user 到 → 旧摘除、新挂上；
   // renderAll 历史重绘走同一个 addUser，循环末尾自然只剩最后一条带 class）
@@ -264,7 +284,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var lastElapsed: number | null = null;
   var roundFrozen = ''; // 本轮总用时冻结文本（全收尾才写；新轮清零——一轮一只累计秒表）
   var modeText = 'Auto';
-  var pendingImages: any[] = []; var pendingFiles: any[] = [];
   var banner: BannerPayload | null = null; var changes: ChangesFileInfo[] | null = null;
   // 变更页数据（chgData/chgSel）已移入本视图的 state（core/state.ts 的 ViewState），
   // 读写全在 features/changesPage.ts 里
@@ -335,30 +354,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   }
     // ＋菜单文档级关闭监听：每视图一份各关各的（原全局监听读镜像，随换镜退役）
     document.addEventListener('click', function (e) { var tgt = e.target as Node; if (!plusmenuEl.contains(tgt) && tgt !== attachEl) plusmenuEl.style.display = 'none'; });
-  var sgList = []; var sgSel = 0; var sgKind = null;
-  // '/' 菜单打开状态：仅在打开瞬间向宿主要一次新列表。updateSuggest 在 slashList
-  // 到达时会再次执行，若每次都发 getSlash 就是乒乓死循环（列表不停重渲染把选中项
-  // 冲回第一行，方向键永远选不中——2026-09-18 实测）；hideSuggest 时复位，下次打开再拉新
-  var slashMenuOn = false;
-  // 附件无感去重（重复拖入/粘贴直接跳过，不提示不报错）。图片按 base64 内容判重——
-  // 同名不同图不误伤、同图不同名也能拦住；文件按归一化绝对路径判重（Windows 大小写/
-  // 分隔符不敏感）。字节通道文件（OS 拖入拿不到路径）宿主每次落盘都生成新临时名
-  // pi-attach-<时间戳>，路径判重对它永远失效（同一文件拖三次进来三份的事故）——
-  // 这类一次性临时条目改信原始文件名判重；真路径条目只比路径，同名不同目录不误伤
-  function normPath(p) { return String(p).replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase(); }
-  function isTmpAttach(pathStr) { var b = String(pathStr).split(/[\\/]/).pop() || ''; return b.indexOf('pi-attach-') === 0; }
-  function hasImg(data) { for (var i = 0; i < pendingImages.length; i++) { if (pendingImages[i].data === data) return true; } return false; }
-  function hasFile(pathStr, name) {
-    if (!pathStr && !name) return false;
-    var k = pathStr ? normPath(pathStr) : '';
-    for (var i = 0; i < pendingFiles.length; i++) {
-      var e = pendingFiles[i];
-      if (k && e.path && normPath(e.path) === k) return true;
-      // 一方是字节通道临时文件时路径无意义，退回按原始文件名判重
-      if (name && e.name === name && ((!e.path && !pathStr) || isTmpAttach(e.path) || isTmpAttach(pathStr))) return true;
-    }
-    return false;
-  }
   function renderCodeChip() {
     if (!codeCtx) { codechipEl.style.display = 'none'; return; }
     codechipEl.style.display = 'inline-flex';
@@ -1258,193 +1253,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     ctxPop.refreshUsage(m.stats);
   }
 
-  function handleFiles(files, dt) {
-    var textDone = false;
-    var fileCount = 0;
-    // VS Code 资源管理器拖入：File 对象无 MIME 无 path，但 dataTransfer 带资源 URI
-    var uris = null;
-    if (dt) {
-      var raw = dt.getData('resourceurls') || dt.getData('text/uri-list') || '';
-      var list = String(raw || '').split(/\s+/).filter(function (u) { return /^file:/i.test(u); });
-      if (list.length) uris = list;
-    }
-    // 资源管理器拖入的部分 VS Code 版本 dataTransfer.files 为空、只带 text/uri-list——
-    // 循环体一行不进，attachUri 永远发不出去，drop 又被 preventDefault 吞掉：体感
-    // 「拖进输入框没反应」（2026-10 用户实测）。无 File 对象也照走 URI 通道
-    if (uris && (!files || !files.length)) { vpost({ type: 'attachUri', uris: uris }); return; }
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      // 图片判定：f.type 不可靠——从 VS Code 资源管理器拖入的 File 没有 MIME（type 为空），
-      // 只看 type 会把图片误判成普通文件；用扩展名兑底
-      var isImg = f.type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name || '');
-      if (!isImg) {
-        // 数量不设限（用户裁决 2026-09-11「不限制」；路径模式只传字符串，个数不影响开销）
-        // 路径模式：只传路径，不读内容，不限大小。三级兑底：
-        // ① Electron 暴露的 f.path（部分版本 OS 拖入可用）
-        var p = (f as any).path;
-        if (p) {
-          (function(file, filePath) {
-            if (hasFile(filePath, file.name)) return; // 重复拖入同一文件：无感跳过
-            pendingFiles.push({ name: file.name || 'file', path: filePath });
-            renderAttach();
-          })(f, p);
-          continue;
-        }
-        // ② 资源 URI（VS Code 资源管理器拖入）→ 宿主转 fsPath 后回发 addFiles
-        if (uris && uris.length) {
-          vpost({ type: 'attachUri', uris: uris });
-          uris = null; // 一拖多文件只发一次，URI 已覆盖整个 drop
-          continue;
-        }
-        // ③ 字节通道：OS 拖入拿不到任何路径 → 读 base64 交宿主落临时文件（20MB 上限防 webview 卡死）
-        if (f.size > 20 * 1024 * 1024) { notice(L.attachTooBig + (f.name || '')); continue; }
-        (function(file) {
-          var r = new FileReader();
-          r.onload = function() {
-            var data = String(r.result || '').split(',')[1] || '';
-            if (!data) { notice('ⓐ ' + L.dragNoPath); return; }
-            vpost({ type: 'attachFile', name: file.name || 'file', data: data });
-          };
-          r.readAsDataURL(file);
-        })(f);
-        continue;
-      }
-      // 图片数量同样不设限（同上裁决）
-      (function(file) {
-        var r = new FileReader();
-        r.onload = function() {
-          let url = String(r.result);
-          var data = url.split(',')[1] || '';
-          if (!data) return;
-          var probe = new Image();
-          probe.onerror = function() { notice('ⓐ ' + L.imgReadFail + (file.name || '') + L.imgReadFailSuf.replace('{v}', file.type || L.unknown)); };
-          if (!file.type) { url = 'data:image/png;base64,' + data; }
-          probe.onload = function() {
-            // 尺寸过小的图片模型端会报 400（图片输入格式/解析错误），直接拦下
-            if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight)); return; }
-            if (hasImg(data)) return; // 重复图片：无感跳过
-            pendingImages.push({ data: data, mimeType: file.type || 'image/png', name: file.name || 'image.png', w: probe.naturalWidth, h: probe.naturalHeight });
-            renderAttach();
-          };
-          probe.src = url;
-        };
-        r.readAsDataURL(file);
-      })(f);
-    }
-  }
-  function renderAttach() {
-    attachbarEl.innerHTML = '';
-    for (var i = 0; i < pendingImages.length; i++) {
-      (function(idx) {
-        var p = pendingImages[idx];
-        var chip = el('span', 'chip-img');
-        var img = document.createElement('img');
-        img.src = 'data:' + p.mimeType + ';base64,' + p.data;
-        var name = p.name + (p.w ? ' ' + p.w + '\u00d7' + p.h : '');
-        chip.title = name;
-        chip.appendChild(img);
-        // JS 截短（保头保尾）+ .chip-label 兑底 ellipsis；全名看 title
-        chip.appendChild(el('span', 'chip-label', shorten(name, 22)));
-        var x = el('span', 'chip-x', '\u00d7');
-        x.addEventListener('click', function() { pendingImages.splice(idx, 1); renderAttach(); });
-        chip.appendChild(x);
-        attachbarEl.appendChild(chip);
-      })(i);
-    }
-    for (var j = 0; j < pendingFiles.length; j++) {
-      (function(idx) {
-        var p = pendingFiles[idx];
-        var chip = el('span', 'chip-file');
-        // JS 截短文件名；路径提示也走 .chip-label（可收缩），别把 × 挤出可视区
-        chip.innerHTML = ico('filecode', 12) + ' <span class="chip-label">' + esc(shorten(p.name, 18)) + '</span>';
-        if (p.path) {
-          chip.title = p.path;
-          var base = p.path.split(/[\\/]/).pop() || p.path;
-          var pathHint = el('span', 'chip-label hint', ' · ' + esc(shorten(base, 16)));
-          chip.appendChild(pathHint);
-        }
-        var x = el('span', 'chip-x', '\u00d7');
-        x.addEventListener('click', function() { pendingFiles.splice(idx, 1); renderAttach(); });
-        chip.appendChild(x);
-        attachbarEl.appendChild(chip);
-      })(j);
-    }
-    attachbarEl.style.display = (pendingImages.length + pendingFiles.length) ? 'flex' : 'none';
-  }
-  function hideSuggest() { suggestEl.style.display = 'none'; slashMenuOn = false; }
-  function updateSuggest() {
-    var t = input.value;
-    var m = t.match(/(^|\s)([\/@])([^\s]*)$/);
-    if (!m) { hideSuggest(); return; }
-    var trigger = m[2], q = m[3];
-    if (trigger === '/') {
-      sgKind = 'slash';
-      // 每次打开菜单都向宿主要新列表（缓存先渲染，新列表到了再刷新）：包变更自动检测
-      // 挂在宿主的 getSlash 处理里，若只在 slashCmds===null 时请求，getSlash 一辈子只发
-      // 一次，新装/卸载的技能永远进不了菜单（2026-09-18 实测：卸载后 probe 仍显示）
-      if (!slashMenuOn) { slashMenuOn = true; vpost({ type: 'getSlash' }); }
-      if (slashCmds === null) { hideSuggest(); return; }
-      var ql = q.toLowerCase();
-      var list = slashCmds.filter(function(c) { return ((c.label || c.name || '') + ' ' + (c.description || '')).toLowerCase().indexOf(ql) !== -1; });
-      var rows = []; var lastGroup = null;
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].group && list[i].group !== lastGroup) { lastGroup = list[i].group; rows.push({ header: true, label: list[i].group }); }
-        rows.push({ label: list[i].label || ('/' + (list[i].name || '')), detail: list[i].description || '', item: list[i] });
-      }
-      renderSuggest(rows.slice(0, 80));
-    } else {
-      sgKind = 'files';
-      if (workspaceFiles === null) { vpost({ type: 'getFiles' }); hideSuggest(); return; }
-      var ql2 = q.toLowerCase();
-      var fl = workspaceFiles.filter(function(f) { return f.rel.toLowerCase().indexOf(ql2) !== -1; });
-      renderSuggest(fl.slice(0, 50).map(function(f) { return { label: f.rel, detail: f.dir, item: f }; }));
-    }
-  }
-  function renderSuggest(rows) {
-    if (!rows.length) { hideSuggest(); return; }
-    sgList = rows;
-    sgSel = 0; while (sgSel < rows.length && rows[sgSel].header) sgSel++;
-    if (sgSel >= rows.length) { hideSuggest(); return; }
-    suggestEl.innerHTML = '';
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].header) { suggestEl.appendChild(el('div', 'sg-header', rows[i].label)); continue; }
-      (function(idx) {
-        var d = el('div', 'sg-item');
-        d.appendChild(el('span', 'sg-label', rows[idx].label));
-        if (rows[idx].detail) d.appendChild(el('span', 'sg-detail', rows[idx].detail));
-        d.addEventListener('mousedown', function(e) { e.preventDefault(); applySuggest(rows[idx].item); });
-        d.addEventListener('mouseenter', function() { sgSel = idx; paintSuggest(); });
-        suggestEl.appendChild(d);
-      })(i);
-    }
-    suggestEl.style.display = 'block';
-    paintSuggest();
-  }
-  function nextSel(dir) {
-    var n = sgSel;
-    for (var step = 0; step < sgList.length; step++) {
-      n += dir; if (n < 0) n = sgList.length - 1; if (n >= sgList.length) n = 0;
-      if (!sgList[n].header) break;
-    }
-    sgSel = n;
-  }
-  function paintSuggest() {
-    var items = suggestEl.children;
-    for (var i = 0; i < items.length; i++) { if (!sgList[i] || !sgList[i].header) items[i].className = 'sg-item' + (i === sgSel ? ' active' : ''); }
-    if (items[sgSel]) items[sgSel].scrollIntoView({ block: 'nearest' });
-  }
-  function applySuggest(item) {
-    if (!item || item.header) return; // 防止选中分组标题出现 /undefined
-    if (item.builtin === 'mentionFile') { var v = input.value.replace(/[\s/@]+$/, ''); input.value = (v ? v + ' ' : '') + '@'; hideSuggest(); input.focus(); updateSuggest(); return; }
-    if (item.builtin) { input.value = input.value.replace(/(^|\s)[\/@][^\s]*$/, '$1'); hideSuggest(); vpost({ type: item.builtin }); return; }
-    var t = input.value;
-    var m = t.match(/(^|\s)([\/@])([^\s]*)$/);
-    var label = sgKind === 'slash' ? ('/' + item.name) : (m && m[2] === '@' ? '@' : '') + item.rel;
-    if (m) t = t.slice(0, t.length - m[0].length) + m[1] + label + ' ';
-    input.value = t;
-    hideSuggest();
-    input.focus();
-  }
   // 回溯状态（per 视图）：histIdx=-1 未在回溯中；histDraft 存首次回溯前的草稿，
   // 回到底部位（== sentHistory.length）时还原。sentHistory 是模块级全局一份
   var histIdx = -1; var histDraft = '';
@@ -1465,95 +1273,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     autoSize();
     return true;
   }
-  function send() {
-    var t = toHalfWidth(input.value).trim(); // 兜底再归一：组字中途 Enter 上屏的全角也不许按全角发给 pi
-    if (!t && !pendingImages.length && !pendingFiles.length) return;
-    var imgs = pendingImages.map(function(p) { return { data: p.data, mimeType: p.mimeType }; });
-    var fs2 = pendingFiles.map(function(p) { return { name: p.name, text: p.text || undefined, path: p.path || undefined }; });
-    var attachCode = codeCtx && codeOn;
-    // 输入历史入账（所有会话通用，含排队）：只记文字，连续重复不入账
-    if (t && sentHistory[sentHistory.length - 1] !== t) { sentHistory.push(t); if (sentHistory.length > 200) sentHistory.shift(); }
-    histIdx = -1; histDraft = ''; // 回溯复位：下次 ↑ 从最新一条重新开始
-    input.value = '';
-    autoSize();
-    pendingImages = []; pendingFiles = []; renderAttach();
-    lastNotice = ''; // 新回合开始：瞬时反馈（含压缩完成）不再跨回合存活，与 pi TUI 状态行语义一致
-    vpost({ type: 'prompt', text: t || (imgs.length ? L.seeImage : (fs2.length ? L.seeFiles : (attachCode ? L.seeCode : ''))), images: imgs, files: fs2, attachCode: !!attachCode });
-  }
-  // 自适应高度：随内容增长，到 220px 上限后改为内部滚动（消息区不会被挤没）
-  function autoSize() {
-    input.style.height = 'auto';
-    var over = input.scrollHeight > 220;
-    input.style.overflowY = over ? 'auto' : 'hidden';
-    input.style.height = Math.min(input.scrollHeight, 220) + 'px';
-  }
-  function inputKeydown(e: KeyboardEvent) {
-    var sgOpen = suggestEl.style.display === 'block';
-    if (sgOpen) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); nextSel(1); paintSuggest(); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); nextSel(-1); paintSuggest(); return; }
-      if (e.key === 'Tab') { e.preventDefault(); var r1 = sgList[sgSel]; if (r1) applySuggest(r1.item); return; }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        // V 刀（2026-09-23 用户报「启动中发消息被挡」，日志零留痕=消息死在 webview 端）：
-        // 原行为：联想框开着就一律 return——空列表/未选中也吞，消息无声消失。
-        // 现行为：有选中项才应用建议；否则收起联想框、落回下方正常发送
-        var r0 = sgList[sgSel];
-        if (r0) { e.preventDefault(); applySuggest(r0.item); return; }
-        hideSuggest();
-      }
-      if (e.key === 'Escape') { e.preventDefault(); hideSuggest(); return; }
-    }
-    // ↑↓ 回溯输入历史：↑ 在首行 / ↓ 在末行时接管（多行中间的光标移动不受影响）；修饰键按下不抢
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && input.selectionStart === input.selectionEnd) {
-      var dir = e.key === 'ArrowUp' ? -1 : 1;
-      var edgeOk = dir < 0
-        ? input.value.slice(0, input.selectionStart).indexOf('\n') < 0   // 光标在首行
-        : input.value.slice(input.selectionEnd).indexOf('\n') < 0;       // 光标在末行
-      if (edgeOk && histNav(dir)) { e.preventDefault(); return; }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-    else if (e.key === 'Escape' && !sgOpen && !e.isComposing) {
-      // 变更页开着时 Esc 先关页（它是覆盖层，底下会话还在）——不关就直接断任务会误伤
-      if (changesPage.hasPage()) changesPage.close();
-      else vpost({ type: 'abort' });
-    }
-    // isComposing 守门：中文输入法取消候选词也是 Esc，不拦的话打字打到一半就把运行中的任务中断了
-    // （2026-09-18 事故：用户没点停止却见“已中断当前任务”）
-  }
-  // ── 全角 ASCII 归一 ──
-  // 2026-11-03 用户报：输入法切全角时，输入框里的英文成了「ｓ ｓ ｓ」——字形窄、字宽占满一个汉字位，
-  // 视觉上像每个字母之间空了一大格。这不是插件样式的锅（#input 没有 letter-spacing），是全角字符本身。
-  // 射程只有「全角数字/字母 + 表意空格」：！？（），；： 这些**不转**——全角标点和全角英数是输入法里
-  // 两个独立开关（微软拼音 Ctrl+. 切标点），中文句子里的「你好，世界」是用户真要写的中文标点，
-  // 一并转成半角就是篡改正文；而 . 、句号。这些本来就没全角形态问题。映射 1 字符对 1 字符，
-  // 长度不变，故光标/选区偏移原样可用。
-  function toHalfWidth(s: string): string {
-    return s.replace(/[\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A\u3000]/g, function (c) {
-      return c === '\u3000' ? ' ' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
-    });
-  }
-  // 就地归一：只在真有全角字符时才写 value。直接赋 value 会清掉 textarea 的 undo 栈
-  // （浏览器不给程序化写值留历史），所以代价只落在「真的打了全角」的那几次按键上；
-  // 半角态打字根本不进这里，Ctrl+Z 行为不受影响。
-  function normalizeInputWidth() {
-    var v = input.value;
-    var half = toHalfWidth(v);
-    if (half === v) return;
-    var selS = input.selectionStart, selE = input.selectionEnd;
-    input.value = half;
-    try { input.setSelectionRange(selS, selE); } catch (e) { /* 选区越界忽略 */ }
-  }
-  function filesFromClipboard(items) {
-    var out = [];
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].kind === 'file') { var f = items[i].getAsFile(); if (f) out.push(f); }
-    }
-    return out;
-  }
-  function inputPaste(e: ClipboardEvent) {
-    var files = filesFromClipboard((e.clipboardData || {}).items || []);
-    if (files.length) { e.preventDefault(); handleFiles(files, null); }
-  }
+
   /** 重绘/续接排队（刀5b）：render 与 liveSync 同拍顺序执行（快照重绘 → 在途消息重定基），
    *  防止 renderAll 的 liveReset 抹掉先到的重定基状态 */
   var renderPending: SessionMessage[] | null = null;
@@ -1688,24 +1408,9 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       input.focus(); scroll();
     }
     else if (m.type === 'codeCtx') { codeCtx = m.ctx; renderCodeChipAll(); }
-    else if (m.type === 'addImages') { (function() {
-      var list = m.images || []; var k = 0;
-      function nextAdi() {
-        if (k >= list.length || pendingImages.length >= 4) { renderAttach(); return; }
-        var p = list[k++]; if (!p.mimeType) p.mimeType = 'image/png';
-        var probe = new Image();
-        probe.onload = function() {
-          if (probe.naturalWidth < 16 || probe.naturalHeight < 16) { notice('ⓐ ' + L.imgTooSmall2.replace('{w}', probe.naturalWidth).replace('{h}', probe.naturalHeight).replace('{v}', p.name || '')); nextAdi(); return; }
-          p.w = probe.naturalWidth; p.h = probe.naturalHeight;
-          if (!hasImg(p.data)) pendingImages.push(p); // 宿主转发同样去重（复制图片等入口）
-          nextAdi();
-        };
-        probe.onerror = function() { notice('ⓐ ' + L.imgReadFail + (p.name || '')); nextAdi(); };
-        probe.src = 'data:' + p.mimeType + ';base64,' + p.data;
-      }
-      nextAdi();
-    })(); }
-    else if (m.type === 'addFiles') { pendingFiles = pendingFiles.concat((m.files || []).filter(function (f) { return !hasFile(f.path, f.name); })); renderAttach(); }
+    // 待发附件归 features/composer.ts 独占：预检/去重/附件条重渲全在模块内（第 4 刀）
+    else if (m.type === 'addImages') composer.addImages(m.images);
+    else if (m.type === 'addFiles') composer.addFiles(m.files);
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
     else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
     else if (m.type === 'state') { applyState(m); ctxPop.scheduleQuery(); }
