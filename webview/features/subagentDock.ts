@@ -166,7 +166,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
    *  每回合结束必推一帧（message_end → emitAsyncProgress），长工具调用可能静默更久，
    *  误报无害——只降级显示不删数据，下一帧到达即自愈回「处理中」
    *
-   *  【2026-11-23 失联判定改 pid（交接遗留 3）】上面 30 分钟无帧从「唯一判据」降为**最后兜底**：
+   *  【2026-11-18 失联判定改 pid（交接遗留 3）】上面 30 分钟无帧从「唯一判据」降为**最后兜底**：
    *  宿主读台账时对 status==="running" 的行做 process.kill(pid,0) 探活，带 procAlive 上来。
    *  procAlive===false = 进程已死、台账还没收尸 → 立即按失败落终态（见 procDead / renderSubRow），
    *  不再等 30 分钟（真机事故：底层进程零残留，面板「处理中」跳字 13h20m）。
@@ -296,7 +296,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
       var rec = runs[runId];
       for (var ti = 0; ti < rec.snap.tasks.length; ti++) {
         var t = rec.snap.tasks[ti];
-        // 进程已死的行不留在「已开启」组（2026-11-23）：探活已确认它不会再有终态帧
+        // 进程已死的行不留在「已开启」组（2026-11-18）：探活已确认它不会再有终态帧
         var live = t.status === 'running' && !procDead(t.handle || runId);
         (live ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
       }
@@ -360,7 +360,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
 
   function renderSubRow(row: any): HTMLElement {
     var t = row.t;
-    // 失联降级展示（2026-10-27；2026-11-23 改 pid 两档）：
+    // 失联降级展示（2026-10-27；2026-11-18 改 pid 两档）：
     // ① 进程已死（台账 procAlive===false）= 确定失联 → 直接按失败画，立即落终态；
     // ② 只是长时间无帧 = 疑似失联 → 徽标翻「疑似失联」、停表、悬停出 ✕ 可清
     var dead = t.status === 'running' && procDead(t.handle || row.runId);
@@ -411,7 +411,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     if (t.ledger && t.reported === false) rowEl.title = L.smUnreported; // 回传未达：悬停可见，不占版面
     // （下钻按钮/明细浮层 2026-11-19 用户拍板删除：明细去子会话转录页看，浮窗只留名字/状态/任务/时间）
     // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
-    // （2026-11-23 探活确认已死的行同样给 ✕，不再等 30 分钟）
+    // （2026-11-18 探活确认已死的行同样给 ✕，不再等 30 分钟）
     // stopPropagation：别点穿成下钻
     if (stale || dead) {
       var delBtn = el('span', 'sm-del', '✕'); delBtn.title = L.smRemove;

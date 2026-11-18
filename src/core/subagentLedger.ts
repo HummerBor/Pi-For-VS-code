@@ -17,7 +17,7 @@ import type { SubagentLedgerRow } from "./protocol";
 
 const STATUSES = new Set<string>(["running", "completed", "failed", "killed", "orphaned"]);
 
-/** 子进程探活（2026-11-23 失联判定改 pid）：与 harness runsLedger.ts 的 pidAlive 同口径
+/** 子进程探活（2026-11-18 失联判定改 pid）：与 harness runsLedger.ts 的 pidAlive 同口径
  *  （process.kill(pid, 0)：ESRCH = 死，EPERM = 活着但没权限）。为什么这边不直接 import：
  *  那个模块依赖 pi 运行时（裸包名 getAgentDir），宿主编译产物里解析不到——耦合面只在
  *  台账文件形状上，两边注释互相指向（同本文件头注释）。探活结果只是**展示用降级信号**：

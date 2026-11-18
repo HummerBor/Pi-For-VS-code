@@ -273,7 +273,7 @@ export function subagentSnapshotFull(details: unknown): SubagentSnapshot | null 
   return buildSnapshot(details, FULL_ITEMS, FULL_OUTPUT_MAX, true);
 }
 
-/** 探活降级（2026-11-23 失联判定改 pid，交接遗留 3）：
+/** 探活降级（2026-11-18 失联判定改 pid，交接遗留 3）：
  *  台账行上的 procAlive 是宿主对子进程做的一次 process.kill(pid, 0) 探活结果，
  *  false = **进程已经死了、台账还没收尸**（宿主崩溃/回传断链/异步壳冻结）。
  *  这种行一律当终态失败：进程没了就不可能再出终态帧，等 30 分钟 SUB_STALE_MS 只是让

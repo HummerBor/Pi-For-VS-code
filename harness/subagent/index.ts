@@ -1103,7 +1103,7 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 		// 🚨 不许静默（2026-11-02 事故教训：entry 不落盘排查盲了两天）——喊出来
 		console.error("[subagent-harness] appendEntry 失败:", (e as Error)?.stack ?? e);
 	}
-	// 【v27 删掉 frames.jsonl 双写（2026-11-23）】原「帧真值自写（2026-11-02 段 3）」的
+	// 【v27 删掉 frames.jsonl 双写（2026-11-18）】原「帧真值自写（2026-11-02 段 3）」的
 	// 理由是「SDK 宿主下 custom 帧不落盘」，但 2026-11-17 实测已推翻（299MB 父会话里
 	// 266.7MB 全是 custom 帧）。既然是冗余备份就必须两条腿一起改：重放已收敛到
 	// 「只读父会话 custom:subagent-async 帧」（piCore.replaySubagentHistoryInner），
