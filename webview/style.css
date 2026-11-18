@@ -1818,6 +1818,11 @@ details.think.compaction-flash>summary {
   margin-bottom: 3px;
 }
 
+/* 句柄（2026-11-19）：回报卡片里排最后、更浅一档——结果是给人看的，句柄是给命令用的 */
+.subret-h {
+  opacity: .55;
+}
+
 .subret-body {
   font-size: 12px;
   overflow-x: auto;

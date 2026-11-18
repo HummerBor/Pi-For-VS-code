@@ -34,6 +34,9 @@ export interface SubagentTaskSnapshot {
   activityCount: number;
   /** 最终输出（仅结束态非空，单行截断） */
   output: string;
+  /** 失败原因首行（v23，2026-11-19）：帧不再带 messages，`output` 拿不到内容了——
+   *  失败行第二行改成展示这个，不然「为什么挂了」只能点进子会话才知道 */
+  error?: string;
 }
 
 export interface SubagentSnapshot {
@@ -243,7 +246,7 @@ function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean)
     // 如「工程师 · 云雀」）；台账查表只当兜底（老记录/字段缺失时回退调用方原名/分类名）。
     // 早期是 lookup 优先，但 harness 现在主动写可读名，再让 lookup 盖掉就退回英文分类名了
     agent: r.agent || (typeof r.task === "string" && displayNameLookup ? displayNameLookup(r.task) : undefined) || "?",
-    handle: typeof r.handle === "string" && /^sa-\d+$/.test(r.handle) ? r.handle : undefined,
+    handle: typeof r.handle === "string" && /^sa-(?:\d+|[0-9a-f]{8})$/.test(r.handle) ? r.handle : undefined, // 老 sa-12 / 新 sa-3f9a2c71 都认
     task: typeof r.task === "string" ? (full ? capText(r.task, 2000) : oneLine(r.task, TASK_MAX)) : "",
     status: taskStatus(r),
     step: typeof r.step === "number" ? r.step : undefined,
@@ -252,6 +255,7 @@ function snapTask(raw: unknown, itemTail: number, outMax: number, full: boolean)
     items,
     activityCount: total,
     output: finalOutput(r, outMax),
+    error: typeof r.errorMessage === "string" && r.errorMessage ? oneLine(r.errorMessage, ITEM_MAX) : "",
   };
 }
 

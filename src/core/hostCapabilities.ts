@@ -75,10 +75,9 @@ export interface HostCapabilities {
    *  （只读 Markdown 预览，不建会话、不写文件），绝不套用主会话的聊天页。
    *  follow=true 时页面自己每 2s 重读刷新，台账翻终态自动停。 */
   openSubagentTranscript?(file: string, title: string | undefined, follow: boolean): void;
-  /** 子 agent 转录的实时增量（2026-11-03）：事件驱动，不轮询——harness 每收到子进程一条
-   *  message_end 就推一帧（tool_execution_update / entry_appended），核心比对已推条数后
-   *  把「新消息」经这里递进已打开的转录页。没开页面时是空操作。 */
-  pushSubagentTranscript?(handle: string, messages: unknown[], from?: number): void;
+  /** 子 agent 会话文件有新消息（v23，2026-11-19）：帧不再带 messages/usage——
+   *  真值在子会话 jsonl 里，转录页自己按字节偏移增量读（没开页面时空操作）。 */
+  pushSubagentTranscriptReload?(handle: string): void;
   /** 子 agent 的 delta 级流式增量（2026-11-03，与主会话同口径）：harness 把子进程的
    *  message_update 攒批上来，核心原样递给转录页，页面用主会话那套 live 协议逐字追加。 */
   pushSubagentStream?(handle: string, kind: "text" | "thinking", text: string): void;

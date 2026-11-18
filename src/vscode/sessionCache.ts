@@ -219,7 +219,7 @@ async function scanSubagentSessions(): Promise<PiSessionProjection[]> {
       } catch {
         continue;
       }
-      if (/^sa-\d+$/.test(n)) handleDirs.push(p);
+      if (/^sa-(?:\d+|[0-9a-f]{8})$/.test(n)) handleDirs.push(p);
       else collect(p, depth + 1);
     }
   };
@@ -294,7 +294,7 @@ export async function subagentParentMap(): Promise<Map<string, string>> {
         const rec = JSON.parse(fs.readFileSync(join(dir, f), "utf8")) as Record<string, unknown>;
         const handle = String(rec.handle ?? "");
         const parent = rec.parentSession;
-        if (/^sa-\d+$/.test(handle) && typeof parent === "string" && parent) out.set(handle, parent);
+        if (/^sa-(?:\d+|[0-9a-f]{8})$/.test(handle) && typeof parent === "string" && parent) out.set(handle, parent);
       } catch {
         /* 烂 JSON 跳过 */
       }
@@ -310,7 +310,7 @@ export async function subagentParentMap(): Promise<Map<string, string>> {
  *  真实落盘是 subagents/--d-/work/docs/…/sa-11/ 这种多级嵌套——正则匹配不上，句柄取不到，
  *  左侧父子归属直接失效。桶层级爱多深多深，只要路径里有 sa-N 就行 */
 export function handleFromSubPath(file: string): string | undefined {
-  const m = /[\\/]subagents[\\/](?:[^\\/]+[\\/])*(sa-\d+)[\\/]/.exec(file);
+  const m = /[\\/]subagents[\\/](?:[^\\/]+[\\/])*(sa-(?:\d+|[0-9a-f]{8}))[\\/]/.exec(file);
   return m?.[1];
 }
 

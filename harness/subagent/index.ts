@@ -13,6 +13,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,7 +33,6 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import {
 	classifyDeath,
 	markRun,
-	maxHandleSeq,
 	readAllRuns,
 	reconcileRuns,
 	runDirFor,
@@ -73,6 +73,22 @@ const CODENAMES = [
 /** 展示名 = 职务 · 随机代号（如「工程师 · 云雀」）。
  *  同时用于：details/台账的 agent 字段（浮窗行）、pi 会话名（--name，页签标题与
  *  pi 原生 Resume 列表）、子 agent 自己的自述。 */
+/** 句柄（v24，2026-11-19 用户拍板「之后的都换 uuid」）：sa-<8 位十六进制>（uuid 前 8 位）。
+ *  不再自增序号——序号在双开 VS Code / 多机合并时会撞号（历史症状：浮窗双胞胎行、台账串档）。
+ *  保留 `sa-` 前缀是为了目录可读（subagents/<slug>/sa-3f9a2c71）与人能照抄；
+ *  老会话的 sa-12 照旧有效：宿主侧正则两种都认，无需迁移。 */
+function newHandle(): string {
+	return `sa-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+}
+
+/** 父给的名字清洗（v24）：单行、去控制字符、截 40 字。空串 = 没给 → 调用方回落随机代号。
+ *  为什么要给父这个口子：随机代号（工程师 · 青松/云雀）听着乱，父 agent 往往知道这单要干什么，
+ *  让它自己取「审阅者 · 微澜」比随机强；不传也能跑（旧行为不变）。 */
+function cleanDisplayName(raw: unknown): string {
+	const flat = String(raw ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+	return Array.from(flat).slice(0, 40).join("");
+}
+
 function displayAgentName(agentName: string): string {
 	const duty = DUTY_LABELS[agentName] ?? agentName;
 	const code = CODENAMES[Math.floor(Math.random() * CODENAMES.length)];
@@ -380,12 +396,14 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 	parentSession?: string,
+	/** 父给的单名（v24）：有则直用，空则回落「职务 · 随机代号」 */
+	preferredName?: string,
 ): Promise<SingleResult> {
 	const registered = agents.find((a) => a.name === agentName);
 	const agent = registered ?? agents.find((a) => a.name === "worker");
 	// 展示名 = 职务 · 随机代号（2026-11-02 用户拍板）：不论是否注册都用它当 agent 字段/
 	// 会话名，浮窗行与页签一眼能区分同职务的多单。原始分类仍走 agent 定义（下文 agent.tools 等）
-	const displayName = displayAgentName(agentName);
+	const displayName = cleanDisplayName(preferredName) || displayAgentName(agentName);
 
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
@@ -413,7 +431,7 @@ async function runSingleAgent(
 	// 同步单也落独立会话（2026-11-02 用户实测两个病：①同步单没 --session-dir → 落在
 	// 项目会话目录 → 混进左侧主列表 ②没有子会话文件 → 点行只能浮窗下钻，跟异步单
 	// 行为分裂）。分配同一个 sa-N 序号池 + 每单独立目录，与异步单同构。
-	const handle = `sa-${++asyncSeq}`;
+	const handle = newHandle();
 	const runDir = runDirFor(handle, cwd ?? defaultCwd); // 按项目分桶（2026-11-02）
 	try { fs.mkdirSync(runDir, { recursive: true }); } catch { /* 目录失败在 spawn 侧会暴露 */ }
 	args.push("--session-dir", runDir);
@@ -507,7 +525,7 @@ async function runSingleAgent(
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
-					currentResult.messages.push(msg);
+					pushDisplayMessage(currentResult.messages, msg);
 
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
@@ -528,7 +546,7 @@ async function runSingleAgent(
 				}
 
 				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+					pushDisplayMessage(currentResult.messages, event.message as Message);
 					emitUpdate();
 				}
 			};
@@ -627,6 +645,14 @@ interface AsyncRun {
 	status: "running" | "completed" | "failed" | "killed";
 	error?: string;
 	result: SingleResult;
+	/** v22 帧改增量：已随帧发出去的消息条数（下次 slice 的起点）。
+	 *  只在 appendEntry 真送达后前移——送达失败还前移会把那段消息永久丢掉 */
+	sentMsgs: number;
+	/** 已发出去的帧数（只用来判「首帧」）。
+	 *  【为何不能用 sentMsgs===0 判首帧】派单首帧发出时 messages 还是空的，sentMsgs 仍是 0；
+	 *  拿它当判据，下一条消息到时会被误判成首帧而发空数组 + 游标直接跳到 1 →
+	 *  第一条消息永久丢失（自查捕到，2026-11-19） */
+	sentFrames: number;
 	proc: ChildProcess;
 	/** 流式增量缓冲（2026-11-03：与主会话同口径的逐字体验）：子进程的 message_update 是
 	 *  delta-only，攒 ~120ms 打一包推给宿主；只在插件宿主（PI_HOST=pi-vscode）下开——
@@ -637,13 +663,88 @@ interface AsyncRun {
 }
 
 const asyncRuns = new Map<string, AsyncRun>();
-let asyncSeq = 0;
-// 启动对账（P0-3 台账，2026-10-30）：孤儿收尸 + 句柄序号续接（重启后 sa-N 不回退
-// 重号，防台账串档）。教训：内存注册表重启蒸发后「列表状态全没」，台账是跨重启真值。
+// 启动对账（P0-3 台账，2026-10-30）：孤儿收尸。教训：内存注册表重启蒸发后「列表状态全没」，
+// 台账是跨重启真值。（v24 起句柄是 uuid 派生，不再需要「序号续接」那一套）
 reconcileRuns();
-asyncSeq = maxHandleSeq();
 let reqSeq = 0;
 const ASYNC_MESSAGE_TAIL = 20; // entry 落 session 文件，messages 只带尾窗防 O(n²) 膨胀（注册表保全量）
+
+/**
+ * 帧体积硬上限（2026-11-18 实测事故「子智能体状态更新慢，时间和状态都不更新」的根因）。
+ *
+ * 病灶：进度帧原样带尾窗 20 条消息，而工具输出里夹着 base64 截图（实测单条 380–600KB）——
+ * 单帧中位 238KB、峰值 1.8MB。pi.appendEntry 的 custom 帧在本宿主是真落盘的，于是：
+ * - 8.5 分钟一单（sa-103）写进 frames.jsonl **69.9MB**；
+ * - 父会话 jsonl 的 96% 是这些帧（273MB / 285MB；另一个会话 688MB / 713MB）；
+ * - 会话文件一胖，pi 载入 + 面板重放（readFile 全文 → 逐行 JSON.parse）双双卡死（实测重放 5.3s），
+ *   面板看起来就是「时间不动、状态不更新」。
+ *
+ * 口径：按展示层上限截断（对齐 src/domain/subagentSnapshot.ts 的 FULL_TEXT_MAX / FULL_RESULT_MAX，
+ * 那里本来就只画前 8000 / 4000 字），图片只留占位符——真图在子会话文件里，转录页打开时读文件。
+ * 实测同一单（sa-103 / 127 帧）：69.9MB → 5.9MB（-92%），单帧中位 238KB → 41KB，显示零差异。
+ */
+const FRAME_ASSISTANT_MAX = 8000;
+const FRAME_TEXT_MAX = 4000; // toolResult / user 文本（= subagentSnapshot 的 FULL_RESULT_MAX）
+const FRAME_THINKING_MAX = 2000;
+const FRAME_ARG_MAX = 600; // 工具参数里的长字符串（write 整个文件、bash 长脚本…）
+const FRAME_STDERR_MAX = 2000; // result.stderr 是逐行累积的，不掐会随每帧无限重复
+
+function capStr(s: string, max: number): string {
+	return s.length > max ? `${s.slice(0, max)} …(截断 ${s.length - max} 字)` : s;
+}
+
+/** 展示用消息副本：只掐内容长度，字段一个不丢（webview 渲染吃的是同一份结构） */
+function compactMessage(msg: Message): Message {
+	const content = (msg as any).content;
+	if (!Array.isArray(content)) return msg;
+	let changed = false;
+	const out = content.map((raw: any) => {
+		if (!raw || typeof raw !== "object") return raw;
+		const part = raw as Record<string, any>;
+		if (part.type === "image") {
+			// 图只留占位（base64 是帧胖的元凶）：真图在子会话文件里，转录页打开时读文件
+			changed = true;
+			return { type: "text", text: "[图片已省略：帧不带图，完整图在子会话文件里]" };
+		}
+		if (part.type === "text" && typeof part.text === "string") {
+			const max = (msg as any).role === "assistant" ? FRAME_ASSISTANT_MAX : FRAME_TEXT_MAX;
+			if (part.text.length > max) {
+				changed = true;
+				return { ...part, text: capStr(part.text, max) };
+			}
+			return raw;
+		}
+		if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking.length > FRAME_THINKING_MAX) {
+			changed = true;
+			return { ...part, thinking: capStr(part.thinking, FRAME_THINKING_MAX) };
+		}
+		if (part.type === "toolCall" && part.arguments && typeof part.arguments === "object") {
+			const args = part.arguments as Record<string, unknown>;
+			let touched = false;
+			const next: Record<string, unknown> = {};
+			for (const k of Object.keys(args)) {
+				const v = args[k];
+				if (typeof v === "string" && v.length > FRAME_ARG_MAX) {
+					next[k] = capStr(v, FRAME_ARG_MAX);
+					touched = true;
+				} else {
+					next[k] = v;
+				}
+			}
+			if (touched) {
+				changed = true;
+				return { ...part, arguments: next };
+			}
+		}
+		return raw;
+	});
+	return changed ? ({ ...(msg as any), content: out } as Message) : msg;
+}
+
+/** 累积展示用消息：脚本/同步两路都走它，压住帧与 toolResult details 的体积 */
+function pushDisplayMessage(list: Message[], msg: Message): void {
+	list.push(compactMessage(msg));
+}
 
 /**
  * 异步派发主引擎：rpc 子进程 + 注册表 + 进度推送。
@@ -766,7 +867,7 @@ function startAsyncRun(
 			if (evt.type === "message_end" && evt.message) {
 				// 与同步 json 路径同一套累积口径（runSingleAgent processLine），面板快照形状一致
 				const msg = evt.message as Message;
-				run.result.messages.push(msg);
+				pushDisplayMessage(run.result.messages, msg);
 				if (msg.role === "assistant") {
 					run.result.usage.turns++;
 					const usage = msg.usage;
@@ -858,17 +959,44 @@ function startAsyncRun(
 	proc.stdin?.write(`${JSON.stringify({ id: promptId, type: "prompt", message: opts.task })}\n`);
 }
 
-/** 异步运行的 entry/details 载荷：形状兼容 SubagentDetails，面板 subagentSnapshot() 直接可吃 */
+/** 异步运行的 entry/details 载荷：形状兼容 SubagentDetails，面板 subagentSnapshot() 直接可吃。
+ *
+ *  【v23 帧只带「面板画一行」所需的最小集 2026-11-19】v22 已经把尾窗 20 条改成增量，
+ *  但 4.7MB/会话 仍然全是消息正文——而消息正文的真值本来就在子会话 jsonl 里
+ *  （转录页打开时读文件、运行中增量读尾部）。所以 v23 把 messages / usage 整块拿掉：
+ *
+ *  帧 = { handle, agent, status, running, startedAt, endedAt, task(首帧与终态帧),
+ *          errorMessage/stderr(终态), msgCount, frameKind }
+ *  单帧 ~200B → 一单 169 帧约 34KB（v21 是 69.6MB）。浮窗只画 名称/状态/任务/时间，
+ *  明细一律点进子会话转录页——那里读的是文件真值，不经过帧。
+ *
+ *  msgCount 是给宿主的「有新消息了」信号（宿主自己的 frames.jsonl 是事后真值），
+ *  frameKind 让重放区分首帧/增量/终态（老数据没这个字段 → 按快照语义处理）。
+ */
 function asyncDetails(run: AsyncRun): SubagentDetails {
+	const first = run.sentFrames === 0;
+	const final = run.status !== "running";
 	const trimmed: SingleResult = {
 		...run.result,
 		// 生命周期真值随载荷走（2026-10-23）：run.status 是唯一事实源，落进 details 后
 		// 快照、浮窗、会话回放吃同一真值（stopReason 启发式分不清回合收尾/任务收尾）
 		running: run.status === "running",
 		status: run.status,
-		messages: run.result.messages.slice(-ASYNC_MESSAGE_TAIL),
+		messages: [], // v23：正文不进帧（真值在子会话 jsonl）
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 }, // v23：用量不进浮窗
+		stderr: final ? capStr(String(run.result.stderr ?? ""), FRAME_STDERR_MAX) : "",
+		errorMessage: run.error ?? run.result.errorMessage,
 	};
-	return { mode: "single", agentScope: run.agentScope, projectAgentsDir: null, results: [trimmed] };
+	if (!(first || final)) trimmed.task = ""; // 中间帧省掉 task 书（首帧/终态帧各带一次，宿主会缓存）
+	return {
+		mode: "single",
+		agentScope: run.agentScope,
+		projectAgentsDir: null,
+		results: [trimmed],
+		frameKind: final ? "final" : first ? "first" : "delta",
+		/** 子会话里已有的消息条数：宿主拿它判断「有没有新内容」，转录页据此增量读文件 */
+		msgCount: run.result.messages.length,
+	} as SubagentDetails;
 }
 
 /** 结果回传主会话（2026-10-23 送达分档，用户拍板「失败插队、完成排队」；2026-11-13 用户
@@ -895,13 +1023,22 @@ function reportBackToMain(pi: ExtensionAPI, run: AsyncRun): void {
 	// 前缀契约（改格式必同步两处消费方）：piCore 的 message_start 实时上屏正则 +
 	// webview 的 addUser / queue 回报卡片正则，三处一起改
 	const text = `[子 agent ${run.handle} ${head}] ${run.agent}: ${reason ? reason.slice(0, 300) + " —— " : ""}${output.slice(0, 2000)}`;
+	// 送达才算 reported（2026-11-18 事故）：扩展 runtime 失效时 sendUserMessage 直接抛错，
+	// 而原来「发出即记 reported:true」会把这单写成已回传——排查时看不见真相（实测 sa-101~106
+	// 全部丢了回传，台账却跟没事一样）。现在等 promise：成功才落 reported，失败大声喊
+	// （台账 reported:false 就是面板的「回传未达」提示，这是唯一观测面）
 	try {
-		void pi.sendUserMessage(text, {
-			deliverAs: run.status === "completed" ? "followUp" : "steer",
-		});
-		markRun(run.handle, { reported: true });
-	} catch {
-		/* 主会话不可达（关闭中）时静默 */
+		Promise.resolve(
+			pi.sendUserMessage(text, {
+				deliverAs: run.status === "completed" ? "followUp" : "steer",
+			}),
+		).then(
+			() => markRun(run.handle, { reported: true }),
+			(e: unknown) => console.error("[subagent-harness] 回传主会话失败:", (e as Error)?.stack ?? e),
+		);
+	} catch (e) {
+		/* 主会话不可达（关闭中/扩展 runtime 已失效）时静默——但必须留痕 */
+		console.error("[subagent-harness] 回传主会话抛错:", (e as Error)?.stack ?? e);
 	}
 }
 
@@ -943,6 +1080,8 @@ function flushStream(pi: ExtensionAPI, run: AsyncRun): void {
 }
 
 function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
+	const detail = asyncDetails(run); // 一次算好，两条通道吃同一份（别各算一次：帧是增量的，算两次就重发）
+	let delivered = false;
 	// appendEntry 发 entry_appended 事件给会话订阅者（面板 piCore 消费），不进 LLM 上下文；
 	// 同时落 session 文件，会话恢复后可回看（renderEntryRenderer 未注册，TUI 不展示，无噪音）
 	try {
@@ -951,22 +1090,29 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 			status: run.status,
 			startedAt: run.startedAt,
 			endedAt: run.endedAt,
-			detail: asyncDetails(run),
+			detail,
 		});
+		delivered = true;
 	} catch (e) {
 		// 🚨 不许静默（2026-11-02 事故教训：entry 不落盘排查盲了两天）——喊出来
 		console.error("[subagent-harness] appendEntry 失败:", (e as Error)?.stack ?? e);
 	}
-	// 帧真值自写（2026-11-02）：实测 SDK 宿主下 pi.appendEntry 的 custom 帧不落盘
-	//（CLI 进程正常，面板进程 0 帧而消息照落）——重放不赌 pi，每帧追加 runDir/
-	// frames.jsonl，piCore 重放读它（appendEntry 仍发事件，两路并行互为备份）
+	// 帧真值自写（2026-11-02 段 3）：**这里原本的理由（「SDK 宿主下 custom 帧不落盘」）
+	// 已被实测推翻**——2026-11-17 那个 299MB 父会话里 266.7MB 全是 custom 帧，pi 确实落盘。
+	// 现在这条是冗余备份（重放时优先读它，见 piCore.replayFramesFromDisk 只取最后一行）；
+	// 待重放链路验证收敛到「只读会话文件」后可以删。改动前先读那段注释，别当成必需项。
 	try {
 		fs.appendFileSync(
 			path.join(run.runDir ?? runDirFor(run.handle), "frames.jsonl"),
-			JSON.stringify({ handle: run.handle, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, detail: asyncDetails(run) }) + "\n",
+			JSON.stringify({ handle: run.handle, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, detail }) + "\n",
 		);
 	} catch {
 		/* 观测面不阻主链路 */
+	}
+	// 游标前移只在真送达之后：送达失败还前移 → 那段消息永久消失（面板与重放都补不回来）
+	if (delivered) {
+		run.sentMsgs = run.result.messages.length;
+		run.sentFrames++;
 	}
 }
 
@@ -1007,16 +1153,24 @@ function killAsyncRun(run: AsyncRun) {
 	stopAsyncProc(run);
 }
 
+/** 单名（v24，2026-11-19 用户拍板「父给子编个合适的职务·姓名」）：父 agent 自己取，
+ *  显示在浮窗行 / 会话名 / 台账。不传 = 沿用随机「职务 · 代号」。 */
+const NameSchema = Type.String({
+	description: 'Display name for this run, e.g. "审阅者 · 微澜". Pick 职务 · 姓名 yourself so concurrent runs are distinguishable; omit to get a random codename.',
+});
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	name: Type.Optional(NameSchema),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	name: Type.Optional(NameSchema),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -1034,6 +1188,7 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	name: Type.Optional(NameSchema),
 	async: Type.Optional(
 		Type.Boolean({
 			description:
@@ -1050,6 +1205,8 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			// v24（2026-11-19 用户拍板）：父给子取名——随机代号听着乱，父往往知道这单干什么
+			"Each item accepts an optional name (e.g. \"审阅者 · 微澜\") shown in the run list, session title and ledger; pick a 职务 · 姓名 yourself so concurrent runs stay distinguishable. Omit it and a random codename is used.",
 			"MODE SELECTION (default false = sync, waits and returns the result): use async:true when the user asks for background/parallel-with-conversation/non-blocking dispatch (e.g. 后台跑/同时去/别堵着会话/边聊边干); keep sync when they just want a task done and expect the result in this conversation.",
 			"async (single mode only) returns a handle immediately — the main session stays free; progress auto-reports and results are pushed back when done. Manage with subagent_list / subagent_collect / subagent_steer / subagent_kill.",
 			// 【不要轮询（2026-11-13 用户截图实测：主 agent 靠 `sleep 150` 硬等后台单）】
@@ -1151,8 +1308,8 @@ export default function (pi: ExtensionAPI) {
 				}
 				// 展示名 = 职务 · 随机代号（同 runSingleAgent 处注释）：本单派发时取一次，
 				// 写进 run/result/会话名——台账与帧都落这个值，重载后不会变
-				const displayName = displayAgentName(requestedName);
-				const handle = `sa-${++asyncSeq}`;
+				const displayName = cleanDisplayName(params.name) || displayAgentName(requestedName);
+				const handle = newHandle();
 				// 【TDZ 修复 2026-11-03】本单会话目录必须在下面 run 字面量之前算：v8 按项目分桶重构
 				// 把 `const runDir` 挪到了字面量之后，而字面量里要 `runDir`——async 派单 100% 抛
 				// "Cannot access 'runDir' before initialization"（同步单走另一个函数，不受影响；
@@ -1185,6 +1342,8 @@ export default function (pi: ExtensionAPI) {
 						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 						model: agent.model,
 					},
+					sentMsgs: 0,
+					sentFrames: 0,
 					proc: undefined as unknown as ChildProcess,
 				};
 				asyncRuns.set(handle, run);
@@ -1282,6 +1441,7 @@ export default function (pi: ExtensionAPI) {
 						chainUpdate,
 						makeDetails("chain"),
 						ctx.sessionManager?.getSessionFile?.(),
+						step.name,
 					);
 					results.push(result);
 
@@ -1362,6 +1522,7 @@ export default function (pi: ExtensionAPI) {
 						},
 						makeDetails("parallel"),
 						ctx.sessionManager?.getSessionFile?.(),
+						t.name,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -1400,6 +1561,7 @@ export default function (pi: ExtensionAPI) {
 					onUpdate,
 					makeDetails("single"),
 					ctx.sessionManager?.getSessionFile?.(),
+					params.name,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {

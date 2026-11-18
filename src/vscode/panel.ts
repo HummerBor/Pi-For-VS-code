@@ -8,7 +8,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { PiClient, setPiClientDebug } from "../pi/piClient";
 import { getAgentDirSync, findBundledPiCli, findNodeRuntime, findPiOnPath } from "../pi/piSdk";
-import { openTranscriptTab, pushTranscript, pushTranscriptStream } from "./transcriptTab";
+import { openTranscriptTab, reloadTranscript, pushTranscriptStream } from "./transcriptTab";
 import { markWebviewAttached } from "./webviewGuard";
 import { displayNameFor } from "../domain/subagentNames";
 import { PRICE_TABLE_TEMPLATE } from "../domain/priceTable";
@@ -530,8 +530,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // 不建会话/不写文件、与主会话聊天页零共享；运行中由页面自己跟随刷新
       // 子 agent 转录：新建一个主会话页面副本（同模板/同产物/同渲染），只读
       openSubagentTranscript: (file, title) => this.openTranscript(file, title),
-      // 实时增量（事件流，不是轮询）：只递给已打开的转录页
-      pushSubagentTranscript: (handle, messages, from) => pushTranscript(handle, messages, from),
+      // 实时增量（v23）：帧不再带正文，转录页自己按字节偏移重读子会话 jsonl
+      pushSubagentTranscriptReload: (handle) => reloadTranscript(handle),
       pushSubagentStream: (handle, kind, text) => pushTranscriptStream(handle, kind, text),
       // 子 agent 终态 → 左侧列表刷新（嵌套行/未归属组随之更新，2026-11-02）
       onSubagentSettled: () => notifySessionsChanged(),

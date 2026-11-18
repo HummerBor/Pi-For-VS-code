@@ -26,7 +26,7 @@ import type {
   ToolChangedFile,
   WebviewToHost,
 } from "./protocol";
-import { subagentSnapshot, subagentSnapshotFull } from "../domain/subagentSnapshot";
+import { subagentSnapshot } from "../domain/subagentSnapshot";
 import { estimateContextBreakdown } from "../domain/ctxBreakdown";
 import { buildUsage, deriveUnitPrices } from "../domain/usageTotals";
 import { estimateCost, parsePriceTable, type PriceTable } from "../domain/priceTable";
@@ -145,9 +145,8 @@ export class PiCore {
   /** 本会话见过的子 agent 句柄（重放 + 实时 entry 累积）：台账行按它收口——没派过
    *  子 agent 的会话一行台账都不给（2026-11 用户实测「没有子 agent 的会话莫名其妙有了」） */
   private subagentHandles = new Set<string>();
-  /** 转录页已推送条数（事件流去重，2026-11-03）：harness 每帧带「累计 messages」，
-   *  这里只取超出上一次的部分推给页面——不读盘、不轮询、不重写页面 */
-  private transcriptSent = new Map<string, number>();
+  /** 帧里的 task 只在首帧/终态帧带（v23 帧瘦身：省体积），中间帧从这取上次的值 */
+  private subagentTaskAcc = new Map<string, string>();
   /** 提前认领的会话文件（跨实例双开守卫的「提前量」，2026-10-22 用户实测同一会话
    *  开两份）：真值 lastSessionFile 要等 refreshState 回填才有值，boot 链上这段空窗
    *  长达数秒（services 扫描）——期间 findHolder 失明，别的实例点同一会话就开出第二份
@@ -243,25 +242,23 @@ export class PiCore {
    *  final:true 原子回放并回填 subagentRuns（下钻视图重载后仍有全量 details）。
    *  异步壳（end 时仍全 running，工单25）与活跑同口径剔除；endAt 用工具结果消息的
    *  时间戳，浮窗「x分钟前」对齐聊天真实时序 */
-  /** 子 agent 转录增量推送（2026-11-03 用户拍板：事件流，不轮询）。
-   *  harness 在子进程每来一条 message_end 就推一帧上来（同步路走 tool_execution_update 的
-   *  partialResult.details，异步路走 entry_appended 的 data.detail），两处形状都是
-   *  details.results[].messages = 累计消息。这里按 handle 记住已推条数，只把新增的递过去；
-   *  条数变少（重连/换会话）视为重置，下一帧全量重推。 */
-  private pushTranscriptDelta(handle: string, details: unknown): void {
-    if (!this.caps.pushSubagentTranscript) return;
-    const d = details as { results?: Array<{ messages?: unknown[] }> } | null;
-    const msgs = d?.results?.[0]?.messages;
-    if (!Array.isArray(msgs) || !msgs.length) return;
-    const sent = this.transcriptSent.get(handle) ?? 0;
-    if (msgs.length <= sent) {
-      if (msgs.length < sent) this.transcriptSent.set(handle, 0); // 收缩=重置
-      else return;
+  /** 帧回填（v23）：harness 只在首帧/终态帧带 task（省体积），中间帧用上次缓存，
+   *  否则浮窗任务行会变空。messages/usage 已不进帧（v23）——转录内容改由宿主
+   *  按字节偏移增量读子会话 jsonl（caps.pushSubagentTranscriptReload）。 */
+  private fillFrameTask(handle: string, detail: unknown): unknown {
+    const d = detail as { results?: Array<Record<string, unknown>> } | null;
+    const r = d?.results?.[0];
+    if (!r || typeof r !== "object") return detail;
+    if (typeof r.task === "string" && r.task) this.subagentTaskAcc.set(handle, r.task);
+    else {
+      const cached = this.subagentTaskAcc.get(handle);
+      if (cached) r.task = cached;
     }
-    const start = msgs.length < sent ? 0 : sent;
-    this.transcriptSent.set(handle, msgs.length);
-    // 带上绝对起点：页面用它跟「打开时读到的文件历史」对账去重（两者顺序同构：都不含 system）
-    this.caps.pushSubagentTranscript(handle, msgs.slice(start), start);
+    if (this.subagentTaskAcc.size > 30) {
+      const oldest = this.subagentTaskAcc.keys().next().value;
+      if (oldest !== undefined && oldest !== handle) this.subagentTaskAcc.delete(oldest);
+    }
+    return detail;
   }
 
   private replaySubagentRuns(msgs: unknown[]): void {
@@ -910,7 +907,7 @@ export class PiCore {
             // 台账行收口与 frames 重放都靠它（entry 帧 SDK 宿下不落盘，见 harness 注）
             let hm: RegExpMatchArray | null = null;
             if (m.toolName === "subagent") {
-              hm = extractText(m.content).match(/\bsa-\d+\b/g);
+              hm = extractText(m.content).match(/\bsa-(?:\d+|[0-9a-f]{8})\b/g);
               if (hm) for (const x of hm) this.subagentHandles.add(x);
             }
             const det = m.details as Record<string, unknown> | undefined;
@@ -928,22 +925,23 @@ export class PiCore {
             const hInDetail = results[0]?.handle;
             const hInText = results.length === 1 && hm?.length === 1 ? hm[0] : null;
             h =
-              typeof hInDetail === "string" && /^sa-\d+$/.test(hInDetail)
+              typeof hInDetail === "string" && /^sa-(?:\d+|[0-9a-f]{8})$/.test(hInDetail)
                 ? hInDetail
                 : hInText ?? (typeof m.toolCallId === "string" ? m.toolCallId : typeof m.id === "string" ? m.id : null);
             if (!h) continue;
             frame = { detail: det, final: true, ...(rec.timestamp ? { endAt: Date.parse(rec.timestamp as string) || undefined } : {}) };
           }
           this.subagentHandles.add(h); // 台账收口：本会话 handle 集
+          // 只回填 task（v23 帧不带 messages；明细一律点进子会话看）
+          if (isAsyncEntry) this.fillFrameTask(h, frame.detail);
           order++;
           const prev = finals.get(h);
           if (!prev || frame.final) finals.set(h, { frame, order });
         }
-        // frames.jsonl 重放（2026-11-02 段 3 治本）：SDK 宿下 custom 帧不落盘，
-        // 帧真值由 harness 自写 runDir/frames.jsonl——句柄集内的运行才收（跨会话不串）；
-        // 与 entry 帧双路并存，同 id 覆盖写（updateSubRun 幂等）不双份。
-        // 【为何不能只读 entry 帧】cli 进程能落 5/5、面板（SDK 进程内）0 帧——不赌 pi 的
-        // appendEntry 装配，帧渠道自己写（harness 侧同款注释）
+        // frames.jsonl 重放（2026-11-02 段 3）：**当初的理由（「SDK 宿下 custom 帧不落盘」）
+        // 已被实测推翻**——2026-11-17 那个 299MB 父会话里 266.7MB 全是 custom 帧，pi 确实落盘。
+        // 现在它是「会话文件不可读」时的免疫路（幽灵路径/空窗，见上方 ledgerHit 分支），
+        // 且只读最后一行（见 replayFramesFromDisk）——不是帧真值的唯一来源，删之前先读那两处注释
         if (agentDir) {
           // 帧目录：台账命中的优先（parentSession 已对上），其余按 handle 补——
           // v8 分桶后帧在 <台账 sessionDir>/frames.jsonl，旧平铺布局继续兜底
@@ -961,7 +959,7 @@ export class PiCore {
         this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
         for (const [h, { frame }] of ordered) {
-          const snap = subagentSnapshot(frame.detail);
+          const snap = subagentSnapshot(this.fillFrameTask(h, frame.detail));
           if (!snap) continue;
           // 快照里还有 running 任务的帧不投（异步壳冻结态/口径异常），防水久「处理中」假行
           if (snap.tasks.some((t) => t.status === "running")) continue;
@@ -997,21 +995,17 @@ export class PiCore {
         const dir = frameDir.get(h);
         if (dir) candidates.push(path.join(dir, "frames.jsonl"));
         candidates.push(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"));
-        let text: string | null = null;
+        // 只取最后一条完整行（2026-11-18 帧瘦身前，单文件实测 69MB——为最后一行把全文读进内存
+        // 再逐行 parse 是白付：面板重放卡顿的元凶之一）
+        type FrameLine = { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown };
+        let last: FrameLine | null = null;
         for (const p of candidates) {
           try {
-            text = fs.readFileSync(p, "utf8");
+            last = readLastJsonLine(p) as FrameLine | null;
             break;
           } catch {
             /* 试下一个布局 */
           }
-        }
-        if (text === null) continue;
-        const lines = text.split("\n");
-        let last: { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown } | null = null;
-        for (const ln of lines) {
-          if (!ln.trim()) continue;
-          try { last = JSON.parse(ln); } catch { /* 截断半条跳过 */ }
         }
         const snap = last ? subagentSnapshot(last.detail) : null;
         // 只收终态帧：运行中的帧留给 live 流，重放旧 running 会造「永久处理中」假行
@@ -1036,14 +1030,6 @@ export class PiCore {
 
   private async dispatchWebviewMessage(m: WebviewToHost): Promise<void> {
     switch (m.type) {
-      case "subagentDetailRequest": {
-        // 工单 A 下钻：概览行点击 → 用留存的全量 details 构建 Full 快照（活动流 400 条、
-        // 产出 60k 字）；无留存（webview 重载后历史丢失）回空任务快照，前端显示无数据
-        const rec = this.subagentRuns.get(m.id);
-        const snap = subagentSnapshotFull(rec?.details) ?? { mode: "single" as const, tasks: [] };
-        this.post({ type: "subagentDetail", id: m.id, snapshot: snap });
-        break;
-      }
       case "webviewReady": {
         // webview（重）加载完成：无条件拉一次会话重绘。重开插件/窗口重载/临时切走后回来，
         // 历史聊天都在——这是「聊天记录丢了」事故的第一道保险（真相重发已抽成 postUiState，刀5）
@@ -1262,7 +1248,7 @@ export class PiCore {
         if (agentDir2) {
           const base = path.join(agentDir2, "sessions", "subagents");
           try {
-            for (const h of fs.readdirSync(base)) if (/^sa-\d+$/.test(h)) dirs.push(path.join(base, h));
+            for (const h of fs.readdirSync(base)) if (/^sa-(?:\d+|[0-9a-f]{8})$/.test(h)) dirs.push(path.join(base, h));
           } catch { /* 无子会话 */ }
         }
         if (this.lastSessionFile) dirs.push(path.dirname(this.lastSessionFile));
@@ -1304,7 +1290,7 @@ export class PiCore {
           break;
         }
         const h = String(m.handle ?? "");
-        if (!/^sa-\d+$/.test(h)) break; // 只认句柄（call_* 是同步调用，无独立子会话）
+        if (!/^sa-(?:\d+|[0-9a-f]{8})$/.test(h)) break; // 只认句柄（call_* 是同步调用，无独立子会话）
         // 目录优先取台账 sessionDir（2026-11-02 按项目分桶后不再能拼死路径：
         // 新单在 subagents/<项目slug>/<handle>/，老单在 subagents/<handle>/）；
         // 台账读不到才退回旧平铺布局（兑底，不让无台账的边角直接失效）
@@ -2711,7 +2697,7 @@ export class PiCore {
             const rid = snap.tasks.find((t) => t.handle)?.handle ?? e.toolCallId;
             const rec = this.trackSubagentRun(rid, e.partialResult?.details);
             this.post({ type: "subagentUpdate", id: rid, snapshot: snap, final: false, startAt: rec.startAt });
-            this.pushTranscriptDelta(rid, e.partialResult?.details); // 转录页增量（事件驱动）
+            this.caps.pushSubagentTranscriptReload?.(rid); // 转录页自己去读子会话文件增量
           }
         }
         break;
@@ -2733,11 +2719,13 @@ export class PiCore {
           const data = e.entry.data as
             | { handle?: string; status?: string; detail?: unknown; startedAt?: number; endedAt?: number }
           | undefined;
-          const asyncSnap = data?.handle ? subagentSnapshot(data.detail) : null;
+          // v22：帧是增量的，先在入口拼回累计再喂下游（见 mergeSubagentFrame）
+          const frameDetail = data?.handle ? this.fillFrameTask(data.handle, data.detail) : data?.detail;
+          const asyncSnap = data?.handle ? subagentSnapshot(frameDetail) : null;
           if (asyncSnap && data!.handle) {
             this.subagentHandles.add(data!.handle); // 台账收口：实时 handle 也入集
             // 异步运行计时由扩展随 entry 带来（扩展侧 spawn 时起表，比宿主首见准）
-            const rec = this.trackSubagentRun(data!.handle, data!.detail);
+            const rec = this.trackSubagentRun(data!.handle, frameDetail);
             if (typeof data!.startedAt === "number") rec.startAt = data!.startedAt;
             if (typeof data!.endedAt === "number") rec.endAt = data!.endedAt;
             this.post({
@@ -2748,7 +2736,7 @@ export class PiCore {
               startAt: rec.startAt,
               endAt: rec.endAt,
             });
-            this.pushTranscriptDelta(data!.handle, data!.detail); // 转录页增量（事件驱动）
+            this.caps.pushSubagentTranscriptReload?.(data!.handle); // 转录页自己去读子会话文件增量
             // 终态 → 左侧列表刷新（2026-11-02：主会话下多一行子会话，不刷就看不见）
             if (data!.status !== "running") this.caps.onSubagentSettled?.();
           }
@@ -2800,7 +2788,7 @@ export class PiCore {
           // 改吃回执句柄：抓到 sa-n = 异步派发（真进度/终态都归句柄行），壳行无条件关；
           // 终态归位句柄行仅在句柄行尚无留存时——entry 终帧是真值，不许壳快照幂等覆盖它。
           // 抓不到句柄 = 同步调用，旧行为零改动（判壳旧式保留为兑底）
-          const hm = extractText(e.result?.content).match(/\bsa-\d+\b/);
+          const hm = extractText(e.result?.content).match(/\bsa-(?:\d+|[0-9a-f]{8})\b/);
           const isAsyncShell = !!hm || (!!finalSnap && finalSnap.tasks.some((t) => t.status === "running"));
           if (finalSnap && !isAsyncShell) {
             // 同步单落盘后快照带 sa-N（2026-11-02）：行 id 用句柄——与台账行同键，
@@ -2821,13 +2809,19 @@ export class PiCore {
           } else {
             if (finalSnap && hm && !this.subagentRuns.has(hm[0])) {
               // entry 帧没来的边角：终态归位句柄行（有 entry 留存时不动，终帧是真值）
+              // 【2026-11-18 实测事故】这里拿到的是**异步壳的冻结快照**（任务 status 还是 running）。
+              // 以前不看状态就 final:true + endAt=now，一旦实时帧通道断了（当时是 services 复用
+              // 导致扩展 runtime stale），这行就永远是「处理中 + 跑表一直涨」，既不降级也不报错——
+              // 用户看到的就是「子 agent 干完活，面板还一直处理中」。仍跑的壳只表明「已派出」，
+              // 不算终态：不盖 endAt、不标 final，交给实时帧收尾（断了 30 分钟后会降级「疑似失联」）
+              const shellRunning = finalSnap.tasks.some((t) => t.status === "running");
               const rec = this.trackSubagentRun(hm[0], e.result?.details);
-              rec.endAt = Date.now();
+              if (!shellRunning) rec.endAt = Date.now();
               this.post({
                 type: "subagentUpdate",
                 id: hm[0],
                 snapshot: finalSnap,
-                final: true,
+                final: !shellRunning,
                 startAt: rec.startAt,
                 endAt: rec.endAt,
               });
@@ -3021,6 +3015,33 @@ export class PiCore {
   }
 }
 
+/** 读 JSONL 最后一条完整行（帧文件专供）：只从文件尾读一窗，逐行从后往前试 parse。
+ *  历史帧文件实测最大 69MB / 127 行（单行中位 238KB）——全文读入只为最后一行是白付。
+ *  首行在窗口起点被截断时正好 parse 失败，会自然往前退到上一条完整行（也兑底崩溃半行）。 */
+function readLastJsonLine(file: string, windowBytes = 512 * 1024): unknown {
+  const fd = fs.openSync(file, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (!size) return null;
+    const start = Math.max(0, size - windowBytes);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const ln = lines[i];
+      if (!ln.trim()) continue;
+      try {
+        return JSON.parse(ln);
+      } catch {
+        /* 窗口首行可能被截断：继续往前 */
+      }
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /** 工单24 闸门直发类型：uiState 本身（回放触发器，闸门解除前必须先到 webview）+ 非流式/
  *  交互应答类（notice/status/fillInput、下钻、斜杠菜单、文件附加等——与快照无序依赖，
  *  直发不被 renderAll 冲掉）。其余（流式 delta/thinking/toolCall*、newLive、toolStart/End、
@@ -3030,7 +3051,6 @@ const GATE_PASS_TYPES = new Set<string>([
   "notice",
   "status",
   "fillInput",
-  "subagentDetail",
   "slashList",
   "fileList",
   "addFiles",

@@ -212,7 +212,6 @@ export type WebviewToHost =
   | WvGetFilesMsg
   | WvMoreMsg
   | WvSettingsMsg
-  | WvSubagentDetailRequestMsg
   | WvPickModelMsg
   | WvPickThinkingMsg
   | WvPickThemeMsg
@@ -323,22 +322,13 @@ export interface SubagentUpdateMsg {
   final: boolean;
   /** 宿主关闭该运行：异步派发的同步壳行应删除（真进度走 sa-n 句柄行，别双份） */
   closed?: boolean;
-  /** 运行计时（宿主测量，概览用时列/下钻显示用）；异步路径来自扩展 entry */
+  /** 运行计时（宿主测量，概览用时列显示用）；异步路径来自扩展 entry */
   startAt?: number;
   endAt?: number;
 }
-/** 下钻请求：webview 点概览行 → 宿主用留存的全量 details 构建 Full 快照回给 webview */
-export interface WvSubagentDetailRequestMsg {
-  type: "subagentDetailRequest";
-  /** 运行 id（同 subagentUpdate.id） */
-  id: string;
-}
-export interface SubagentDetailMsg {
-  type: "subagentDetail";
-  id: string;
-  /** Full 快照（活动流上限 400 条、产出 60k 字，webview markdown 渲染） */
-  snapshot: SubagentSnapshot;
-}
+// 【下钻协议 2026-11-19 删除】WvSubagentDetailRequestMsg / SubagentDetailMsg：
+// 浮窗不再画活动流与产出（帧也不再带 messages），明细一律点进子会话转录页看。
+// 旧页面发来的 subagentDetailRequest 落到 default 分支静默丢弃，不报错。
 export interface BusyMsg {
   type: "busy";
   value: boolean;
@@ -787,7 +777,6 @@ export type HostToWebview =
   | ToolCallDeltaMsg
   | ToolEndMsg
   | SubagentUpdateMsg
-  | SubagentDetailMsg
   | SubagentLedgerMsg
   | BusyMsg
   | RenderMsg

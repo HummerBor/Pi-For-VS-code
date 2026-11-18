@@ -147,7 +147,9 @@ export function classifyDeath(rec: RunRecord): RunRecord["deathReason"] {
 	return "disconnected";
 }
 
-/** 句柄序号续接：重启后 sa-N 不许回退重号（台账按 handle 归档，重号会串档） */
+/** 【v24 起废弃】原「句柄序号续接」：新句柄是 uuid 派生（sa-<8 hex>），不再自增、不再需要
+ *  续接（也就没有「重启回退重号」这个问题了）。历史台账里的 sa-12 照旧可读、可 collect。
+ *  函数保留一版给外部脚本/排查用，别再往新代码里接。 */
 export function maxHandleSeq(): number {
 	let max = 0;
 	for (const r of readAllRuns()) {

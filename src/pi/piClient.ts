@@ -244,6 +244,13 @@ export class PiClient {
     }
     return this.servicesPromise;
   }
+  /** createRuntime 调用次数：首次（boot）吃 memo/预热，之后每次会话替换都重建 services。
+   *  替换必须重建（原因见 createRuntime 里的 stale 注释）；首次不重建（保启动速度与预热收益）。 */
+  private servicesBuilds = 0;
+  private pickServices(sdk: any, cwd: string): Promise<any> {
+    this.servicesBuilds++;
+    return this.servicesBuilds === 1 ? this.ensureServices(sdk, cwd) : createServices(sdk, cwd);
+  }
   /** pi 真相同步读（工单十五刀6）：RPC 时代镜像+三层对账去猜，直连后 isStreaming 随手可读
    *  （agent-session.d.ts:295）——piCore.busy 的派生源之一 */
   get isStreaming(): boolean {
@@ -324,7 +331,15 @@ export class PiClient {
         sessionStartEvent?: any;
       }) => {
         const tS = Date.now();
-        const services = await this.ensureServices(sdk, opts.cwd);
+        // 会话替换必须换一套 services（2026-11-18 实测定案）：扩展推送口（runtime.sendUserMessage /
+        // appendEntry）挂在 services 的 ResourceLoader 上（loader.js 单一 extensionsResult.runtime，
+        // runner.bindCore 往里灌），而 AgentSession.dispose() 会给这个共享对象打 stale 标记
+        // （loader.js:145，拿到 staleMessage 后所有动作直接抛）。复用同一 loader = 新会话拿到的还是
+        // 那个已 stale 的 runtime：扩展工具照跑，但 appendEntry / sendUserMessage **永久抛错**
+        // ——子 agent 进度帧一条都到不了面板、完成回传发不出、台账 reported 恒 false，面板就钉在
+        // 「处理中」（世界项目 p442 切会话后 sa-101~106 全部如此）。
+        // pi 官方语义就是「每次替换重建 services」（docs/sdk.md:58 + examples/sdk/13）。
+        const services = await this.pickServices(sdk, opts.cwd);
         this.onDebug?.("[boot] services +" + (Date.now() - t0) + "ms (单跳" + (Date.now() - tS) + "ms)");
         const tE = Date.now();
         const sess = await sdk.createAgentSessionFromServices({

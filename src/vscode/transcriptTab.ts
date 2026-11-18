@@ -16,6 +16,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { getHtml } from "./webview-html";
 import { markWebviewAttached } from "./webviewGuard";
+import { fileBytes, readNewMessages } from "../domain/jsonlTail";
 import type { Lang } from "../core/i18n";
 
 interface Tab {
@@ -24,6 +25,10 @@ interface Tab {
   handle?: string;
   messages: unknown[];
   nextIndex: number;
+  /** v23：已读到的字节偏移（子会话 jsonl 只追加，帧只负责叫一声「有新内容」） */
+  bytes: number;
+  /** 读取用的文件路径（与 key 不同：同一 handle 单次只一份） */
+  file: string;
   ready: boolean;
   /** 页脚展示用（模型 / 思考等级 / 花费）：只读，不让点 */
   meta: History;
@@ -40,7 +45,7 @@ function keyOf(handle: string | undefined, file: string): string {
 }
 
 function handleOf(file: string): string | undefined {
-  return /[\\/](sa-\d+)[\\/]/.exec(file)?.[1];
+  return /[\\/](sa-(?:\d+|[0-9a-f]{8}))[\\/]/.exec(file)?.[1];
 }
 
 interface History {
@@ -216,6 +221,8 @@ export function openTranscriptTab(opts: OpenTranscriptOptions): void {
     handle,
     messages: hist.messages,
     nextIndex: hist.messages.length,
+    bytes: fileBytes(opts.file),
+    file: opts.file,
     ready: false,
     meta: hist,
     liveOpen: false,
@@ -243,7 +250,7 @@ export function openTranscriptTab(opts: OpenTranscriptOptions): void {
   });
 }
 
-/** 事件流增量（piCore 每帧调）：只追加新消息，然后重绘一次（renderAll 与主会话切会话同一条路） */
+/** 事件流增量（保留给关文件读失败的兼容路）：只追加新消息，然后重绘一次 */
 export function pushTranscript(handle: string, messages: unknown[], from?: number): void {
   const tab = tabs.get("h:" + handle);
   if (!tab || !messages?.length) return;
@@ -257,6 +264,18 @@ export function pushTranscript(handle: string, messages: unknown[], from?: numbe
   // 页面侧最多保留 500 条（长转录不至于每帧重绘上千节点）
   if (tab.messages.length > 500) tab.messages = tab.messages.slice(-500);
   render(tab);
+}
+
+/** 增量重读子会话 jsonl（v23）：帧不再带正文，只用来喊一声「有新内容了」——
+ *  真值永远是子进程写的那个文件（解析/偏移的边界见 domain/jsonlTail.ts 头注释）。
+ *  页面没开 → 不读盘；没有新内容 → 不重绘。 */
+export function reloadTranscript(handle: string): void {
+  const tab = tabs.get("h:" + handle);
+  if (!tab) return;
+  const got = readNewMessages(tab.file, tab.bytes);
+  if (!got) return;
+  tab.bytes = got.offset;
+  if (got.messages.length) pushTranscript(handle, got.messages, tab.nextIndex);
 }
 
 /** 供 sessionsView 直接调用（左侧列表点子会话行） */

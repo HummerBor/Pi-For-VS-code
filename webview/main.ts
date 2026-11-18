@@ -17,6 +17,7 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState
 // 语言跟随宿主写入的 <html lang="zh|en">
 const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh") as Lang];
 (function(){
+
   var vscodeApi = acquireVsCodeApi();
   // ── 工单十五：tabId 收发桥（协议见 src/protocol.ts TabTag）──
   // webview→宿主的消息统一带活动标签的 tabId（tabNew/tabSwitch/tabClose 自带目标标）；
@@ -316,6 +317,35 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   var chgData: { files: ChangesDiffFile[]; totalAdds: number; totalDels: number } | null = null;
   var chgSel = '';
     var built = false; // uiState/render 快照是否已建树（activateTab 按此决定要不要向宿主要快照）
+  /** 输入区一次性绑定（v25，2026-11-19 用户实测「输入框点发送直接没反应」的止血）。
+   *
+   *  这几条原来写在 bindViewEvents 尾部：那个函数**前面任何一处抛错**，就永远执行不到这里
+   *  ——而模板里 input 是 `disabled` 的（V 刀为消灭「画出来但没绑」的死窗口故意加的），
+   *  于是输入框点不动、回车没反应、发送按钮点了没反应，而且**日志零留痕**（消息根本没离开
+   *  webview）。0.1.20「全控件死」（bindViewEvents 漏调）是同族事故。
+   *
+   *  现在提到模块级 + 幂等标志：视图绑定那坨再怎么炸，发消息这条命脉必须活着。
+   *  绑定前会先把元素查好（静态模板元素，模块加载时就在）。 */
+  var composerBound = false;
+  function bindComposerOnce() {
+    if (composerBound) return;
+    composerBound = true;
+    sendBtn.addEventListener('click', send);
+    input.addEventListener('keydown', inputKeydown);
+    input.addEventListener('paste', inputPaste);
+    // 用户一编辑即退出回溯（程序化赋值不触发 input，不影响 histNav）
+    // 全角归一（2026-11-03 用户报「输入法切到全角，输入框里英文变成 ｓ ｓ ｓ 大间距」）：
+    // 组字中不动，上屏后立刻转半角，见 toHalfWidth 注释
+    input.addEventListener('input', function (e) {
+      histIdx = -1; histDraft = '';
+      if (!(e as any).isComposing) normalizeInputWidth();
+      updateSuggest(); autoSize();
+    });
+    // Chrome 里 compositionend 早于最终 input 落字，补一刀跟着归一（幂等，重复调用无副作用）
+    input.addEventListener('compositionend', function () { setTimeout(normalizeInputWidth, 0); });
+    input.disabled = false; // 按键已绑才放开输入框（模板里 disabled，消灭死窗口）
+  }
+
   function bindViewEvents() {
     // 变更页：返回按钮（页头）+ 标题/返回文案（i18n）
     chgBackEl.textContent = '↖ ' + L.chgPageBack;
@@ -369,7 +399,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       input.value = (v ? v + ' ' : '') + '@'; // 已有文字补空格，@ 才能触发搜索（@ 要求行首或空格后）
       input.focus(); updateSuggest();
     });
-    sendBtn.addEventListener('click', send);
+    bindComposerOnce(); // 发送命脉单独绑（见函数注释）：bindViewEvents 前面炸了也照样能发
     stopBtn.addEventListener('click', function () { vpost({ type: 'abort' }); });
     fileInput.addEventListener('change', function () { handleFiles(fileInput.files || [], null); fileInput.value = ''; });
     modelEl.addEventListener('click', function () { vpost({ type: 'pickModel' }); });
@@ -423,19 +453,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     thinkEl.addEventListener('click', function () { vpost({ type: 'pickThinking' }); });
     modeBadge.addEventListener('click', function () { vpost({ type: 'pickMode' }); });
     codechipEl.addEventListener('click', function () { codeOn = !codeOn; renderCodeChipAll(); });
-    // 用户一编辑即退出回溯（程序化赋值不触发 input，不影响 histNav）
-    // 全角归一（2026-11-03 用户报「输入法切到全角，输入框里英文变成 ｓ ｓ ｓ 大间距」）：
-    // 组字中不动，上屏后立刻转半角，见 toHalfWidth 注释
-    input.addEventListener('input', function (e) {
-      histIdx = -1; histDraft = '';
-      if (!(e as any).isComposing) normalizeInputWidth();
-      updateSuggest(); autoSize();
-    });
-    // Chrome 里 compositionend 早于最终 input 落字，补一刀跟着归一（幂等，重复调用无副作用）
-    input.addEventListener('compositionend', function () { setTimeout(normalizeInputWidth, 0); });
-    input.addEventListener('keydown', inputKeydown);
-    input.disabled = false; // V 刀：按键已绑才放开输入框（模板里 disabled，消灭死窗口）
-    input.addEventListener('paste', inputPaste);
     renderCodeChip();
   }
     // ＋菜单文档级关闭监听：每视图一份各关各的（原全局监听读镜像，随换镜退役）
@@ -901,7 +918,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var sm2 = (text || '').match(/^\[子 agent (\S+) (完成|失败|已终止)\] ([^:\n]*): ?/);
     if (sm2) {
       var card = el('div', 'subret' + (sm2[2] === '完成' ? '' : ' fail'));
-      var sh = el('div', 'subret-head', '⮑ 子 agent ' + sm2[1] + ' · ' + sm2[2] + (sm2[3] ? ' · ' + sm2[3] : ''));
+      var sh = el('div', 'subret-head', '⮑ 子 agent ' + sm2[2] + (sm2[3] ? ' · ' + sm2[3] : ''));
+      sh.appendChild(el('span', 'subret-h', ' · ' + sm2[1])); // 句柄弱化：可读可抄，不抢眼
       card.appendChild(sh);
       var sb = el('div', 'subret-body');
       renderRich(sb, text.slice(sm2[0].length) || text); // 正文 markdown 渲染（回报常带表格）
@@ -983,7 +1001,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       var fm = nativeQueuePills[j];
       var nb = el('div', 'q-item q-native'); nb.setAttribute('data-native', '1');
       var ni = el('span', 'q-ico'); ni.innerHTML = ico('clock', 12); nb.appendChild(ni);
-      nb.appendChild(el('span', 'q-text', '⮑ 子 agent ' + fm[1] + ' · ' + fm[2] + (fm[3] ? ' · ' + fm[3] : '') + ' · ' + L.subRetQueued));
+      nb.appendChild(el('span', 'q-text', '⮑ 子 agent ' + fm[2] + (fm[3] ? ' · ' + fm[3] : '') + ' · ' + L.subRetQueued));
       qb.appendChild(nb);
     }
   }
@@ -2304,7 +2322,16 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 点消息区 = 点到浮层外：收起上下文用量弹层（标准浮层行为；监听挂在 root 上，
     // 视图销毁即随 DOM 一起走，不往 document 上挂——那会按页签数累加并泄漏）
     root.addEventListener('click', function () { ctxPopEl.style.display = 'none'; syncCtxTick(); });
-    bindViewEvents(); // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）
+    // 建视图即绑事件 + 注图标（原 makeView 职责，三期壳胶水——漏掉即全控件死，事故见 BUILDER.md 交接 5）。
+    // 2026-11-19：包 try/catch/finally——binding 炸了也只损失控件，不许把输入框永久锁死，
+    // 且错误必须落盘（webview 红字桥 → pi-chat-debug.log），下次不再「零留痕」。
+    try {
+      bindViewEvents();
+    } catch (err: any) {
+      reportWvError('bindViewEvents', String((err && err.message) || err), '', 0, err && err.stack);
+    } finally {
+      bindComposerOnce();
+    }
     return {
       handleMsg: handleMsg, renderCodeChip: renderCodeChip, handleFiles: handleFiles,
       refreshBusy: renderBusyUi, // 白 Working 兑底：切回页签按本页签真相重渲状态行（激活时调）
@@ -2698,8 +2725,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   /** 台账行（段 3 刀 2）：宿主 subagentLedger 推送的全局历史/在册状态（跨会话/跨重启），
    *  与页签 runs（浮窗直播）双源并存——活行走 runs，台账补历史/死因/回传未达 */
   var subLedgerRows: any[] = [];
-  var subDetailCache: Record<string, SubagentSnapshot> = {}; // runId → Full 快照（下钻用，宿主留存的全量）
-  var subDetailView: string | null = null; // "runId:taskIndex"；null=概览
   var subShowAllDone = false; // 完成列表封顶的展开开关（「…展开剩余」点开）
   // （计时口径已归位：一轮一只累计秒表，走秒/冻结都在视图状态行 renderBusyUi，
   //   chip 不带表——2026-10-23 用户三连纠偏「这是啥/上一轮的？/会不会懵逼」）
@@ -2768,11 +2793,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (startAt !== undefined) rec.startAt = startAt;
     if (endAt !== undefined) rec.endAt = endAt;
   }
-  function openSubDetail(runId: string, ti: number) {
-    subDetailView = runId + ':' + ti;
-    if (!subDetailCache[runId]) vscode.postMessage({ type: 'subagentDetailRequest', id: runId });
-    renderSubDock();
-  }
   function renderSubDock() {
     var d = dockEnsure();
     var runs = subRunsOf(activeTabId);
@@ -2792,27 +2812,14 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var head = d.firstElementChild as HTMLElement;
     var body = d.lastElementChild as HTMLElement;
     head.innerHTML = '';
-    if (subDetailView) {
-      // 下钻模式：返回并进标题行（2026-09-18 用户反馈：单独一行浪费且突兀）；
-      // 标题显示当前任务 agent 名（Codex 同款），Full 缓存未到时回退通用标题
-      var dparts = subDetailView.split(':');
-      var dfull = subDetailCache[dparts[0]];
-      var dtask = dfull && dfull.tasks[Number(dparts[1]) || 0];
-      var backB = el('span', 'sd-btn sm-back-head', '‹ ' + L.smBack);
-      backB.addEventListener('mousedown', function (e) { e.stopPropagation(); }); // 拖拽/收起路径全断
-      backB.addEventListener('click', function (e) { e.stopPropagation(); subDetailView = null; renderSubDock(); });
-      head.appendChild(backB);
-      head.appendChild(el('span', 'sm-title', dtask ? dtask.agent : L.smTitle));
-    } else {
-      head.appendChild(elIco('sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
-      head.appendChild(el('span', 'sm-title', L.smTitle));
-    }
+    head.appendChild(elIco('sm-ico' + (subRunning ? ' spin' : ''), ico(subRunning ? 'loading' : 'cpu', 13)));
+    head.appendChild(el('span', 'sm-title', L.smTitle));
     var minB = el('span', 'sd-btn', '—'); minB.title = L.smCollapse;
     minB.addEventListener('click', function (e) { e.stopPropagation(); dockSetCollapsed(true); });
     head.appendChild(minB);
     body.innerHTML = '';
-    if (subDetailView) { body.classList.add('sm-detail'); renderSubDetail(body); } // sm-detail：css 放开 pre-wrap
-    else { body.classList.remove('sm-detail'); renderSubOverview(body, runs); }
+    body.classList.remove('sm-detail');
+    renderSubOverview(body, runs);
     linkify(body);
     updateSubInd();
     renderSubChip();
@@ -2863,7 +2870,11 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     main.appendChild(el('div', 'sm-status' + (st === 'failed' ? ' fail' : ''), snip));
     rowEl.appendChild(main);
     var time = (r.endedAt || r.startedAt) ? fmtRel(r.endedAt || r.startedAt) : '';
-    if (time) rowEl.appendChild(el('span', 'sm-time', time));
+    if (time) {
+      var tSpan = el('span', 'sm-time', time);
+      tSpan.setAttribute('data-ts', String(r.endedAt || r.startedAt));
+      rowEl.appendChild(tSpan);
+    }
     var tips: string[] = [];
     if (r.reported === false) tips.push(L.smUnreported);
     // 展开回看（段 3 刀 3）：终态行点开子会话（pi 原生渲染，不自绘转录）；running/orphaned
@@ -2954,43 +2965,36 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     agEl.style.color = agentColor(t.agent); // 每 agent 固定色（抄 CC）
     line1.appendChild(agEl);
     line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? (stale ? 'stale' : 'run') : t.status === 'failed' ? 'fail' : 'done'), stTxt));
-    // 进程量（2026-10-23 用户「要一个直观看到进程的地方」）：运行中行显示轮次/吞吐
-    // （t.usage = 快照 fmtUsage：21 turns ↑103k…），配合活状态行一屏看全「跑到哪了」
-    if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage)); // 用量收束行（抄 CC Done 行：收尾也显 turns/tokens/$）
+    // （用量收束行 2026-11-19 删除：ctx/花费不进浮窗，要看点进子会话）
     main.appendChild(line1);
-    // 第二行：任务摘要单行省略（全是 worker 时靠任务认行；全文 hover title / 点行下钻）
+    // 第二行只留任务（2026-11-19 用户拍板：浮窗只留 子名称 + 状态 + 父任务 + 时间；
+    // 活动明细与用量全部删除——要看过程点进子会话转录页）。
+    // 失败行例外保留「为什么挂」首行：那是状态信息，不然挂了只能点进去才知道原因
     var taskSnipBase = t.status === 'failed'
-      // 失败行带原因（B1，2026-10-23）：快照 output 对失败任务取 errorMessage/stderr
-      // （subagentSnapshot 口径），列表行直接见「为什么挂」（如 402 额度），不用点下钻
-      ? (((t.output || '').split('\n')[0] || '').trim() || t.task || '')
-      // 运行中行带活状态（2026-10-23 用户拍板「要体现子智能体的状态」）：第二行滚动显示
-      // 活动流尾条（与下钻同源），比静态任务摘要更像「它此刻在干嘛」；秒表每秒重绘会刷新
-      : (t.status === 'running' && t.items && t.items.length)
-        ? String(t.items[t.items.length - 1]).replace(/^\s*⮑\s*/, '')
-        : (t.task || '');
+      ? (((t.error || '').split('\n')[0] || '').trim() || t.task || '')
+      : (t.task || '');
     // 摘要去 markdown 记号（2026-10-23「很漏」：**只测不修** 这类原文星号直接漏在列表上）
     var taskSnip = taskSnipBase.replace(/\s+/g, ' ').replace(/[*_`#]/g, '').slice(0, 48);
     var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), taskSnip);
-    // 运行中行悬停显示最近 3 条动作（抄 CC MAX_PROGRESS_MESSAGES_TO_SHOW=3）
-    line2.title = (t.status === 'running' && t.items && t.items.length) ? t.items.slice(-3).join('\n') : taskSnipBase;
+    line2.title = taskSnipBase;
     main.appendChild(line2);
     rowEl.appendChild(main);
     // 右侧时间：运行中=已用时长（秒表每秒重绘概览），收尾=相对时间（Codex 同款）。
     // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
-    var time = t.status === 'running'
-      ? (stale
-        ? ((row.rec.lastFrameAt || row.rec.startAt) ? fmtRel(row.rec.lastFrameAt || row.rec.startAt) : '') // 失联停表：最后活动相对时间
-        : (row.rec.startAt ? fmtElapsed(Date.now() - row.rec.startAt) : ''))
-      : ((row.rec.endAt || row.rec.startAt) ? fmtRel(row.rec.endAt || row.rec.startAt) : '');
-    if (time) rowEl.appendChild(el('span', 'sm-time', time));
-    // 实时明细入口（2026-11-03）：行点击改成「开会话页 / 运行中快照」后，下钻归这个按钮
-    var drillBtn = el('span', 'sm-drill', '⋯');
-    drillBtn.title = L.smDetail;
-    drillBtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      openSubDetail(row.runId, row.ti);
-    });
-    rowEl.appendChild(drillBtn);
+    // data-el / data-ts 供 refreshSubTimes 就地刷新（见其头注释）
+    var timeSpan: HTMLElement | null = null;
+    if (t.status === 'running' && !stale && row.rec.startAt) {
+      timeSpan = el('span', 'sm-time', fmtElapsed(Date.now() - row.rec.startAt));
+      timeSpan.setAttribute('data-el', String(row.rec.startAt));
+    } else if (t.status === 'running' && stale && (row.rec.lastFrameAt || row.rec.startAt)) {
+      timeSpan = el('span', 'sm-time', fmtRel(row.rec.lastFrameAt || row.rec.startAt)); // 失联停表：最后活动相对时间
+      timeSpan.setAttribute('data-ts', String(row.rec.lastFrameAt || row.rec.startAt));
+    } else if (row.rec.endAt || row.rec.startAt) {
+      timeSpan = el('span', 'sm-time', fmtRel(row.rec.endAt || row.rec.startAt));
+      timeSpan.setAttribute('data-ts', String(row.rec.endAt || row.rec.startAt));
+    }
+    if (timeSpan) rowEl.appendChild(timeSpan);
+    // （下钻按钮/明细浮层 2026-11-19 用户拍板删除：明细去子会话转录页看，浮窗只留名字/状态/任务/时间）
     // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
     // stopPropagation：别点穿成下钻
     if (stale) {
@@ -2999,7 +3003,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         e.stopPropagation();
         var runs = subRunsOf(activeTabId);
         if (runs) delete runs[row.runId];
-        if (subDetailView && subDetailView.split(':')[0] === row.runId) subDetailView = null;
         renderSubDock();
         if (activeTabId !== null) viewFor(activeTabId).refreshBusy(); // 删除可能翻转「还在跑」→ 状态行重算
       });
@@ -3014,8 +3017,8 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 句柄优先（2026-11-02：同步单现在也落独立会话，快照带 handle）：异步/同步统一走
       // 「开页签」。无句柄 = v6 之前的存量行 → 按显示名回找文件（subagentOpenLabel，
       // 宿主侧扫 session_info.name）
-      var openId = (/^sa-\d+$/.test(String(t.handle || ''))) ? String(t.handle) : row.runId;
-      if (/^sa-\d+$/.test(openId)) {
+      var openId = (/^sa-(?:\d+|[0-9a-f]{8})$/.test(String(t.handle || ''))) ? String(t.handle) : row.runId;
+      if (/^sa-(?:\d+|[0-9a-f]{8})$/.test(openId)) {
         vscode.postMessage({ type: 'subagentOpenHandle', handle: openId });
         return;
       }
@@ -3023,57 +3026,34 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
         vscode.postMessage({ type: 'subagentOpenLabel', label: String(t.agent) });
         return;
       }
-      openSubDetail(row.runId, row.ti);
+      // 无句柄无标签的存量行：没有可跳的目标，点行不再做任何事（下钻 2026-11-19 删除）
     });
     return rowEl;
   }
-  function renderSubDetail(body: HTMLElement) {
-    var parts = (subDetailView || '').split(':');
-    var runId = parts[0]; var ti = Number(parts[1]) || 0;
-    var full = subDetailCache[runId];
-    if (!full) {
-      body.appendChild(el('div', 'sm-empty', L.smLoading));
-      vscode.postMessage({ type: 'subagentDetailRequest', id: runId }); // 缓存被逐出/丢失时重取
-      return;
-    }
-    var t = full.tasks[ti];
-    if (!t) { body.appendChild(el('div', 'sm-empty', L.smNoRuns)); return; }
-    // 失联降级同概览口径（看概览 rec 的 lastFrameAt，Full 快照本身无时间戳）
-    var orecs = subRunsOf(activeTabId);
-    var dstale = t.status === 'running' && !!(orecs && orecs[runId] && runStale(orecs[runId]));
-    var hd = el('div', 'sm-task ' + t.status);
-    var line1 = el('div', 'sm-line');
-    line1.appendChild(elIco('sm-ico' + (t.status === 'running' && !dstale ? ' spin' : ''), SM_ICONS[t.status] || '·'));
-    var hdAg = el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : ''));
-    hdAg.style.color = agentColor(t.agent); // 每 agent 固定色（抄 CC）
-    line1.appendChild(hdAg);
-    if (dstale) line1.appendChild(el('span', 'sm-st stale', L.smStale));
-    if (t.usage) line1.appendChild(el('span', 'sm-usage', t.usage));
-    hd.appendChild(line1);
-    if (t.task) { var tk = el('div', 'sm-task-desc', t.task); tk.title = t.task; hd.appendChild(tk); }
-    body.appendChild(hd);
-    // 完整活动流（Full 快照，上限 400 条）
-    for (var ai = 0; ai < t.items.length; ai++) {
-      var isOut = t.items[ai].lastIndexOf('⮑ ', 0) === 0; // 工具输出行（FULL 口径 ⮑ 前缀）
-      var act = el('div', 'sm-act' + (isOut ? ' out' : ''), t.items[ai]); act.title = t.items[ai];
-      body.appendChild(act);
-    }
-    if (t.activityCount > t.items.length)
-      body.appendChild(el('div', 'sm-more', L.smMore.replace('{n}', String(t.activityCount - t.items.length))));
-    // 最终产出 markdown 全文渲染
-    if (t.output) {
-      var out = el('div', 'sm-out-md');
-      renderRich(out, t.output);
-      body.appendChild(out);
-    }
-  }
-  // 秒表：运行中有概览时每秒重绘（用时列跳动）；下钻视图不重绘（丢滚动位置），
-  // 用时在下钻头部静态展示。收起（hidden）时不绘
+  // 秒表：运行中有概览时每秒重绘（用时列跳动）。收起（hidden）时不绘。
+  // 无运行中行时只就地刷时间文本（2026-11-18 用户反馈「时间和状态都不更新」）：原来全收尾后
+  // 重绘循环直接空转，浮窗整个冻住——「5 分钟前」可以停一整天。就地改文本不重建 DOM，
+  // 不重置滚动位置、不打断悬停/点击。
   setInterval(function () {
-    if (!subdock || subdock.classList.contains('hidden') || subDetailView) return;
+    if (!subdock || subdock.classList.contains('hidden')) return;
     var runs = subRunsOf(activeTabId);
     if (runs && anySubRunning(runs)) renderSubDock();
+    else refreshSubTimes();
   }, 1000);
+  /** 时间列就地刷新：data-el=起始时刻（跑表）/ data-ts=时间点（相对时间） */
+  function refreshSubTimes() {
+    if (!subdock) return;
+    var spans = subdock.querySelectorAll('.sd-body .sm-time');
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i] as HTMLElement;
+      var el0 = sp.getAttribute('data-el');
+      var ts = sp.getAttribute('data-ts');
+      var next = '';
+      if (el0 && isFinite(Number(el0))) next = fmtElapsed(Date.now() - Number(el0));
+      else if (ts && isFinite(Number(ts))) next = fmtRel(Number(ts));
+      if (next && next !== sp.textContent) sp.textContent = next;
+    }
+  }
   // 下区控件监听已随视图绑定（bindViewEvents）；这里只绑页面级头部控件
   sessionEl.addEventListener('click', function () { vscode.postMessage({ type: 'pickSession' }); });
   moreEl.addEventListener('click', function () { vscode.postMessage({ type: 'more' }); });
@@ -3132,7 +3112,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 后台流，故在消息丢弃前截获；切回页签时概览随该页签数据恢复，不串台）
   var subCollapsedByTab: Record<string, boolean> = {};
   function applyTabSubState(tid: string) {
-    subDetailView = null; // 页签切换退出下钻（详情缓存按 runId 全局，切回重开仍命中）
     var runs = subRunsByTab[tid];
     if (runs && Object.keys(runs).length) {
       subCollapsed = subCollapsedByTab[tid] === true;
@@ -3245,7 +3224,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       if ((m as any).closed) {
         var cruns = subRunsByTab[stid];
         if (cruns) delete cruns[String(m.id)];
-        if (subDetailView && subDetailView.split(':')[0] === String(m.id)) subDetailView = null;
         if (stid === activeTabId) renderSubDock();
         viewFor(stid).refreshBusy(); // 壳删除也可能翻转「还在跑」判定 → 状态行重算
         return;
@@ -3253,12 +3231,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       updateSubRun(stid, m.id, m.snapshot, m.final, m.startAt, m.endAt);
       if (stid === activeTabId) { if (subdock && !subCollapsed) dockResetPos(subdock); renderSubDock(); }
       viewFor(stid).refreshBusy(); // 子 agent 开跑/收尾翻转「主会话还在干活」：Working 走秒/冻结值接力
-      return;
-    }
-    // 下钻响应同款截获（宿主 this.post 带发起时页签，若用户已切页签则不能丢——缓存全局）
-    if (m.type === 'subagentDetail') {
-      subDetailCache[m.id] = m.snapshot;
-      if (subDetailView && subDetailView.split(':')[0] === String(m.id)) renderSubDock();
       return;
     }
     // 台账行（段 3 刀 2）：全局推送无页签归属——覆盖缓存并重绘当前浮窗
