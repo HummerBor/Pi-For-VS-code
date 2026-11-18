@@ -207,10 +207,13 @@ export class PiCore {
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
   private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number; final?: boolean }>();
-  /** 台账对账定时器（2026-11-19）：面板状态不许只依赖帧通道——帧一旦到不了（扩展 runtime
-   *  stale / 单属于别的会话 / 宿主刚重启），那行就永远「处理中」，用户看到的是「完事了面板
-   *  啥也不变」。这里按 1s 读台账（磁盘真值）跟内存态对账，终态以台账为准收尾。 */
-  private ledgerTimer: any = null;
+  /** 台账对账（2026-11-19）：帧通道是主路（harness 每次状态迁移都发）；这条是**打开即对账**的
+   *  兜底——面板就绪 / 主会话回合结束 / 子 agent 工具收尾这几个时刻各读一次 runs/<handle>.json，
+   *  把「内存还标 processing、台账已终态」的行按台账收尾。
+   *
+   *  为什么不用定时轮询、也不用 fs.watch：轮询是白干活（用户骂得对）；fs.watch 在这台 Windows +
+   *  Node 24 上直接 assert 崩（libuv fs-event.c:72，目录监听和文件监听都复现）。读者监听写者的
+   *  文件本来就不是可靠抽象——状态事件必须由写者（harness）发。 */
   /** 历史重放**已成功扫完**的会话文件（债务④）：每文件只放一次，此后 live 事件接管，
    *  防切页签 uiState 反复重放同帧覆写 webview 较新状态。
    *  【0.1.108 修订】标记只在扫完之后落——0.1.107 的埋点证明真实 boot 两次都死在
@@ -251,15 +254,10 @@ export class PiCore {
    *  台账是 harness 每次状态迁移亲写的磁盘真值，跟帧通道完全解耦——所以「帧没到」不再等于
    *  「面板永远处理中」。没有未收尾的行就自己停表（不常驻轮询）。 */
   private startLedgerReconcile(): void {
-    if (this.ledgerTimer) return;
-    this.ledgerTimer = setInterval(() => this.reconcileSubagentLedger(), 1000);
-    // 定时器不阻进程退出（VS Code 里无所谓，裸跑用例里必须）
-    (this.ledgerTimer as any)?.unref?.();
+    // 保留调用点（trackSubagentRun 时），但**不装监听/不轮询**：见上面字段注释
   }
   private stopLedgerReconcile(): void {
-    if (!this.ledgerTimer) return;
-    clearInterval(this.ledgerTimer);
-    this.ledgerTimer = null;
+    /* 无监听可摘（见字段注释） */
   }
 
   /** 台账 → 面板 对账：内存里还标着「未收尾」的单，只要台账写成了终态，就按台账收尾并刷新。
@@ -271,7 +269,7 @@ export class PiCore {
     try {
       rows = readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle));
     } catch {
-      return; // 台账暂时读不到：下一拍再试，不停表
+      return; // 台账暂时读不到：下一次 fs 事件再试，别解除监听
     }
     /** rec 是否已收尾：显式标记 **或** details 里状态已非 running（重放/同步路的收尾走后者） */
     const isFinal = (rec?: { details?: unknown; final?: boolean }): boolean => {
@@ -280,13 +278,9 @@ export class PiCore {
       const st = (rec.details as { results?: Array<{ status?: string; running?: boolean }> } | null)?.results?.[0];
       return !!st && st.running !== true && typeof st.status === "string" && st.status !== "running";
     };
-    let pending = 0;
     for (const row of rows) {
       const rec = this.subagentRuns.get(row.handle);
-      if (row.status === "running") {
-        if (!isFinal(rec)) pending++;
-        continue;
-      }
+      if (row.status === "running") continue;
       if (!rec || rec.final) continue; // 已收尾或没这单
       // 台账说结束了，面板还挂着 → 以台账为准收尾（帧丢了也能落终态）
       const detail = rec.details as { results?: Array<Record<string, unknown>> } | null;
@@ -305,12 +299,7 @@ export class PiCore {
       }
       this.caps.onSubagentSettled?.();
     }
-    // 内存里还有未收尾的行（台账没写成/被清）：继续对账，别提前停表
-    for (const [, rec] of this.subagentRuns) {
-      if (!isFinal(rec)) pending++;
-    }
     this.pushLedger();
-    if (pending === 0) this.stopLedgerReconcile();
   }
 
   /** 帧回填（v23）：harness 只在首帧/终态帧带 task（省体积），中间帧用上次缓存，
@@ -804,6 +793,9 @@ export class PiCore {
     const dropped = this.gateQueue;
     this.gateQueue = [];
     this.gateOpen = false;
+    // 打开即对账（2026-11-19）：面板就绪/切页签这一刻读一次台账，把「帧丢了还挂着 processing」
+    // 的行按磁盘真值收尾——不轮询、不监听（fs.watch 在本机直接崩），只在真正有人看的时刻读
+    try { this.reconcileSubagentLedger(); } catch { /* 观测面不阻主链路 */ }
     if (dropped.length) {
       this.dbg(
         `gate drop: window=${Date.now() - gateT0}ms dropped=${dropped.length}` +
@@ -3057,6 +3049,8 @@ export class PiCore {
         this.dbg("busy=false (agent_settled, elapsedMs=" + (this.runStartTs > 0 ? Date.now() - this.runStartTs : "n/a") + ")");
         this.runStartTs = 0;
         this.lastQueueTotal = 0;
+        // 回合结束：子 agent 状态可能刚在磁盘上落终态，顺带对一次账（含 kill/崩溃的收尾）
+        try { this.reconcileSubagentLedger(); } catch { /* 观测面不阻主链路 */ }
         // 工单七：run 结束——把工具命中清单交给 adapter（git 比对合并 + UI 出口都在那边）；
         // 清单本体保留到下次 agent_start/换会话，会话域持有（多标签预留）
         if (this.runChangedFiles.size) {
