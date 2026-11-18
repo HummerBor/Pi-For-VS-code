@@ -920,6 +920,11 @@ function startAsyncRun(
 			// 才发现。防双重回传由 run.status 守卫（settled 先到则这里已非 running）
 			reportBackToMain(pi, run);
 		}
+		// 【写者必发终态帧 2026-11-19】进程退出是最后一道：不管状态是这一支定的（跑完/崩了）
+		// 还是别处定的（settled / kill），退出时再推一帧终态。面板状态只该由写者驱动——
+		// 读者去轮询或监听写者文件是错的方向（fs.watch 在 Windows 上还会 assert 崩）。
+		// 幂等：同一 handle 重复帧只覆盖同一行，体积 ~200B。
+		emitAsyncProgress(pi, run);
 	});
 
 	// 请求通道：递话/查询用；3s 无响应视为失败（不吊死调用方）
