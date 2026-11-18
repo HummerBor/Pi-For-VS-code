@@ -123,6 +123,15 @@ pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件
 - 工作树里别人的未提交改动（未跟踪文件/其它模块的 M）一律不碰、不暂存、不提交；
   发现与本单文件重叠先停下问用户，不要自行合并。
 
+### Windows/git 实操坑（实测过，别再踩）
+
+- **本仓 `core.autocrlf=true`**：`git checkout -- <文件>` 会把工作区写成 CRLF（blob 仍是 LF）。
+  `git status` 出现假 ` M` 时先 `git update-index --refresh -- <文件>` 再看，别直接提交。
+- **未跟踪文件不能靠 pathspec 直提**：新建文件必须先 `git add -- <显式路径>`，再
+  `git commit -m ... -- <pathspec>`（否则报 `pathspec did not match`）。
+- **git-bash 的 `/tmp` ≠ node 的 `/tmp`**：bash 里 `/tmp` 映射到 `%TEMP%`，node 解析成 `D:\tmp`。
+  跨进程传临时文件路径一律用 `$TEMP` / `process.env.TEMP`。
+
 ## 命令
 
 | 命令 | 用途 |
