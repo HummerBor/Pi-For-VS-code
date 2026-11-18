@@ -17,6 +17,7 @@ import { initLinkify } from "./features/linkify"; // 文件路径/符号可点�
 import { initLiveStream } from "./features/liveStream"; // live 流式增量渲染（原住本文件，第 5 刀 5b）
 import { initToolRows } from "./features/toolRows"; // 工具调用行（原住本文件，第 5 刀 5c）
 import { initSticky } from "./features/sticky"; // 最后一问钉住折叠（原住本文件，第 5 刀 5e）
+import { initOutline } from "./features/outline"; // 右缘消息大纲轨道（原住本文件，第 5 刀 5g）
 import { initMessageList } from "./features/messageList"; // 整树重绘 / 用户气泡 / toast（原住本文件，第 5 刀 5d）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
@@ -91,7 +92,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     // 上行通道、i18n、建 DOM 工具传进去，数据（chgData/chgSel）住本视图的 state。
     var changesPage = initChangesPage({ state: S, q: q, post: vpost, lang: L, el: el });
     var compactbarEl = q('#compactbar'); // 压缩浮动条（仿改动条：完成后提示 + 点击定位折叠块）
-    var outlineEl = q('#outline'); // 消息大纲轨道（每页签一棵，随视图克隆；逻辑见 olSpy 区）
+    var outlineEl = q('#outline'); // 消息大纲轨道（每页签一棵，随视图克隆；逻辑见 features/outline.ts）
     // 上下文用量弹层 + 页脚用量圆环（2026-11-05）：随页签克隆，数据全由宿主 ctxDetail 一条
     // 消息给全。整块（元素引用 / 圆环与弹层渲染 / 阈值滑块 / 1s 心跳）已搬到
     // features/ctxPopover.ts；这里只把闭包里的上行通道、i18n、转义工具传进去。
@@ -253,100 +254,18 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     suppressScroll = true;
     root.scrollTop = root.scrollHeight;
   }
-  // ── 消息大纲轨道（用户直令 2026-09-21，对齐 DeepSeek/Codex web）：右缘一列短横线 =
-  // 每条用户消息一个锚点；hover 错峰展开文字列表、点击平滑跳转+闪烁、滚动时当前条平滑跟随。
-  // 纯视图内 DOM 零协议新增；锚点即 .bubble.user（addUser 单点打标，历史重绘同路径）。
-  // 当前条判定口径：视口上 1/3 线以上最近一条（与阅读位置一致，拉到底时最后一条必中）
-  var olAnchors: { b: HTMLElement; row: HTMLElement }[] = [];
-  var olSpyQueued = false; // rAF 合顿滚动事件，一帧一次布局读
-  var olSuspend = false; // renderAll 逐条 addUser 时挂起（每条全量重建 = O(N²)，重绘完一次建好）
-  /** 大纲挂起开关（olSuspend 属大纲域、住本文件，5g 未搬）：重绘在 features/messageList.ts 里
-   *  逐条 addUser 前后置位，写回经此口（R12 ③：注入 accessor，不复制状态） */
-  function setOlSuspend(v: boolean) { olSuspend = v; }
-  function outlineRebuild() {
-    if (olSuspend) return;
-    olAnchors = [];
-    outlineEl.innerHTML = '';
-    var items = olScan();
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i] as any;
-      var b = it.b as HTMLElement;
-      var row = el('div', 'ol-row' + (it.queued ? ' ol-queued' : ''));
-      var txt = it.queued ? ('⏳ ' + (it._t || '')) : olText(b);
-      row.appendChild(el('span', 'ol-label', txt));
-      row.appendChild(el('span', 'ol-dash'));
-      (function (bb: HTMLElement, rr: HTMLElement) {
-        rr.addEventListener('click', function () {
-          bb.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          // 回流强制重启动画：连点同一条也能重新闪（排队 pill 在消息流外，无闪烁也不报错）
-          bb.classList.remove('ol-jump'); void bb.offsetWidth; bb.classList.add('ol-jump');
-          // 闪完必须摘类：class 留在气泡上时，切页签的 display:none↔可见会让 olflash 从头重放
-          // （display:none 取消动画，恢复渲染时 animation 重新求值），表现为切回页签旧选中消息又闪。
-          // 不用 animationend——动画被 display:none 取消时它不触发，类就永远留着继续犯病；
-          // 定时器兜底且清旧的，防止连点时旧定时器把新一次闪烁提前摘掉。
-          var jt: any = (bb as any)._olJumpT; if (jt) clearTimeout(jt);
-          (bb as any)._olJumpT = setTimeout(function () { bb.classList.remove('ol-jump'); }, 1100);
-        });
-      })(b, row);
-      outlineEl.appendChild(row);
-      olAnchors.push({ b: b, row: row });
-    }
-    outlineEl.style.display = olAnchors.length ? 'flex' : 'none';
-    outlineResize(); // 重建时同步量一次摆位——RO 初次回调只发一次，若当时视图还没布局（0×0）
-    // 就永远停在 height:0（实测事故：恢复会话后轨道不可见），这里自愈兑底
-    olSpy(); // 重建即校准当前条（重绘/新增后位置全变）
-  }
-  function outlineResize() {
-    if (id !== getActiveTabId()) return; // 后台视图无布局，切回时 RO 会再调
-    // 盒子以消息区中线为轴垂直居中（CSS translateY(-50%) 配合），高度自动、最高消息区的 1/3（超出内部滚动）
-    outlineEl.style.top = Math.round(root.offsetTop + root.clientHeight / 2) + 'px';
-    outlineEl.style.maxHeight = Math.floor(root.clientHeight / 3) + 'px';
-  }
-  function olText(b: HTMLElement) {
-    var t = (b as any)._olText || b.textContent || '';
-    return t.replace(/\s+/g, ' ').trim().slice(0, 80);
-  }
-  // 排队中的用户消息（queuebar pill）也进轨道：发出即有锚点（此前只数已入列的 .bubble.user，
-  // 刚发出的几秒里轨道少一根像坏了，实测反馈）；交付后 renderAll 重绘，锚点自动换成正式气泡
-  function olScan() {
-    var out: { b: HTMLElement; row: HTMLElement; queued: boolean }[] = [];
-    var pills = queuebarEl.querySelectorAll('.q-item[data-qid]');
-    for (var p = 0; p < pills.length; p++) {
-      var qt = pills[p].querySelector('.q-text');
-      out.push({ b: pills[p] as HTMLElement, row: null as any, queued: true, _t: qt ? qt.textContent || '' : '' } as any);
-    }
-    var bs = root.querySelectorAll('.bubble.user');
-    for (var i = 0; i < bs.length; i++) out.push({ b: bs[i] as HTMLElement, row: null as any, queued: false } as any);
-    return out;
-  }
-  function olSpy() {
-    if (id !== getActiveTabId()) return; // 后台视图无布局，切回时 RO 会再调
-    if (olSpyQueued) return;
-    olSpyQueued = true;
-    requestAnimationFrame(function () {
-      olSpyQueued = false;
-      if (!olAnchors.length) return; // 空会话无锚点，不算当前条
-      var line = root.scrollTop + root.offsetTop + root.clientHeight / 2; // 视口中线（点击跳转 block:center 后点中条必在中线上）
-      var cur = -1;
-      for (var i = 0; i < olAnchors.length; i++) {
-        if ((olAnchors[i].b as any).offsetTop <= line) cur = i; else break;
-      }
-      for (var j = 0; j < olAnchors.length; j++) {
-        olAnchors[j].row.classList.toggle('cur', j === cur);
-        // 错峰步长=离选中条的距离：展开/淡入从 cur 向两侧辐射（用户直令 2026-09-21，不再从上往下流）。
-        // 注意只错峰不位移：曾试过 rAF 钉住 cur（补偿 transform），cur 在列尾时整个轨道块被带离
-        // 垂直居中上飞（用户实测駁回 2026-09-21）——轨道块居中优先，别再加位移补偿
-        olAnchors[j].row.style.setProperty('--d', String(Math.abs(j - cur)));
-      }
-    });
-  }
-  root.addEventListener('scroll', olSpy, { passive: true });
-  // 轨道贴 .msg-root 可视区摆位：横幅/输入区高度变化、窗体缩放、切页签都触发 RO 重摆
-  var olRO = new ResizeObserver(function () {
-    outlineResize();
-    olSpy();
+  // ── 消息大纲轨道（右缘一列短横线 = 每条用户消息一个锚点）：整块在 features/outline.ts ──
+  // 本视图一套（锚点表 olAnchors、rAF 合顿标志、olSuspend 挂起开关、ResizeObserver 都在模块内
+  // 独占，本文件不再持有同名变量）。注入的全是外部引用/回调，不复制状态：
+  //   ① root（RO 观察对象 + 滚动坐标系）与 outlineEl（#outline 随视图克隆）；
+  //   ② q —— olScan 只读查队列条 pill（队列条状态归队列域，5f 未搬，不许复制进来）；
+  //   ③ isActiveView —— 后台视图 display:none 无布局，不量不判。
+  // 注意 root.scroll 上还有一条「跟随贴底」监听（本文件 makeRoot 尾部），用途不同，别与本模块的
+  // scroll spy 合并或换顺序（scout F3）。
+  var outline = initOutline({
+    root: root, outlineEl: outlineEl, q: q, el: el,
+    isActiveView: function () { return id === getActiveTabId(); }
   });
-  olRO.observe(root);
   function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!S.busy) { statusEl.textContent = ''; } }
   // N 刀（2026-09-23 用户点名「没感觉秒开，往这里加个计时器」）：启动秒表——
   // 「正在启动 pi… Ns」实时走秒。旁路 setStatus 直写（同 ⏱/busy 帧先例）；
@@ -561,7 +480,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 都在模块内独占，本文件不再持有同名变量）。注入的全是外部引用/回调，不复制状态：
   //   ① 队列条属队列域（5f 未搬）→ rebuildQueuebar（先清再建幂等，事故注释见该函数）；
   //   ② 欢迎页三件是页面级启动快照 → welcomeHTML / duckInto / pickTip；
-  //   ③ 大纲轨道（5g 未搬）→ outlineRebuild + setOlSuspend（逐条 addUser 时挂起防 O(N²)）；
+  //   ③ 大纲轨道（5g 已搬 features/outline.ts）→ outlineRebuild + setOlSuspend（逐条 addUser 时挂起防 O(N²)）；
   //   ④ 压缩条基线与 renderCompact 已随本刀进模块（上面两个状态就是它的全部事实源）。
   // linkify 总闸（R13）与 followingEnd 仍是本文件唯一持有者，写入经 accessor 成对交接；
   // stickyQ / stickyIO 不进来（R7），addUser 只经 sticky 三缝交接。
@@ -570,7 +489,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     scroll: scroll, post: vpost,
     adoptSticky: sticky.adoptSticky, updateStickyChip: sticky.updateStickyChip, observeSticky: sticky.observeSticky,
     toolStart: toolStart, toolEnd: toolEnd, resetToolRows: resetToolRows, liveReset: liveReset,
-    outlineRebuild: outlineRebuild, setOlSuspend: setOlSuspend,
+    outlineRebuild: outline.outlineRebuild, setOlSuspend: outline.setOlSuspend,
     setLinkifyEnabled: setLinkifyEnabled,
     setFollowingEnd: function (v: boolean) { followingEnd = v; },
     welcomeHTML: welcomeHTML, duckInto: duckInto, pickTip: pickTip,
@@ -821,6 +740,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       closeCtxPop: ctxPop.close,
       isCtxPopOpen: ctxPop.isOpen,
       dispose: function () {
+        outline.dispose(); // 断开大纲轨道的 ResizeObserver（不断开则被观察的 root 连整棵 DOM 留活）
         ctxPop.dispose();
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
         clearStreamTimer();
