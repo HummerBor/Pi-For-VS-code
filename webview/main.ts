@@ -14,6 +14,8 @@ import { initChangesPage } from "./features/changesPage";
 import { initCtxPopover } from "./features/ctxPopover"; // 上下文用量弹层 + 页脚圆环（原住本文件）
 import { initSubagentDock } from "./features/subagentDock"; // 子 agent 浮窗（原住本文件，第 3 刀）
 import { initComposer } from "./features/composer"; // 输入区（原住本文件，第 4 刀）
+import { initMarkdown } from "./features/markdown"; // 渲染基座（原住本文件，第 5 刀 5a）
+import { initLinkify } from "./features/linkify"; // 文件路径/符号可点（原住本文件，第 5 刀 5a）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -66,81 +68,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 机械搬运），语义修改仅六处：①scroll bgMode→id 判定 ②applyState 同 ③上行改 vpost 显式带
   // 自己 tabId ④scheduleStream/scheduleRender 去换镜舞蹈 ⑤built 直写闭包 ⑥codeCtx 页面级
   // 数据 + renderCodeChipAll 循环各视图。重载实测重点见 BUILDER.md 交接 4。
-  // 轻量 Markdown：代码块 / 标题 / 列表 / 行内 code / 粗体
-  function renderInline(elm, text) {
-    var re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-    var last = 0, m;
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) elm.appendChild(document.createTextNode(text.slice(last, m.index)));
-      var tok = m[0];
-      if (tok.charAt(0) === '`') { var c = document.createElement('code'); c.textContent = tok.slice(1, -1); elm.appendChild(c); }
-      else { var b = document.createElement('b'); b.textContent = tok.slice(2, -2); elm.appendChild(b); }
-      last = m.index + tok.length;
-    }
-    if (last < text.length) elm.appendChild(document.createTextNode(text.slice(last)));
-  }
-  function renderPlain(parent, text) {
-    var lines = String(text).split('\n');
-    var div = null;
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (line.trim() === '') { div = null; continue; }
-      if (/^\s*\|.*\|\s*$/.test(line)) {
-        var tbl = [line];
-        while (i + 1 < lines.length && /^\s*\|.*\|\s*$/.test(lines[i + 1])) tbl.push(lines[++i]);
-        renderTable(parent, tbl);
-        div = null; continue;
-      }
-      if (/^#{1,6}\s/.test(line)) {
-        var h = el('div', 'md-h'); renderInline(h, line.replace(/^#{1,6}\s*/, '')); parent.appendChild(h); div = null; continue;
-      }
-      var lm = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
-      if (lm) {
-        var li = el('div', 'md-li'); li.style.paddingLeft = (12 + lm[1].length * 10) + 'px';
-        li.appendChild(document.createTextNode((lm[2] === '-' || lm[2] === '*' ? '•' : lm[2]) + ' '));
-        renderInline(li, lm[3]); parent.appendChild(li); div = null; continue;
-      }
-      if (/^>\s?/.test(line)) {
-        var qt = el('div', 'md-quote'); renderInline(qt, line.replace(/^>\s?/, '')); parent.appendChild(qt); div = null; continue;
-      }
-      if (!div) { div = el('div', 'md-p'); parent.appendChild(div); }
-      renderInline(div, line);
-      div.appendChild(document.createTextNode('\n'));
-    }
-  }
-  function renderTable(parent, rows) {
-    function cells(r) { return r.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|'); }
-    var t = document.createElement('table'); t.className = 'md-table';
-    for (var ri = 0; ri < rows.length; ri++) {
-      var cs = cells(rows[ri]);
-      if (ri === 1 && cs.every(function (c) { return /^\s*:?-+:?\s*$/.test(c); })) continue; // 表头分隔行
-      var tr = document.createElement('tr');
-      for (var cj = 0; cj < cs.length; cj++) {
-        var td = document.createElement(ri === 0 ? 'th' : 'td');
-        renderInline(td, cs[cj].trim()); tr.appendChild(td);
-      }
-      t.appendChild(tr);
-    }
-    parent.appendChild(t);
-  }
-  function renderRich(parent, text) {
-    // 逐行扫描：围栏必须行首才算代码块，行内 ``` 不影响（之前任意位置都算，行内反引号会把大段内容吞进代码框）
-    var lines = String(text).split('\n');
-    var buf = []; var code = []; var inCode = false;
-    function flushPlain() { if (buf.length) { renderPlain(parent, buf.join('\n')); buf = []; } }
-    function flushCode() { if (code.length) { parent.appendChild(el('pre', 'code', code.join('\n'))); code = []; } }
-    for (var i = 0; i < lines.length; i++) {
-      if (/^```/.test(lines[i])) {
-        if (!inCode) { flushPlain(); inCode = true; }
-        else { flushCode(); inCode = false; }
-        continue;
-      }
-      if (inCode) code.push(lines[i]); else buf.push(lines[i]);
-    }
-    if (code.length) parent.appendChild(el('pre', 'code', code.join('\n')));
-    flushPlain();
-    linkify(parent);
-  }
   function makeSessionView(id: string) {
     // 本视图的共享状态（busy / 变更页数据）——每页签一份，绝不进应用级容器（见 state.ts 头注释）
     var S = createViewState(id);
@@ -1532,78 +1459,23 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     return s.slice(0, head) + '…' + s.slice(s.length - tail);
   }
   // ── 文件路径可点击：识别文本里的路径 → .fp span → openPath 给宿主打开 ──
-  var FILE_RE = /([A-Za-z]:[\/][\w.\- \u4e00-\u9fff\/]*[\w.\-\u4e00-\u9fff]\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w.\-\u4e00-\u9fff]+(?:[\/][\w.\- \u4e00-\u9fff]+)+\.[A-Za-z0-9]{1,8}(?:\:\d{1,5})?|[\w\u4e00-\u9fff][\w\-\u4e00-\u9fff]*\.(?:tsx|jsx|json|mjs|ts|js|md|txt|html?|css|scss|less|py|java|cpp|hpp|c|h|go|rs|rb|php|sh|bat|ps1|ya?ml|toml|xml|svg|vue|sql|ini|conf|log|png|jpe?g|gif|webp|bmp|ico|avif|pdf)(?![\w\-])(?::\d{1,5})?)/g; // 第三支：光文件名（常见扩展名白名单）也可点，存在性由宿主 openFilePath 校验。
-  // 扩展名必须长项前置 + 尾边界 (?![\w\-])：短项前置又无边界时 js 吃掉 json/tsx/jsx、裸 c 吃掉
-  // create/cpp/conf——models-store.json→models-store.js、ModelRuntime.create→ModelRuntime.c 的假链
-  // 点开必「找不到文件」（2026-09-23 用户实测「这些都点不开」，口径钉在 scripts/linkify.test.mts）。
-  // 名字段同理必须放开中文重复：只许开头一个中文字符时「交接-启动慢战役.md」被吃到「役.md」
-  // （2026-09-23 第二张截图）；混排吞头由 cleanPath 砍，纯中文过吞由宿主 openFilePath 去头重试兜底
-  function cleanPath(p) {
-    p = p.replace(/[.,;:!?)}\]⟩】»]+$/, '');
-    var parts = p.split(' ');
-    while (parts.length > 1 && parts[parts.length - 1].indexOf('/') === -1 && parts[parts.length - 1].indexOf('\\') === -1) parts.pop();
-    p = parts.join(' ');
-    // 中文混排纠偏（「役.md」事故续）：散文吞头（改main.ts一行 → 改main.ts）时，名里有英数段
-    // 就砍掉开头非 ASCII，只留 ASCII 起的真名；纯中文名（交接-启动慢战役.md）不动
-    if (p.indexOf('/') === -1 && p.indexOf('\\') === -1) {
-      var dm = p.lastIndexOf('.');
-      var nm = dm > 0 ? p.slice(0, dm) : p;
-      if (/[A-Za-z0-9]/.test(nm) && !/^[\x00-\x7F]/.test(nm)) {
-        var cut = nm.replace(/^[^\x00-\x7F]+/, '');
-        if (cut) p = cut + p.slice(dm);
-      }
-    }
-    return p;
-  }
+  // 整块（FILE_RE / cleanPath / linkify / linkifySymbol / .fp 点击委托）在 features/linkify.ts；
+  // 渲染基座（renderInline / renderPlain / renderTable / renderRich）在 features/markdown.ts。
+  // ★ R8 全局总闸：linkifyEnabled 全仓只有下面这一份——renderAll 先关它让老消息不扫正则
+  //   （大会话卡顿的唯一止血），再边循环边对最近 15 条打开；linkify.ts 只经 deps 的
+  //   getLinkifyEnabled / setLinkifyEnabled 读写。两边各留一份必然对不上，卡顿会原样回归。
   var linkifyEnabled = true; // renderAll 批量重绘时关掉老消息的 linkify，只留最近几条（全量扫正则是大会话卡顿的主因）
-  function linkify(root: HTMLElement | null) {
-    if (!root || !linkifyEnabled) return;
-    var nodes = [];
-    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    while (w.nextNode()) { var n = w.currentNode as HTMLElement; var par = n.parentNode as HTMLElement; if (par.nodeName !== 'PRE' && par.classList && !par.classList.contains('fp')) nodes.push({ n: n, code: par.nodeName === 'CODE' }); }
-    for (var i = 0; i < nodes.length; i++) {
-      var n2 = nodes[i].n; var txt = n2.nodeValue; if (!txt) continue;
-      FILE_RE.lastIndex = 0; if (!FILE_RE.test(txt)) { linkifySymbol(n2, txt, nodes[i].code); continue; }
-      FILE_RE.lastIndex = 0;
-      var frag = document.createDocumentFragment(); var last = 0, m2;
-      while ((m2 = FILE_RE.exec(txt)) !== null) {
-        if (m2.index > 0 && txt.charAt(m2.index - 1) === '/') { continue; } // URL 的一部分，不当作路径
-        if (m2[0].indexOf('://') !== -1) { continue; } // URL 协议头（如 https://）被盘符分支误认，跳过
-        if (/\.(?:vsix|zip|exe|dll|jar|7z|tar|gz|rar|bin|iso|pyc|woff2?|ttf|eot)$/i.test(m2[0])) { continue; } // 二进制文件不做成链接，点了也是报错页
-        var p = cleanPath(m2[0]);
-        if (m2.index > last) frag.appendChild(document.createTextNode(txt.slice(last, m2.index)));
-        if (p) { var sp = document.createElement('span'); sp.className = 'fp'; sp.textContent = p; sp.setAttribute('data-p', p); frag.appendChild(sp); }
-        else frag.appendChild(document.createTextNode(m2[0]));
-        last = m2.index + m2[0].length;
-      }
-      if (last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last)));
-      n2.parentNode!.replaceChild(frag, n2);
-    }
-  }
-  // ── 刀3（2026-09-23「这些都点不开」续）：行内 code 里的符号引用（ModelRuntime.create 这类
-  // 类.成员，文件正则认不出扩展名）也做成 .fp——点击由宿主 openFilePath 在 pi 包里搜源码打开。
-  // 只认「code 整段恰好是一个符号」：散文里的 Node.js/版本号不误伤。口径钉死在 scripts/linkify.test.mts
-  var SYM_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
-  function linkifySymbol(n, txt, inCode) {
-    if (!inCode) return;
-    var t = String(txt).trim().replace(/[();,]+$/, '');
-    if (!SYM_RE.test(t)) return;
-    var sp = document.createElement('span'); sp.className = 'fp'; sp.textContent = t; sp.setAttribute('data-p', t);
-    (n.parentNode as HTMLElement).replaceChild(sp, n); // 整段替换：trim 掉的空白仅限 code 首尾，可忽略
-  }
-  // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）
-  // 点击 .fp → openPath 给宿主打开（捕获阶段，防止触发工具行折叠）；
-  // 工单24 二期：委托到 #session-area（消息流在各页签视图内，都是它的子孙）
-  sessionArea.addEventListener('click', function (e) {
-    var t = e.target as HTMLElement | null;
-    while (t && t !== sessionArea) {
-      if (t.classList && t.classList.contains('fp')) {
-        e.stopPropagation(); vscode.postMessage({ type: 'openPath', path: t.getAttribute('data-p') });
-        return;
-      }
-      t = t.parentNode as HTMLElement | null;
-    }
-  }, true);
+  function getLinkifyEnabled() { return linkifyEnabled; }
+  function setLinkifyEnabled(v: boolean) { linkifyEnabled = v; }
+  var linkifyMod = initLinkify({
+    getLinkifyEnabled: getLinkifyEnabled, setLinkifyEnabled: setLinkifyEnabled,
+    sessionArea: sessionArea, post: function (m) { vscode.postMessage(m); }
+  });
+  // 别名：全文件其余调用点（renderRich 在 5a，notice/toolStart/toolEnd/renderAll/subagentDock 都未搬）原样不动
+  var linkify = linkifyMod.linkify;
+  // markdown 的 renderRich 收尾要调 linkify，故装配排在它之后（模块内无状态，装配顺序即依赖顺序）
+  var markdown = initMarkdown({ el: el, linkify: linkify });
+  var renderRich = markdown.renderRich;
 
   // ── 头部/工具条图标注入（统一 SVG）── 头部是页面级（不随页签克隆）
   var sessionEl = document.getElementById('session') as HTMLElement;

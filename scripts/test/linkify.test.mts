@@ -4,8 +4,14 @@
  * 背景：FILE_RE 第三支扩展名互斥分支短项前置（js 先于 json、裸 c 先于 cpp/create）
  * 且扩展名后无尾边界——`models-store.json` 被链到「models-store.js」、`ModelRuntime.create`
  * 被链到「ModelRuntime.c」、`package.json` 被链到「package.js」。假路径点开必「找不到文件」，
- * 即用户截图实测的「这些都点不开」。本文件抽 webview/main.ts 的真实渲染/linkify 代码
- * 在最小 DOM 垫片里跑，钉死「不截断、不产假链」口径。
+ * 即用户截图实测的「这些都点不开」。本文件抽真实渲染/linkify 代码在最小 DOM 垫片里跑，
+ * 钉死「不截断、不产假链」口径。
+ *
+ * 抽代码的位置（第 5 刀 5a 起）：`webview/features/markdown.ts` 的 renderInline/renderPlain/
+ * renderTable/renderRich + `webview/features/linkify.ts` 的 FILE_RE/cleanPath/linkify/linkifySymbol。
+ * 5a 之前这两段住在 webview/main.ts（grab 标记随搬家同步，断言与用例数一个字未动）。
+ * linkify 的总闸 `linkifyEnabled` 现由 main.ts 独占、模块经 deps.getLinkifyEnabled() 读，
+ * 故垫片里注入一个恒 true 的 deps（老口径就是「开」）。
  *
  * 运行：npm run test:linkify（Node 直跑，零依赖，不进 tsc 编译门禁）
  */
@@ -15,11 +21,11 @@ import path from "node:path";
 import url from "node:url";
 
 const root = path.dirname(path.dirname(path.dirname(url.fileURLToPath(import.meta.url))));
-const src = fs.readFileSync(path.join(root, "webview", "main.ts"), "utf8");
-const lines = src.split("\n");
+const mdLines = fs.readFileSync(path.join(root, "webview", "features", "markdown.ts"), "utf8").split("\n");
+const lkLines = fs.readFileSync(path.join(root, "webview", "features", "linkify.ts"), "utf8").split("\n");
 
-// ── 按标记抽取 main.ts 真代码（行号漂移时靠函数名重定位）────────────────────
-function grab(startMark: string, endMark: string, inclusive = true): string {
+// ── 按标记抽取模块真代码（行号漂移时靠函数名重定位）────────────────────
+function grab(lines: string[], startMark: string, endMark: string, inclusive = true): string {
   const s = lines.findIndex((l) => l.includes(startMark));
   let e = -1;
   for (let i = s + 1; i < lines.length; i++) { if (lines[i].includes(endMark)) { e = i; break; } }
@@ -27,9 +33,9 @@ function grab(startMark: string, endMark: string, inclusive = true): string {
   return lines.slice(s, inclusive ? e + 1 : e).join("\n");
 }
 let code = [
-  grab("function renderInline(elm, text)", "function renderRich(parent, text)", false),
-  grab("function renderRich(parent, text)", "function makeSessionView(id: string)", false),
-  grab("var FILE_RE =", "}, true);"),
+  grab(mdLines, "function renderInline(elm, text)", "function renderRich(parent, text)", false),
+  grab(mdLines, "function renderRich(parent, text)", "return {", false),
+  grab(lkLines, "var FILE_RE =", "}, true);"),
 ].join("\n");
 // TS 断言/注解剥壳（垫片是纯 JS eval）——定向替换，不用宽泛正则，防误伤三元表达式
 code = code.replace("root: HTMLElement | null", "root").replace(/ as [A-Za-z]+/g, "").replace(/(\w)!\./g, "$1.").replace(/(\w)!\)/g, "$1)");
@@ -82,8 +88,8 @@ const document = {
 const NodeFilter = { SHOW_TEXT: 4 };
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== "") e.textContent = text; return e; }
 
-const fn = new Function("document", "NodeFilter", "el", code + "\nreturn { renderRich, FILE_RE };");
-const api = fn(document, NodeFilter, el);
+const fn = new Function("document", "NodeFilter", "el", "deps", code + "\nreturn { renderRich, FILE_RE };");
+const api = fn(document, NodeFilter, el, { getLinkifyEnabled: () => true, setLinkifyEnabled: () => {} });
 
 /** 渲染一段 markdown，返回全部 .fp 链接的 data-p（即点击后宿主实际收到的路径） */
 function links(text: string): string[] {
