@@ -273,6 +273,21 @@ export function subagentSnapshotFull(details: unknown): SubagentSnapshot | null 
   return buildSnapshot(details, FULL_ITEMS, FULL_OUTPUT_MAX, true);
 }
 
+/** 探活降级（2026-11-23 失联判定改 pid，交接遗留 3）：
+ *  台账行上的 procAlive 是宿主对子进程做的一次 process.kill(pid, 0) 探活结果，
+ *  false = **进程已经死了、台账还没收尸**（宿主崩溃/回传断链/异步壳冻结）。
+ *  这种行一律当终态失败：进程没了就不可能再出终态帧，等 30 分钟 SUB_STALE_MS 只是让
+ *  用户盯一行假的「处理中」。
+ *  procAlive 缺省（老台账没 pid / 非 running 行）或探活为 true → 维持原状态，
+ *  时间兜底（SUB_STALE_MS）照旧——探活只能证明「死」，不能证明「活」（pid 可能被复用）。
+ *  纯函数、零 import：宿主与 webview 共用同一口径（webview 拿不到进程信息，只能吃这个信号）。 */
+export function livenessStatus(
+  status: "running" | "done" | "failed",
+  procAlive: unknown,
+): "running" | "done" | "failed" {
+  return status === "running" && procAlive === false ? "failed" : status;
+}
+
 function buildSnapshot(details: unknown, itemTail: number, outMax: number, full = false): SubagentSnapshot | null {
   if (!details || typeof details !== "object") return null;
   const d = details as Record<string, unknown>;

@@ -566,6 +566,10 @@ export class PiCore {
 
   /** 释放全部资源（面板销毁/扩展卸载） */
   dispose(): void {
+    if (this.ledgerPulse) {
+      clearInterval(this.ledgerPulse);
+      this.ledgerPulse = undefined;
+    }
     this.client?.dispose();
     this.client = undefined;
   }
@@ -765,13 +769,34 @@ export class PiCore {
       const dir = this.caps.getAgentDir?.();
       if (!dir) return;
       // 台账是全局的，展示必须跟会话走（2026-11 用户实测反馈）：按本会话 handle 集过滤
-      this.post({
-        type: "subagentLedger",
-        rows: readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle)),
-      });
+      const rows = readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle));
+      this.post({ type: "subagentLedger", rows });
+      // 有 running 行就挂心跳（见 syncLedgerPulse）：procAlive 是探活快照，没有心跳就永远停在
+      // 「平台推最后一次时还活着」那一刻
+      this.syncLedgerPulse(rows.some((r) => r.status === "running"));
     } catch {
       /* ignore */
     }
+  }
+
+  /** 台账心跳（2026-11-23 失联判定改 pid）——为什么需要它：`procAlive` 是宿主读台账时的一次
+   *  `process.kill(pid, 0)` 探活快照，而 pushLedger 只在「有帧/有事件」时被调。子进程死掉后
+   *  不会再有帧来触发重推（真机事故：底层进程零残留，面板「处理中」跳字 13h20m 不动）——
+   *  只靠事件驱动的话，「pid 死 → 立即终态」就只在面板重载那一刻成立。
+   *  所以有 running 行时每 5s 重探一次（一次目录读 + 每行一次 kill(pid,0)，代价可忽），
+   *  全部落终态后自动停表（无 running 不空转）。纯展示面：不写台账、不影响主链路。 */
+  private ledgerPulse?: NodeJS.Timeout;
+  private syncLedgerPulse(hasRunning: boolean): void {
+    if (!hasRunning) {
+      if (this.ledgerPulse) {
+        clearInterval(this.ledgerPulse);
+        this.ledgerPulse = undefined;
+      }
+      return;
+    }
+    if (this.ledgerPulse) return;
+    this.ledgerPulse = setInterval(() => this.pushLedger(), 5000);
+    this.ledgerPulse.unref?.(); // 心跳不许挂着进程退出
   }
 
   /** 重放重入锁（2026-11-03 真机日志发现）：0.1.110 把「落标记」从函数开头挪到扫完之后，
@@ -816,22 +841,17 @@ export class PiCore {
     // pi 内核没有任何「父会话 → 子会话」查询（子 agent 在 pi 侧就是个示例扩展，CLI 也没
     // --parent-session），所以这张索引只能我们自己维护——那就用最不脆的那份数据。
     const agentDir = this.caps.getAgentDir?.();
-    const ledgerHit = new Map<string, string | undefined>(); // handle → sessionDir（帧目录）
+    const ledgerHit = new Set<string>(); // 本会话的 handle 集（台账 parentSession 命中）
     if (agentDir) {
       try {
         for (const row of readLedgerRows(agentDir)) {
-          if (undone.some((c) => samePath(row.parentSession, c))) ledgerHit.set(row.handle, row.sessionDir);
+          if (undone.some((c) => samePath(row.parentSession, c))) ledgerHit.add(row.handle);
         }
       } catch {
         /* 台账不可读：退回会话文件扫描 */
       }
-      for (const h of ledgerHit.keys()) this.subagentHandles.add(h);
+      for (const h of ledgerHit) this.subagentHandles.add(h);
     }
-    const frameDirOfLedger = (): Map<string, string> => {
-      const m = new Map<string, string>();
-      for (const [h, d] of ledgerHit) if (d) m.set(h, d);
-      return m;
-    };
     // 落盘状态先探清：失败/空文件**不落标记**（0.1.107 的教训：标记提前落地 = 一次空窗
     // 把本会话的重放机会永久烧掉）。stat 错误不再 .catch 吞掉——留 code + 全路径取证。
     let file: string | null = null;
@@ -850,13 +870,16 @@ export class PiCore {
       }
     }
     if (!file) {
-      // 会话文件读不到（幽灵路径/0 字节/空窗）——只要台账命中，就把运行行重放出来：
-      // detail 从各单自己的 frames.jsonl 拿（harness 亲写，不依赖 pi 会不会落 custom entry）。
+      // 会话文件读不到（幽灵路径/0 字节/空窗）——台账命中就把台账行推出去（agent/任务/
+      // 状态/时间全在台账磁盘真值里，左列与浮窗照样看得见），会话文件真落盘后下一次
+      // refreshState 会重试并补上帧快照。
+      // 【v27 删 frames.jsonl 双写后没有第二真值（2026-11-23）】原来这条路读 harness 亲写的
+      // frames.jsonl 补快照，现在帧真值只有父会话的 custom:subagent-async 帧——文件读不到就
+      // 拿不到，不许再自己造一个帧源。
       if (agentDir && ledgerHit.size) {
-        this.dbg(`[subagent-replay] 会话文件不可读→走台账帧重放 handles=${ledgerHit.size} tab=${this.tabKey}`);
-        this.replayFramesFromDisk(agentDir, frameDirOfLedger());
-        this.subagentHistoryReplayedFor = undone[0];
+        this.dbg(`[subagent-replay] 会话文件不可读→只推台账行 handles=${ledgerHit.size} tab=${this.tabKey}`);
         this.pushLedger();
+        this.subagentHistoryReplayedFor = undone[0];
         this.dbg(`[subagent-replay] done(台账路) handles=${this.subagentHandles.size} tab=${this.tabKey}`);
       }
       return;
@@ -938,23 +961,6 @@ export class PiCore {
           const prev = finals.get(h);
           if (!prev || frame.final) finals.set(h, { frame, order });
         }
-        // frames.jsonl 重放（2026-11-02 段 3）：**当初的理由（「SDK 宿下 custom 帧不落盘」）
-        // 已被实测推翻**——2026-11-17 那个 299MB 父会话里 266.7MB 全是 custom 帧，pi 确实落盘。
-        // 现在它是「会话文件不可读」时的免疫路（幽灵路径/空窗，见上方 ledgerHit 分支），
-        // 且只读最后一行（见 replayFramesFromDisk）——不是帧真值的唯一来源，删之前先读那两处注释
-        if (agentDir) {
-          // 帧目录：台账命中的优先（parentSession 已对上），其余按 handle 补——
-          // v8 分桶后帧在 <台账 sessionDir>/frames.jsonl，旧平铺布局继续兜底
-          const frameDir = frameDirOfLedger();
-          try {
-            for (const row of readLedgerRows(agentDir)) {
-              if (row.sessionDir && !frameDir.has(row.handle)) frameDir.set(row.handle, row.sessionDir);
-            }
-          } catch {
-            /* 台账不可读：走旧路径兜底 */
-          }
-          this.replayFramesFromDisk(agentDir, frameDir);
-        }
         this.dbg(`[subagent-replay] scanned handles=${this.subagentHandles.size} entryFrames=${finals.size}`);
         this.pushLedger(); // 台账推送（收口版）：handle 集收齐后推，非空才见历史
         const ordered = [...finals.entries()].sort((a, b) => a[1].order - b[1].order);
@@ -981,50 +987,6 @@ export class PiCore {
     } catch (err: any) {
       // 会话文件不可读（新建未落盘/切换中）静默——但留痕（replay 静默返回是「面板消失」的头号嫌疑）
       this.dbg(`[subagent-replay] FAIL ${err?.message ?? err}`);
-    }
-  }
-
-  /** 按 handle 集从 frames.jsonl 重放（从 replaySubagentHistoryInner 抽出 2026-11-03）：
-   *  会话文件可读/不可读两条路都要跑它——后者就是「幽灵会话文件」的免疫路：
-   *  台账 parentSession 已经指明本会话有哪些单，detail 从各单 sessionDir/frames.jsonl 拿。
-   *  帧文件定位：优先 <台账 sessionDir>/frames.jsonl（v8 分桶），旧平铺布局继续兜底。 */
-  private replayFramesFromDisk(agentDir: string, frameDir: Map<string, string>): void {
-    for (const h of this.subagentHandles) {
-      try {
-        const candidates: string[] = [];
-        const dir = frameDir.get(h);
-        if (dir) candidates.push(path.join(dir, "frames.jsonl"));
-        candidates.push(path.join(agentDir, "sessions", "subagents", h, "frames.jsonl"));
-        // 只取最后一条完整行（2026-11-18 帧瘦身前，单文件实测 69MB——为最后一行把全文读进内存
-        // 再逐行 parse 是白付：面板重放卡顿的元凶之一）
-        type FrameLine = { handle: string; status?: string; startedAt?: number; endedAt?: number; detail: unknown };
-        let last: FrameLine | null = null;
-        for (const p of candidates) {
-          try {
-            last = readLastJsonLine(p) as FrameLine | null;
-            break;
-          } catch {
-            /* 试下一个布局 */
-          }
-        }
-        const snap = last ? subagentSnapshot(last.detail) : null;
-        // 只收终态帧：运行中的帧留给 live 流，重放旧 running 会造「永久处理中」假行
-        if (snap && !snap.tasks.some((t) => t.status === "running")) {
-          const rec = this.trackSubagentRun(h, last!.detail);
-          if (typeof last!.startedAt === "number") rec.startAt = last!.startedAt;
-          if (typeof last!.endedAt === "number") rec.endAt = last!.endedAt;
-          this.post({
-            type: "subagentUpdate",
-            id: h,
-            snapshot: snap,
-            final: last!.status !== "running",
-            startAt: rec.startAt,
-            endAt: rec.endAt,
-          });
-        }
-      } catch {
-        /* 无帧文件（老运行/纯 entry 路）：静默跳过 */
-      }
     }
   }
 
@@ -3012,33 +2974,6 @@ export class PiCore {
         break;
       }
     }
-  }
-}
-
-/** 读 JSONL 最后一条完整行（帧文件专供）：只从文件尾读一窗，逐行从后往前试 parse。
- *  历史帧文件实测最大 69MB / 127 行（单行中位 238KB）——全文读入只为最后一行是白付。
- *  首行在窗口起点被截断时正好 parse 失败，会自然往前退到上一条完整行（也兑底崩溃半行）。 */
-function readLastJsonLine(file: string, windowBytes = 512 * 1024): unknown {
-  const fd = fs.openSync(file, "r");
-  try {
-    const size = fs.fstatSync(fd).size;
-    if (!size) return null;
-    const start = Math.max(0, size - windowBytes);
-    const buf = Buffer.alloc(size - start);
-    fs.readSync(fd, buf, 0, buf.length, start);
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const ln = lines[i];
-      if (!ln.trim()) continue;
-      try {
-        return JSON.parse(ln);
-      } catch {
-        /* 窗口首行可能被截断：继续往前 */
-      }
-    }
-    return null;
-  } finally {
-    fs.closeSync(fd);
   }
 }
 

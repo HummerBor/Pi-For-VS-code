@@ -17,6 +17,21 @@ import type { SubagentLedgerRow } from "./protocol";
 
 const STATUSES = new Set<string>(["running", "completed", "failed", "killed", "orphaned"]);
 
+/** 子进程探活（2026-11-23 失联判定改 pid）：与 harness runsLedger.ts 的 pidAlive 同口径
+ *  （process.kill(pid, 0)：ESRCH = 死，EPERM = 活着但没权限）。为什么这边不直接 import：
+ *  那个模块依赖 pi 运行时（裸包名 getAgentDir），宿主编译产物里解析不到——耦合面只在
+ *  台账文件形状上，两边注释互相指向（同本文件头注释）。探活结果只是**展示用降级信号**：
+ *  它不写回台账（写者只有 harness，双写者红线），也不报错。 */
+function pidAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === "EPERM";
+  }
+}
+
 /** 读全量台账，startedAt 倒序。目录缺失/读失败返回 []（首用即空库，非异常） */
 export function readLedgerRows(agentDir: string): SubagentLedgerRow[] {
   const dir = join(agentDir, "sessions", "subagents", "runs");
@@ -31,13 +46,17 @@ export function readLedgerRows(agentDir: string): SubagentLedgerRow[] {
     try {
       const raw = JSON.parse(fs.readFileSync(join(dir, f), "utf8")) as Record<string, unknown>;
       if (!raw || typeof raw.handle !== "string" || typeof raw.agent !== "string") continue;
+      const status = STATUSES.has(raw.status as string)
+        ? (raw.status as SubagentLedgerRow["status"])
+        : "failed";
       rows.push({
         handle: raw.handle,
         agent: raw.agent,
         task: typeof raw.task === "string" ? raw.task : "",
-        status: STATUSES.has(raw.status as string)
-          ? (raw.status as SubagentLedgerRow["status"])
-          : "failed",
+        status,
+        // 探活只对 running 行有意义：非 running 的 pid 可能已被系统回收再分配，探活结果没语义；
+        // 老台账没写 pid（v6 之前的存量）→ 不给 procAlive，交给时间兜底
+        ...(status === "running" && typeof raw.pid === "number" ? { procAlive: pidAlive(raw.pid) } : {}),
         deathReason: typeof raw.deathReason === "string" ? raw.deathReason : undefined,
         startedAt: typeof raw.startedAt === "number" ? raw.startedAt : 0,
         endedAt: typeof raw.endedAt === "number" ? raw.endedAt : undefined,

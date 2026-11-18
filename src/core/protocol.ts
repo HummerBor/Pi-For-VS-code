@@ -1000,6 +1000,11 @@ export interface SubagentLedgerRow {
   parentSession?: string;
   /** 回传主会话是否已发（false = 「回传未达」，对账补送的依据） */
   reported?: boolean;
+  /** 子进程此刻是否还活（2026-11-23 失联判定改 pid）：宿主读台账时做一次 process.kill(pid,0)
+   *  探活，**只在 status==="running" 的行上有值**——false 表示子进程已经死了、台账还没来得及
+   *  收尸（宿主崩溃/回传断链），面板立即按终态画，不再等 SUB_STALE_MS 的 30 分钟。
+   *  缺省（老台账没 pid / 非 running 行）= 探活结论无效，按原状态 + 时间兜底。 */
+  procAlive?: boolean;
 }
 
 export interface SubagentLedgerMsg {

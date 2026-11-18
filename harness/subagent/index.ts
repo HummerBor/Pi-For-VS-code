@@ -674,7 +674,7 @@ const ASYNC_MESSAGE_TAIL = 20; // entry 落 session 文件，messages 只带尾�
  *
  * 病灶：进度帧原样带尾窗 20 条消息，而工具输出里夹着 base64 截图（实测单条 380–600KB）——
  * 单帧中位 238KB、峰值 1.8MB。pi.appendEntry 的 custom 帧在本宿主是真落盘的，于是：
- * - 8.5 分钟一单（sa-103）写进 frames.jsonl **69.9MB**；
+ * - 8.5 分钟一单（sa-103）写进 frames.jsonl **69.9MB**（该文件 v27 已删，剩下父会话帧同样受这些上限保护）；
  * - 父会话 jsonl 的 96% 是这些帧（273MB / 285MB；另一个会话 688MB / 713MB）；
  * - 会话文件一胖，pi 载入 + 面板重放（readFile 全文 → 逐行 JSON.parse）双双卡死（实测重放 5.3s），
  *   面板看起来就是「时间不动、状态不更新」。
@@ -976,7 +976,7 @@ function startAsyncRun(
  *  单帧 ~200B → 一单 169 帧约 34KB（v21 是 69.6MB）。浮窗只画 名称/状态/任务/时间，
  *  明细一律点进子会话转录页——那里读的是文件真值，不经过帧。
  *
- *  msgCount 是给宿主的「有新消息了」信号（宿主自己的 frames.jsonl 是事后真值），
+ *  msgCount 是给宿主的「有新消息了」信号（父会话里的 custom 帧是事后真值），
  *  frameKind 让重放区分首帧/增量/终态（老数据没这个字段 → 按快照语义处理）。
  */
 function asyncDetails(run: AsyncRun): SubagentDetails {
@@ -1103,18 +1103,11 @@ function emitAsyncProgress(pi: ExtensionAPI, run: AsyncRun) {
 		// 🚨 不许静默（2026-11-02 事故教训：entry 不落盘排查盲了两天）——喊出来
 		console.error("[subagent-harness] appendEntry 失败:", (e as Error)?.stack ?? e);
 	}
-	// 帧真值自写（2026-11-02 段 3）：**这里原本的理由（「SDK 宿主下 custom 帧不落盘」）
-	// 已被实测推翻**——2026-11-17 那个 299MB 父会话里 266.7MB 全是 custom 帧，pi 确实落盘。
-	// 现在这条是冗余备份（重放时优先读它，见 piCore.replayFramesFromDisk 只取最后一行）；
-	// 待重放链路验证收敛到「只读会话文件」后可以删。改动前先读那段注释，别当成必需项。
-	try {
-		fs.appendFileSync(
-			path.join(run.runDir ?? runDirFor(run.handle), "frames.jsonl"),
-			JSON.stringify({ handle: run.handle, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, detail }) + "\n",
-		);
-	} catch {
-		/* 观测面不阻主链路 */
-	}
+	// 【v27 删掉 frames.jsonl 双写（2026-11-23）】原「帧真值自写（2026-11-02 段 3）」的
+	// 理由是「SDK 宿主下 custom 帧不落盘」，但 2026-11-17 实测已推翻（299MB 父会话里
+	// 266.7MB 全是 custom 帧）。既然是冗余备份就必须两条腿一起改：重放已收敛到
+	// 「只读父会话 custom:subagent-async 帧」（piCore.replaySubagentHistoryInner），
+	// 这里再写一份就是两份真值 + 每单多几十 MB 磁盘。别再把这行加回来——pi 落盘是唯一真值。
 	// 游标前移只在真送达之后：送达失败还前移 → 那段消息永久消失（面板与重放都补不回来）
 	if (delivered) {
 		run.sentMsgs = run.result.messages.length;

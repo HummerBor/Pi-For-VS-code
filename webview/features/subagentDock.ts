@@ -16,7 +16,7 @@
  * subagentOpenHandle / subagentOpenSession / subagentOpenLabel）、SUB_STALE_MS 阈值、
  * 收尾列表封顶 8 条、秒表 1s 心跳——一律不动，这是纯搬家。
  */
-import type { SubagentSnapshot } from "../../src/domain/subagentSnapshot";
+import { livenessStatus, type SubagentSnapshot } from "../../src/domain/subagentSnapshot";
 
 export interface SubagentDockDeps {
   /** i18n 文案表（宿主注入的整份字典） */
@@ -164,17 +164,36 @@ export function initSubagentDock(deps: SubagentDockDeps) {
    *  静默 catch / 宿主重启 / 事件链断环）记录就永驻已开启组。running 行超过 30 分钟
    *  没有任何新帧 → 判「疑似失联」：停表、不转图标、不再算「还在跑」。阈值依据：扩展
    *  每回合结束必推一帧（message_end → emitAsyncProgress），长工具调用可能静默更久，
-   *  误报无害——只降级显示不删数据，下一帧到达即自愈回「处理中」 */
+   *  误报无害——只降级显示不删数据，下一帧到达即自愈回「处理中」
+   *
+   *  【2026-11-23 失联判定改 pid（交接遗留 3）】上面 30 分钟无帧从「唯一判据」降为**最后兜底**：
+   *  宿主读台账时对 status==="running" 的行做 process.kill(pid,0) 探活，带 procAlive 上来。
+   *  procAlive===false = 进程已死、台账还没收尸 → 立即按失败落终态（见 procDead / renderSubRow），
+   *  不再等 30 分钟（真机事故：底层进程零残留，面板「处理中」跳字 13h20m）。
+   *  procAlive 缺省（老台账没 pid）或为 true 时照旧走时间兜底——探活只能证明「死」不能证明「活」 */
   var SUB_STALE_MS = 30 * 60 * 1000;
+  /** 台账探活结论：该句柄的子进程是否已死（无对应台账行 / 老台账没 pid → false = 不知道） */
+  function procDead(handle: string | undefined): boolean {
+    var h = String(handle || '');
+    if (!h) return false;
+    for (var i = 0; i < subLedgerRows.length; i++) {
+      if (String(subLedgerRows[i].handle || '') === h) return subLedgerRows[i].procAlive === false;
+    }
+    return false;
+  }
   function runStale(rec: SubRunRec): boolean {
     var last = rec.lastFrameAt || rec.startAt || 0;
     return !!last && Date.now() - last > SUB_STALE_MS;
+  }
+  /** 失联 = 进程已死（立即）或长时间无帧（兜底）。handle 缺省（老同步行只认 toolCallId）→ 只走时间判定 */
+  function runGone(rec: SubRunRec, handle?: string): boolean {
+    return procDead(handle) || runStale(rec);
   }
   /** 「真在跑」口径（Working 计时/头部 spinner/chip 走这只）：幽灵不算活。
    *  概览秒表重绘循环仍走 anySubRunning（raw），保证 running→stale 翻转帧被画出来 */
   function anySubLive(runs: Record<string, SubRunRec>): boolean {
     for (var k in runs) {
-      if (runStale(runs[k])) continue;
+      if (runGone(runs[k], k)) continue;
       var tasks = runs[k].snap.tasks;
       for (var i = 0; i < tasks.length; i++) if (tasks[i].status === 'running') return true;
     }
@@ -252,7 +271,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     if (!runs || !Object.keys(runs).length) { chip.style.display = 'none'; return; }
     var runN = 0, topName = '';
     for (var k in runs) {
-      if (runStale(runs[k])) continue; // 失联幽灵不占 chip：不显示名字、不钉 Working
+      if (runGone(runs[k], k)) continue; // 失联幽灵不占 chip：不显示名字、不钉 Working
       var ts = runs[k].snap.tasks;
       for (var j = 0; j < ts.length; j++) {
         if (ts[j].status === 'running') {
@@ -277,7 +296,9 @@ export function initSubagentDock(deps: SubagentDockDeps) {
       var rec = runs[runId];
       for (var ti = 0; ti < rec.snap.tasks.length; ti++) {
         var t = rec.snap.tasks[ti];
-        (t.status === 'running' ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
+        // 进程已死的行不留在「已开启」组（2026-11-23）：探活已确认它不会再有终态帧
+        var live = t.status === 'running' && !procDead(t.handle || runId);
+        (live ? runningRows : doneRows).push({ runId: runId, ti: ti, t: t, rec: rec });
       }
     }
     // 台账行并入同一张表（2026-11-19 用户拍板）：不再单独开「历史（台账）」第二个表，
@@ -292,7 +313,7 @@ export function initSubagentDock(deps: SubagentDockDeps) {
       var lr = subLedgerRows[li];
       var lh = String(lr.handle || '');
       if (liveSeen[lh]) continue;
-      var lst = lr.status === 'running' ? 'running' : lr.status === 'completed' ? 'done' : 'failed';
+      var lst = lr.status === 'completed' ? 'done' : lr.status === 'running' ? livenessStatus('running', lr.procAlive) : 'failed';
       var lt = {
         agent: String(lr.agent || lh), task: String(lr.task || ''), status: lst,
         handle: /^sa-(?:\d+|[0-9a-f]{8})$/.test(lh) ? lh : undefined,
@@ -339,33 +360,36 @@ export function initSubagentDock(deps: SubagentDockDeps) {
 
   function renderSubRow(row: any): HTMLElement {
     var t = row.t;
-    // 失联降级展示（2026-10-27）：running 但 30 分钟无新帧 → 徽标翻「疑似失联」、
-    // 停表（不再 now-startAt 无休止跳字，改收尾行同款相对时间）、图标停转、悬停出 ✕ 可清
-    var stale = t.status === 'running' && runStale(row.rec);
-    var rowEl = el('div', 'sm-row ' + t.status + (stale ? ' stale' : ''));
-    rowEl.appendChild(elIco('sm-ico' + (t.status === 'running' && !stale ? ' spin' : ''), SM_ICONS[t.status] || '·'));
+    // 失联降级展示（2026-10-27；2026-11-23 改 pid 两档）：
+    // ① 进程已死（台账 procAlive===false）= 确定失联 → 直接按失败画，立即落终态；
+    // ② 只是长时间无帧 = 疑似失联 → 徽标翻「疑似失联」、停表、悬停出 ✕ 可清
+    var dead = t.status === 'running' && procDead(t.handle || row.runId);
+    var stale = t.status === 'running' && !dead && runStale(row.rec);
+    var effStatus = livenessStatus(t.status, dead ? false : undefined);
+    var rowEl = el('div', 'sm-row ' + effStatus + (stale ? ' stale' : ''));
+    rowEl.appendChild(elIco('sm-ico' + (effStatus === 'running' && !stale ? ' spin' : ''), SM_ICONS[effStatus] || '·'));
     var main = el('div', 'sm-row-main');
     // 第一行：agent 名 + 状态徽标（2026-10-23 列表重设计：状态从第二行提进名字行成徽标，
     // 第二行整行留给任务摘要——原来「完成 · 【派单令：…】」挤一行、换行乱、还漏 prompt 原文）
-    var stTxt = t.status === 'running' ? (stale ? L.smStale : L.smProcessing) : t.status === 'failed' ? L.smFailedSt : L.smDoneGroup;
+    var stTxt = effStatus === 'running' ? (stale ? L.smStale : L.smProcessing) : effStatus === 'failed' ? L.smFailedSt : L.smDoneGroup;
     // 状态显性化（2026-10-23 用户「对号错号是状态？？」）：三种状态都给彩色文字徽标，
     // ✓/✗ 图标只作辅助——状态不许靠猜
     var line1 = el('div', 'sm-name');
     var agEl = el('span', 'sm-agent', t.agent + (t.step ? ' #' + t.step : ''));
     agEl.style.color = agentColor(t.agent); // 每 agent 固定色（抄 CC）
     line1.appendChild(agEl);
-    line1.appendChild(el('span', 'sm-st ' + (t.status === 'running' ? (stale ? 'stale' : 'run') : t.status === 'failed' ? 'fail' : 'done'), stTxt));
+    line1.appendChild(el('span', 'sm-st ' + (effStatus === 'running' ? (stale ? 'stale' : 'run') : effStatus === 'failed' ? 'fail' : 'done'), stTxt));
     // （用量收束行 2026-11-19 删除：ctx/花费不进浮窗，要看点进子会话）
     main.appendChild(line1);
     // 第二行只留任务（2026-11-19 用户拍板：浮窗只留 子名称 + 状态 + 父任务 + 时间；
     // 活动明细与用量全部删除——要看过程点进子会话转录页）。
     // 失败行例外保留「为什么挂」首行：那是状态信息，不然挂了只能点进去才知道原因
-    var taskSnipBase = t.status === 'failed'
+    var taskSnipBase = effStatus === 'failed'
       ? (((t.error || '').split('\n')[0] || '').trim() || t.task || '')
       : (t.task || '');
     // 摘要去 markdown 记号（2026-10-23「很漏」：**只测不修** 这类原文星号直接漏在列表上）
     var taskSnip = taskSnipBase.replace(/\s+/g, ' ').replace(/[*_`#]/g, '').slice(0, 48);
-    var line2 = el('div', 'sm-status' + (t.status === 'failed' ? ' fail' : ''), taskSnip);
+    var line2 = el('div', 'sm-status' + (effStatus === 'failed' ? ' fail' : ''), taskSnip);
     line2.title = taskSnipBase;
     main.appendChild(line2);
     rowEl.appendChild(main);
@@ -373,10 +397,10 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     // 收尾行 endAt 缺失（并行任务先完而 run 未收口等）回退 startAt——时间列不许空窗
     // data-el / data-ts 供 refreshSubTimes 就地刷新（见其头注释）
     var timeSpan: HTMLElement | null = null;
-    if (t.status === 'running' && !stale && row.rec.startAt) {
+    if (effStatus === 'running' && row.rec.startAt) {
       timeSpan = el('span', 'sm-time', fmtElapsed(Date.now() - row.rec.startAt));
       timeSpan.setAttribute('data-el', String(row.rec.startAt));
-    } else if (t.status === 'running' && stale && (row.rec.lastFrameAt || row.rec.startAt)) {
+    } else if ((stale || dead) && (row.rec.lastFrameAt || row.rec.startAt)) {
       timeSpan = el('span', 'sm-time', fmtRel(row.rec.lastFrameAt || row.rec.startAt)); // 失联停表：最后活动相对时间
       timeSpan.setAttribute('data-ts', String(row.rec.lastFrameAt || row.rec.startAt));
     } else if (row.rec.endAt || row.rec.startAt) {
@@ -387,8 +411,9 @@ export function initSubagentDock(deps: SubagentDockDeps) {
     if (t.ledger && t.reported === false) rowEl.title = L.smUnreported; // 回传未达：悬停可见，不占版面
     // （下钻按钮/明细浮层 2026-11-19 用户拍板删除：明细去子会话转录页看，浮窗只留名字/状态/任务/时间）
     // 失联行悬停 ✕（2026-10-27）：底层进程已死、终态帧永不会来，唯一清除路径就是手动。
+    // （2026-11-23 探活确认已死的行同样给 ✕，不再等 30 分钟）
     // stopPropagation：别点穿成下钻
-    if (stale) {
+    if (stale || dead) {
       var delBtn = el('span', 'sm-del', '✕'); delBtn.title = L.smRemove;
       delBtn.addEventListener('click', function (e) {
         e.stopPropagation();

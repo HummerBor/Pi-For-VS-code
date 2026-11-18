@@ -7,7 +7,7 @@
  * - 只断**可观测契约**——`replaySubagentHistory` 经 `post()` 发出的 `subagentUpdate` /
  *   `subagentLedger`；**不断私有字段**（标记字段是白盒：改成 Set、改名、换位置都会让用例
  *   假性失败/假性通过，且证明不了「以后还能重放」）。
- * - fixture 在临时目录自造（会话 jsonl / 台账 runs/*.json / frames.jsonl），不读用户真实会话
+ * - fixture 在临时目录自造（会话 jsonl / 台账 runs/*.json），不读用户真实会话
  *   ——否则用例挂在「本机最大那个会话文件」上，换机器就废，慢且不可复现。
  *
  * 事故现场（0.1.109 日志铁证，tab=p283）：
@@ -28,8 +28,9 @@
  * ④ 同一文件重复调用不重复投（防切页签反复重放）
  * ⑤ 只认派单回执：`subagent_list` 回执里的同形状 details 不许凭空造行
  * ⑥ 并发重入（postUiState 连发）：只扫一遍
- * ⑦ 会话文件**根本不存在**、但台账 parentSession 命中（且大小写不同）→ 仍从 frames.jsonl 重放
- *    （债2 验收：索引主源换成 harness 自己的台账，不再赌 pi 报的会话文件路径）
+ * ⑦ 会话文件**根本不存在**、但台账 parentSession 命中（且大小写不同）→ 台账行照样推出
+ *    （帧只能来自父会话，文件不存在就没有快照——v27 删 frames.jsonl 后不许造第二真值）
+ * ⑧ frames.jsonl 不存在时重放仍工作：帧只认父会话里的 custom:subagent-async
  */
 import assert from "node:assert";
 import fs from "node:fs";
@@ -75,11 +76,7 @@ function details(handle, agent) {
 }
 
 const runDir7 = path.join(tmp, "run-sa-7");
-fs.mkdirSync(runDir7, { recursive: true });
-fs.writeFileSync(
-  path.join(runDir7, "frames.jsonl"),
-  JSON.stringify({ handle: "sa-7", status: "completed", startedAt: 1000, endedAt: 2000, detail: details("sa-7", "工程师") }) + "\n",
-);
+fs.mkdirSync(runDir7, { recursive: true }); // 只有子会话目录，没有 frames.jsonl（v27 已删双写）
 
 const ledger = (handle, agent, status, startedAt, sessionDir) => ({
   handle,
@@ -95,13 +92,9 @@ fs.writeFileSync(path.join(runsDir, "sa-8.json"), JSON.stringify(ledger("sa-8", 
 // sa-99 不在本会话 handle 集里：台账必须按 handle 集过滤，不许串会话
 fs.writeFileSync(path.join(runsDir, "sa-99.json"), JSON.stringify(ledger("sa-99", "别的会话", "completed", 5000)));
 
-// ⑦ 只用台账索引的运行：会话文件永远不会存在，帧照样齐全
+// ⑦ 只用台账索引的运行：会话文件永远不会存在（也就没有帧可重放）
 const runDir77 = path.join(tmp, "run-sa-77");
 fs.mkdirSync(runDir77, { recursive: true });
-fs.writeFileSync(
-  path.join(runDir77, "frames.jsonl"),
-  JSON.stringify({ handle: "sa-77", status: "completed", startedAt: 7000, endedAt: 8000, detail: details("sa-77", "台账里的单") }) + "\n",
-);
 const ghostSession = path.join(tmp, "sess", "ghost-only-in-ledger.jsonl"); // 故意不创建
 fs.writeFileSync(
   path.join(runsDir, "sa-77.json"),
@@ -161,13 +154,17 @@ const caps = { getAgentDir: () => agentDir };
 function newCore(posts) {
   return new PiCore(caps, {}, (m) => posts.push(m), "test");
 }
-// 同句柄双路（frames.jsonl + entry 帧）会重复投**同一个 id**——设计如此（webview 按 id
-// 覆盖写，幂等）；断言只看 id 集合，不给这条冗余路加锁，将来合并成一条也不会误报
+// 同句柄双路（历史单既可能命中 entry 帧也可能命中同步回执）会重复投**同一个 id**——设计如此
+//（webview 按 id 覆盖写，幂等）；断言只看 id 集合。（v27 删 frames.jsonl 后已无双路）
 const uniqIds = (posts) =>
   [...new Set(posts.filter((m) => m.type === "subagentUpdate").map((m) => String(m.id)))].sort();
 const lastLedgerRows = (posts) => {
   const l = posts.filter((m) => m.type === "subagentLedger").pop();
   return l ? l.rows.length : -1;
+};
+const lastLedgerHandles = (posts) => {
+  const l = posts.filter((m) => m.type === "subagentLedger").pop();
+  return l ? l.rows.map((r) => String(r.handle)).sort() : [];
 };
 
 /* ① boot 早于落盘（ENOENT）：不投，也不许把机会烧掉 */
@@ -244,13 +241,14 @@ const lastLedgerRows = (posts) => {
   await new Promise((r) => setTimeout(r, 50));
   eq("⑥ 并发两次调用只扫一遍（id 集合不变）", uniqIds(posts), ["sa-7", "sa-8"]);
   eq(
-    "⑥ 不投第二轮（sa-8 只该出现一次，sa-7 是 frames+entry 双路两次）",
+    "⑥ 不投第二轮（sa-8 只该出现一次，sa-7 只有 entry 帧一路）",
     posts.filter((m) => m.type === "subagentUpdate").length,
-    3,
+    2,
   );
 }
 
-/* ⑦ 会话文件不存在（幽灵/未落盘），台账 parentSession 命中的运行照样重放 */
+/* ⑦ 会话文件不存在（幽灵/未落盘），台账 parentSession 命中的运行：台账行照样推出
+      —— v27 删了 frames.jsonl 双写后，帧只能来自父会话；文件不存在就没有快照（不许造第二真值） */
 {
   const posts = [];
   const core = newCore(posts);
@@ -258,7 +256,38 @@ const lastLedgerRows = (posts) => {
   core.lastSessionFile = ghostSession;
   await core.replaySubagentHistory();
   await new Promise((r) => setTimeout(r, 50));
-  eq("⑦ 台账 parentSession 命中（大小写不同也算）→ 从 frames 重放", uniqIds(posts), ["sa-77"]);
+  eq("⑦ 无父会话 → 不投快照（帧只认父会话）", uniqIds(posts), []);
+  eq("⑦ 台账行照样推出（状态真值在台账磁盘上）", lastLedgerHandles(posts), ["sa-77"]);
+}
+
+/* ⑧ frames.jsonl 不存在时重放仍工作（v27 删双写后的主回归口径）：
+      台账 sessionDir 里只有一个空目录、没有任何帧文件，帧全在父会话的 custom:subagent-async 里 */
+{
+  const runDir88 = path.join(tmp, "run-sa-88");
+  fs.mkdirSync(runDir88, { recursive: true });
+  ok("⑧ 前提：该单目录里没有 frames.jsonl", !fs.existsSync(path.join(runDir88, "frames.jsonl")));
+  const entryOnly = path.join(sessDir, "entry-only.jsonl");
+  fs.writeFileSync(
+    entryOnly,
+    JSON.stringify({
+      type: "custom",
+      customType: "subagent-async",
+      data: { handle: "sa-88", status: "completed", startedAt: 9000, endedAt: 9500, detail: details("sa-88", "纯 entry 帧") },
+    }) + "\n",
+  );
+  fs.writeFileSync(
+    path.join(runsDir, "sa-88.json"),
+    JSON.stringify({ ...ledger("sa-88", "纯 entry 帧", "completed", 9000, runDir88), parentSession: entryOnly }),
+  );
+
+  const posts = [];
+  const core = newCore(posts);
+  core.lastSessionFile = entryOnly;
+  await core.replaySubagentHistory();
+  await new Promise((r) => setTimeout(r, 50));
+  eq("⑧ frames.jsonl 不存在时重放仍工作（帧来自父会话）", uniqIds(posts), ["sa-88"]);
+  const upd = posts.filter((m) => m.type === "subagentUpdate" && m.id === "sa-88").pop();
+  ok("⑧ 快照内容正确（agent/状态/时间）", !!upd && upd.snapshot.tasks[0].agent === "纯 entry 帧" && upd.final === true && upd.endAt === 9500);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
