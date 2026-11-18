@@ -16,6 +16,7 @@ import { initSubagentDock } from "./features/subagentDock"; // 子 agent 浮窗�
 import { initComposer } from "./features/composer"; // 输入区（原住本文件，第 4 刀）
 import { initMarkdown } from "./features/markdown"; // 渲染基座（原住本文件，第 5 刀 5a）
 import { initLinkify } from "./features/linkify"; // 文件路径/符号可点（原住本文件，第 5 刀 5a）
+import { initLiveStream } from "./features/liveStream"; // live 流式增量渲染（原住本文件，第 5 刀 5b）
 import "./style.css";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -205,7 +206,21 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
   // 尾链（tailRow/tailBox 的 nextElementSibling）永不断，后续 start 的相邻判定永远成立；
   // 组头 = 首条 start 的行（与 settled renderAll 重放的组头一致，两种路径观感同构）
   var lastToolGroup: { name: string; anchor: any; count: number; hasErr: boolean; tailRow: HTMLElement; tailBox: HTMLElement } | null = null;
-  var liveMsg = null; var liveDiv: HTMLElement | null = null; var pdet: HTMLElement | null = null; var liveParts: any = null; var liveRTimer: number | null = null;
+  // ── live 流式（在途消息的增量渲染）：整块在 features/liveStream.ts ──
+  // 本视图一套（在途气泡 / parts 表 / 流式定时器都在模块内独占，这里不再持有同名变量）。
+  // 只注入消息区根、建 DOM 工具、markdown 基座、i18n 与滚动跟随——scroll 留本文件（R7：
+  // 它要调 applySticky(stickyQ)，两份滚动/钉住状态必然对不上）。别名供其余调用点
+  // （handleMsg / renderAll / setBusy / flushRender / dispose）按原符号名调，正文零改。
+  var liveStream = initLiveStream({
+    root: root, el: el, renderRich: renderRich, lang: L, scroll: scroll
+  });
+  var finalizeLive = liveStream.finalizeLive; var liveReset = liveStream.liveReset;
+  var liveBlock = liveStream.liveBlock; var appendDelta = liveStream.appendDelta;
+  var appendThink = liveStream.appendThink; var applyLiveSync = liveStream.applyLiveSync;
+  // 状态缝（模块独占 liveMsg / pdet / liveDiv 的唯一读写口，见模块头注释红线一）
+  var liveToolPart = liveStream.liveToolPart; var bindToolPart = liveStream.bindToolPart;
+  var setPDet = liveStream.setPDet; var dropEmptyLive = liveStream.dropEmptyLive;
+  var clearStreamTimer = liveStream.clearStreamTimer;
   var busyTimer: any = null; var busyStart = 0; var queueN = 0; // 「主回合在跑」住 S.busy（原局部 streaming）
   var compacting = false;
   var lastElapsed: number | null = null;
@@ -677,145 +692,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     var els = queuebarEl.querySelectorAll('[data-qid="' + qid + '"]');
     for (var i = 0; i < els.length; i++) els[i].parentNode.removeChild(els[i]);
   }
-  // 增量渲染（照 pi TUI 的思路：只往已有节点追加，不整气泡重绘；文本块结束时才做一次 markdown 渲染，settled 再全量纠偏）
-  function liveEnsure() {
-    if (!liveDiv) { liveDiv = el('div', 'bubble assistant'); root.appendChild(liveDiv); }
-    if (!liveMsg) liveMsg = { content: [] };
-    if (!liveParts) liveParts = {};
-  }
-  function liveBlock(ci: number, kind: string, name?: string) {
-    liveEnsure();
-    while (liveMsg.content.length <= ci) liveMsg.content.push(null);
-    var p = liveParts[ci];
-    if (p && p.kind !== kind) { finalizeLive(); p = null; }
-    if (!p) {
-      var wrap = document.createElement('div'); var body;
-      if (kind === 'thinking') {
-        var d = document.createElement('details'); d.className = 'think'; d.open = true;
-        var sm = document.createElement('summary'); sm.textContent = L.thinkingProcess;
-        body = el('div', 'think-body', ''); d.appendChild(sm); d.appendChild(body); wrap.appendChild(d);
-      } else if (kind === 'toolCall') {
-        var tl = el('div', 'tool run'); tl.appendChild(el('span', 't-dot')); tl.appendChild(el('span', 't-name', name || 'tool'));
-        body = el('span', 't-detail', L.genArgs.replace('{n}', 0)); tl.appendChild(body); wrap.appendChild(tl); pdet = body;
-        wrap.className = 'prow'; // 占位行标记：工具真正开跑时按 class 全局清除
-        var abox = el('pre', 'code'); abox.style.display = 'none'; wrap.appendChild(abox);
-        tl.addEventListener('click', function () { abox.style.display = abox.style.display === 'none' ? 'block' : 'none'; });
-      } else {
-        body = el('div', 'md-p', ''); wrap.appendChild(body);
-      }
-      liveDiv.appendChild(wrap);
-      p = { kind: kind, wrap: wrap, body: body, buf: '', doneLen: 0, tail: null, tailCode: false };
-      if (kind === 'toolCall') { p.raw = ''; p.box = abox; }
-      liveParts[ci] = p;
-    }
-    return p;
-  }
-  function finalizeLive() {
-    if (!liveParts) return;
-    for (var k in liveParts) {
-      var p = liveParts[k];
-      if (p && p.kind === 'thinking' && p.body && p.body.parentNode) {
-        // 返工（用户实测 0.1.28）：思考块结束（切正文/工具块出现/收尾）即收起 details——
-        // body 的父节点就是 details.think；用户手动展开仍可看全文（限高滚动照旧）
-        p.body.parentNode.removeAttribute('open');
-      }
-      else if (p && p.kind === 'text' && !p.done) {
-        p.done = true;
-        appendFinal(p, p.buf.slice(p.doneLen));
-        p.doneLen = p.buf.length;
-      }
-    }
-  }
-  function liveReset() { liveMsg = null; liveDiv = null; pdet = null; liveParts = null; }
-  // 流式 markdown：已完成的行一次性定型不再动，只有当前行/未闭合代码块作为小尾巴更新
-  // （整块重渲染有顿挫感；行级增量才是 CC 那种连贯流式）
-  function appendFinal(p, chunk) {
-    if (!chunk) return;
-    if (p.tail && p.tail.parentNode) p.tail.parentNode.removeChild(p.tail);
-    p.tail = null;
-    var d = document.createElement('div'); renderRich(d, chunk); p.body.appendChild(d);
-  }
-  function setMdTail(p, text) {
-    if (!text) { if (p.tail && p.tail.parentNode) p.tail.parentNode.removeChild(p.tail); p.tail = null; return; }
-    if (!p.tail || p.tailCode) {
-      if (p.tail && p.tail.parentNode) p.tail.parentNode.removeChild(p.tail);
-      p.tail = el('div', 'md-p', ''); p.body.appendChild(p.tail); p.tailCode = false;
-    }
-    // 含完整表格行时用 markdown 渲染（表格组退回尾巴区，见 streamTick 防劈叉注释）；
-    // 纯未完行仍走 textContent——半截 **bold 不闪样式，流式抖动最小
-    if (/^\s*\|.*\|\s*$/m.test(text)) { p.tail.innerHTML = ''; renderRich(p.tail, text); }
-    else p.tail.textContent = text;
-  }
-  function streamTick(p) {
-    var rest = p.buf.slice(p.doneLen);
-    if (p.tailCode) {
-      var ci = rest.search(/^```/m);
-      if (ci === -1) { if (p.tail) p.tail.textContent = rest; return; }
-      var le = rest.indexOf('\n', ci);
-      if (le === -1) { if (p.tail) p.tail.textContent = rest; return; }
-      appendFinal(p, rest.slice(0, le + 1));
-      p.tailCode = false; p.doneLen += le + 1;
-      rest = p.buf.slice(p.doneLen);
-    }
-    var nl = rest.lastIndexOf('\n');
-    if (nl === -1) { setMdTail(p, rest); return; }
-    var complete = rest.slice(0, nl + 1);
-    var fences = complete.match(/^```/gm);
-    if (fences && fences.length % 2 === 1) {
-      var idx = complete.lastIndexOf('\n```');
-      var lineEnd = idx === -1 ? complete.indexOf('\n') : complete.indexOf('\n', idx + 1);
-      var openEnd = lineEnd + 1;
-      appendFinal(p, complete.slice(0, openEnd));
-      p.doneLen += openEnd;
-      p.tailCode = true;
-      p.tail = document.createElement('pre'); p.tail.className = 'code';
-      p.body.appendChild(p.tail);
-      p.tail.textContent = p.buf.slice(p.doneLen);
-      return;
-    }
-    // 表格防劈叉（2026-09-18）：行级定型会把一张表劈成多个单行表——表头行先定型成
-    // 单行表，分隔行 | --- | 后到时落在 ri===1 之外被当普通行渲染成「--- --- ---」，
-    // 之后每个数据行各成一张独立表，直到 settled 全量纠偏才愈合。判据：本次定型段
-    // 末尾的完整行是表格行（|...|），说明表格可能还在长，把所在表格组整体退回尾巴
-    // 区富文本渲染，等非表格行到货再定型（renderPlain 按连续 | 行分组，那时 ri===1
-    // 分隔行守卫才有效）
-    var ls = complete.slice(0, -1).split('\n');
-    var ts = ls.length;
-    while (ts > 0 && /^\s*\|.*\|\s*$/.test(ls[ts - 1])) ts--;
-    if (ts < ls.length) {
-      var cut = ts === 0 ? 0 : ls.slice(0, ts).join('\n').length + 1;
-      appendFinal(p, complete.slice(0, cut));
-      p.doneLen += cut;
-      setMdTail(p, p.buf.slice(p.doneLen));
-      return;
-    }
-    appendFinal(p, complete);
-    p.doneLen += complete.length;
-    setMdTail(p, rest.slice(nl + 1));
-  }
-  function scheduleStream() {
-    // 三期④：换镜舞蹈退役——timer 与回调都住自己视图闭包，触发时元素/状态天然就是自己的
-    if (!liveRTimer) liveRTimer = setTimeout(function () {
-      liveRTimer = null;
-      if (liveParts) for (var k in liveParts) { var p = liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); }
-      scroll();
-    }, 100);
-  }
-  function appendDelta(t, ci) {
-    var p = liveBlock(ci, 'text');
-    p.buf += t;
-    streamTick(p); scroll();
-  }
-  function appendThink(t, ci) {
-    var p = liveBlock(ci, 'thinking');
-    // 返工（用户实测 0.1.28）：只在用户本就贴底时才自动滚底——否则每拍 delta 都拽回底部，
-    // 思考块「无法往上翻、不能被打断」。贴底判定必须在追加前算（追加会增大 scrollHeight）
-    var b = p.body;
-    var atBottom = b.scrollTop + b.clientHeight >= b.scrollHeight - 30;
-    p.buf += t; b.appendChild(document.createTextNode(t));
-    if (atBottom) b.scrollTop = b.scrollHeight;
-    scroll();
-  }
   function toolStart(id: string, name: string, detail?: string, collapsed?: boolean) {
     var t = el('div', 'tool run');
     t.appendChild(el('span', 't-dot'));
@@ -1222,29 +1098,6 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     if (liveSyncPending) { var msg2 = liveSyncPending; liveSyncPending = null; applyLiveSync(msg2); }
     drainPendingStream();
   }
-  function applyLiveSync(msg: SessionMessage) {
-    finalizeLive(); liveReset();
-    liveMsg = { content: [] };
-    var parts = ((msg && msg.content) || []) as any[];
-    for (var li = 0; li < parts.length; li++) {
-      var pc = parts[li];
-      if (pc && pc.type === 'thinking') {
-        var tp2 = liveBlock(li, 'thinking');
-        tp2.buf = pc.thinking || ''; tp2.doneLen = tp2.buf.length;
-        tp2.body.textContent = tp2.buf;
-      } else if (pc && pc.type === 'text') {
-        var xp2 = liveBlock(li, 'text');
-        xp2.buf = pc.text || ''; xp2.doneLen = xp2.buf.length;
-        appendFinal(xp2, xp2.buf);
-      } else if (pc && pc.type === 'toolCall') {
-        var cp2 = liveBlock(li, 'toolCall', pc.name);
-        cp2.raw = JSON.stringify(pc.arguments ?? null) || '';
-        cp2._len = cp2.raw.length;
-        cp2.box.textContent = cp2.raw.slice(-20000);
-      }
-    }
-    scroll();
-  }
   function handleMsg(m: HostToWebviewTagged) {
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderTimer !== null && deferDuringRender(m.type)) { pendingStream.push(m); return; }
@@ -1264,15 +1117,15 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       // 为每次 toolCallStart 建一个 assistant bubble（liveDiv），toolStart 时 prow 清了但空壳
       // bubble 留在 root——插在上一工具盒与下一工具行之间，既穿帮（截图空圆角色条）又破坏
       // 成组的 DOM 相邻判定（表现为「会话结束才合并」——settled 后 renderAll 重建成组）
-      if (liveDiv && !liveDiv.textContent && !liveDiv.querySelector('img')) liveDiv.parentNode.removeChild(liveDiv);
+      dropEmptyLive();
       liveReset(); toolStart(m.id, m.name, m.detail);
     }
     else if (m.type === 'toolCallStart') {
       var tp = liveBlock(m.ci, 'toolCall', m.name);
       tp._len = 0; tp.raw = '';
-      liveMsg.content[m.ci] = tp; scroll();
+      bindToolPart(m.ci, tp); scroll();
     }
-    else if (m.type === 'toolCallDelta') { var tb = liveMsg && liveMsg.content[m.ci]; if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; if (pdet) pdet.textContent = L.genArgs.replace('{n}', tb._len); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
+    else if (m.type === 'toolCallDelta') { var tb = liveToolPart(m.ci); if (tb) { tb._len += (m.chunk || '').length; tb.raw += m.chunk || ''; setPDet(L.genArgs.replace('{n}', tb._len)); if (tb.box && tb.box.style.display === 'block') tb.box.textContent = tb.raw.slice(-20000); } }
     else if (m.type === 'toolEnd') toolEnd(m.id, m.name, m.isError, m.text, m.detail);
     // subagentUpdate/subagentDetail 已在 window message 入口截获（页签过滤前），不进 handleMsg
     else if (m.type === 'uiState') {
@@ -1386,7 +1239,7 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
       dispose: function () {
         ctxPop.dispose();
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
-        if (liveRTimer) { clearTimeout(liveRTimer); liveRTimer = null; }
+        clearStreamTimer();
         if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
         if (view.parentNode) view.parentNode.removeChild(view);
       }
