@@ -206,7 +206,11 @@ export class PiCore {
   /** 工单 A（下钻）：subagent 运行留存 —— id（toolCallId 或异步句柄）→ 最新全量 details + 计时。
    *  快照协议消息只带 12 条尾窗（概览够用），下钻要看全量活动流，宿主必须自留正本；
    *  计时同理：pi 事件不带时间戳，宿主首见即起表。上限 30 个防长会话无界增长 */
-  private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number }>();
+  private subagentRuns = new Map<string, { details: unknown; startAt: number; endAt?: number; final?: boolean }>();
+  /** 台账对账定时器（2026-11-19）：面板状态不许只依赖帧通道——帧一旦到不了（扩展 runtime
+   *  stale / 单属于别的会话 / 宿主刚重启），那行就永远「处理中」，用户看到的是「完事了面板
+   *  啥也不变」。这里按 1s 读台账（磁盘真值）跟内存态对账，终态以台账为准收尾。 */
+  private ledgerTimer: any = null;
   /** 历史重放**已成功扫完**的会话文件（债务④）：每文件只放一次，此后 live 事件接管，
    *  防切页签 uiState 反复重放同帧覆写 webview 较新状态。
    *  【0.1.108 修订】标记只在扫完之后落——0.1.107 的埋点证明真实 boot 两次都死在
@@ -227,6 +231,7 @@ export class PiCore {
     if (!rec) {
       rec = { details, startAt: Date.now() };
       this.subagentRuns.set(rid, rec);
+      this.startLedgerReconcile();
       if (this.subagentRuns.size > 30) {
         const oldest = this.subagentRuns.keys().next().value;
         if (oldest !== undefined) this.subagentRuns.delete(oldest);
@@ -242,6 +247,72 @@ export class PiCore {
    *  final:true 原子回放并回填 subagentRuns（下钻视图重载后仍有全量 details）。
    *  异步壳（end 时仍全 running，工单25）与活跑同口径剔除；endAt 用工具结果消息的
    *  时间戳，浮窗「x分钟前」对齐聊天真实时序 */
+  /** 启动台账对账（幂等）：只要还有「未收尾」的运行就每秒读一次 runs.jsonl。
+   *  台账是 harness 每次状态迁移亲写的磁盘真值，跟帧通道完全解耦——所以「帧没到」不再等于
+   *  「面板永远处理中」。没有未收尾的行就自己停表（不常驻轮询）。 */
+  private startLedgerReconcile(): void {
+    if (this.ledgerTimer) return;
+    this.ledgerTimer = setInterval(() => this.reconcileSubagentLedger(), 1000);
+    // 定时器不阻进程退出（VS Code 里无所谓，裸跑用例里必须）
+    (this.ledgerTimer as any)?.unref?.();
+  }
+  private stopLedgerReconcile(): void {
+    if (!this.ledgerTimer) return;
+    clearInterval(this.ledgerTimer);
+    this.ledgerTimer = null;
+  }
+
+  /** 台账 → 面板 对账：内存里还标着「未收尾」的单，只要台账写成了终态，就按台账收尾并刷新。
+   *  另：台账行本身也要重发（状态/耗时/`回传未达`提示都靠它），所以顺带 pushLedger。 */
+  private reconcileSubagentLedger(): void {
+    const dir = this.caps.getAgentDir?.();
+    if (!dir) return this.stopLedgerReconcile();
+    let rows: ReturnType<typeof readLedgerRows> = [];
+    try {
+      rows = readLedgerRows(dir).filter((r) => this.subagentHandles.has(r.handle));
+    } catch {
+      return; // 台账暂时读不到：下一拍再试，不停表
+    }
+    /** rec 是否已收尾：显式标记 **或** details 里状态已非 running（重放/同步路的收尾走后者） */
+    const isFinal = (rec?: { details?: unknown; final?: boolean }): boolean => {
+      if (!rec) return true;
+      if (rec.final) return true;
+      const st = (rec.details as { results?: Array<{ status?: string; running?: boolean }> } | null)?.results?.[0];
+      return !!st && st.running !== true && typeof st.status === "string" && st.status !== "running";
+    };
+    let pending = 0;
+    for (const row of rows) {
+      const rec = this.subagentRuns.get(row.handle);
+      if (row.status === "running") {
+        if (!isFinal(rec)) pending++;
+        continue;
+      }
+      if (!rec || rec.final) continue; // 已收尾或没这单
+      // 台账说结束了，面板还挂着 → 以台账为准收尾（帧丢了也能落终态）
+      const detail = rec.details as { results?: Array<Record<string, unknown>> } | null;
+      const r = detail?.results?.[0];
+      if (r && typeof r === "object") {
+        r.running = false;
+        r.status = row.status; // completed / failed / killed
+        // 台账不存 error 文本（只有 deathReason 分类），失败原因留给「点进子会话看」；
+        // 这里不编造内容，避免面板显示假原因
+      }
+      const snap = subagentSnapshot(rec.details);
+      rec.final = true;
+      rec.endAt = row.endedAt ?? rec.endAt;
+      if (snap) {
+        this.post({ type: "subagentUpdate", id: row.handle, snapshot: snap, final: true, startAt: rec.startAt, endAt: rec.endAt });
+      }
+      this.caps.onSubagentSettled?.();
+    }
+    // 内存里还有未收尾的行（台账没写成/被清）：继续对账，别提前停表
+    for (const [, rec] of this.subagentRuns) {
+      if (!isFinal(rec)) pending++;
+    }
+    this.pushLedger();
+    if (pending === 0) this.stopLedgerReconcile();
+  }
+
   /** 帧回填（v23）：harness 只在首帧/终态帧带 task（省体积），中间帧用上次缓存，
    *  否则浮窗任务行会变空。messages/usage 已不进帧（v23）——转录内容改由宿主
    *  按字节偏移增量读子会话 jsonl（caps.pushSubagentTranscriptReload）。 */
@@ -566,6 +637,7 @@ export class PiCore {
 
   /** 释放全部资源（面板销毁/扩展卸载） */
   dispose(): void {
+    this.stopLedgerReconcile();
     this.client?.dispose();
     this.client = undefined;
   }
