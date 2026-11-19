@@ -78,14 +78,17 @@ webview/features/
 
 ## 四、回滚
 
-三道保险（回滚步骤已并入本篇，不再单独维护 ROLLBACK.md）：
-- tag `baseline-before-split` = `9530019`
-- `archive/pi-for-vscode-0.1.50-as-shipped.vsix`（拆分前装机版）
-- `archive/pi-for-vscode-0.1.50-split-done.vsix`（拆分完成版）
-- 中间态 `archive/pi-for-vscode-0.1.50-split-baseline.vsix`（第 3 刀后）、
-  `archive/pi-for-vscode-0.1.50-after-knife5.vsix`（第 5 刀收尾）
+回滚 = **git**，不存 vsix（2026-11-19 用户拍板：包能从任意 commit 重建，存 4 份是冗余）：
 
-单刀回退：`git revert <该刀 commit>`。
+```bash
+git revert <该刀 commit>          # 退单刀
+# 或整体回到某个锚点（tag baseline-before-split = 9530019）
+git checkout <commit> -- .
+
+npm run package                   # 重新出包（会 bump patch，避免同版本号覆盖）
+```
+
+同一会话内多刀一起退，用 `git revert <A> <B> ...` 或 `git revert <最老>..<最新>`。
 
 **装回旧版后子 agent 面板异常**：harness 只升不降，需把 `<agentDir>/extensions/subagent` 改名或删掉，
 旧插件才会重新同步内置版本（详见 `docs/decisions.md` §三）。
@@ -120,7 +123,7 @@ webview/features/
 ## 七、真机验收状态（未验，装机后第一件事）
 
 本轮所有交付只验到「compile + 回归 + 逐字核对 + headless 探针」，**真机行为一项都没验过**。
-装机包：`archive/pi-for-vscode-0.1.50-split-done.vsix`。
+装机包：`npm run package` 现打（当前 HEAD 即拆分完成态）。
 
 按域清单（坏在哪个域就 revert 对应 commit，见 §一 表）：
 

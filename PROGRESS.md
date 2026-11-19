@@ -5,7 +5,7 @@
 
 ## 在做
 
-真机验收 webview 拆分。用户已装 `0.1.51`（= `archive/pi-for-vscode-0.1.50-split-done.vsix` 同一构建，md5 已核）。
+真机验收 webview 拆分。用户已装 `0.1.51` = 当前 HEAD 的构建（md5 已核）。
 已跑完冒烟四步？**未知——用户说"一直在测"，具体测到哪一域未回报。**
 
 ## 待办（按优先级）
@@ -28,7 +28,7 @@
 | 东西 | 位置 |
 |---|---|
 | 回滚锚点 | tag `baseline-before-split` = `9530019` |
-| 安装包（4 份） | `archive/`（as-shipped / split-baseline / after-knife5 / split-done） |
+| 安装包 | 不存，`npm run package` 现打（任意 commit 都能重建） |
 | 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 模块表 + 决策理由） |
 | 架构与事故档案 | `docs/decisions.md`（15 节） |
 | 回滚步骤 | 本篇「关键位置」+ `docs/history/交接-webview拆分完成.md` §四 |
