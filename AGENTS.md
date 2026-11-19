@@ -1,192 +1,120 @@
-# AGENTS.md — 插件通用文档（pi-coding-agent 的 VS Code 图形界面）
+# AGENTS.md — pi coding agent 的 VS Code 图形界面
 
-pi coding agent 的 VS Code 图形界面（进程内直连 pi SDK）。本文件是插件本身的通用文档：
-只写这个插件是什么、怎么构建、有哪些不可破坏的约定——供任何会话参考。
-本文件不进 vsix（.vscodeignore 已排除）。
+进程内直连 pi SDK 的 VS Code 插件。本文件只放**每次都要遵守的东西**；
+架构细节、事故经过、历史决策在 `docs/decisions.md`，改到对应模块时按节查。
+本文件不进 vsix（`.vscodeignore` 已排除）。
 
 ## 角色与协作（新会话接任入口）
 
-> **角色由用户赋予**：新会话先由用户说清担任什么角色再上岗——没有被点名就不是任何角色。
+> **角色由用户赋予**：新会话先等用户点名再上岗，没被点名就不是任何角色。
 
-- 被点名**总监** → 读 [总监.md](总监.md) 接任（验收/裁决/签工单，不写业务代码）；用户发 `1`/`111` = 触发验收循环
-- 被点名**施工方** → 读 [施工方.md](施工方.md) 接任（按工单施工）；用户发 `2`/`222` = 按 [DIRECTOR.md](DIRECTOR.md) 当前工单开发
-- 工单与验收历史：[DIRECTOR.md](DIRECTOR.md)（待施工）/ [归档.md](归档.md)（已完结存档）；施工回报写在 [BUILDER.md](BUILDER.md)
+- 被点名**总监** → 读 [总监.md](总监.md)（验收/裁决/签工单，不写业务代码）；用户发 `1`/`111` = 触发验收循环
+- 被点名**施工方** → 读 [施工方.md](施工方.md)（按工单施工）；用户发 `2`/`222` = 按 [DIRECTOR.md](DIRECTOR.md) 当前工单开发
+- 工单队列：[DIRECTOR.md](DIRECTOR.md)；已完结：[归档.md](归档.md)；施工回报：[BUILDER.md](BUILDER.md)
+- 战役档案：[docs/history/](docs/history/)（一个战役一份，只读）
+- **当前进度：[PROGRESS.md](PROGRESS.md)**（每次接任先读它）
 
-## 不可破坏的约定
+## 铁律（改代码前逐条过，细节见 docs/decisions.md）
 
-- **pi 内置随插件分发（2026-10-26 用户拍板，废止原「零运行时依赖」条款）**：compile 时
-  scripts/release/vendor-pi.mjs 把 pi 的 dist/bundle（自包含单文件 bundle，~7.7MB）拷入
-  vendor/pi/ 随 vsix 分发，piSdk.findPiPackageRoot 内置层优先——用户装上插件即用，
-  不需要 node/npm/自装 pi。pi 包仍只在 devDependencies（源码不 import，仅拷产物）；
-  pi 发新版后重新 compile 即跟上（内置版本 = 构建时 node_modules 里的版本）。
-- **插件就是壳（2026-09-14 用户拍板，原话）：能用 pi 原生能力的就用 pi；任何新功能都要
-  先查清楚 pi 原本有没有这个能力（公开 API / TUI 行为 / 扩展生态三处都查），而不是自己
-  造。工单签发前必过此查；壳自研与 pi 原生重复 = 浪费 + 双份维护 + 行为分裂。自研实现
-  一旦发现 pi 有原生能力或失去存在前提，随工单清点回收（先例：会话列表换
-  SessionManager.listAll，工单十三）
-- **subagent harness 内置随插件分发（2026-10-30 用户拍板「内置到 pi-vscode，别新开一个
-  项目就说找不到子 agent」）**：subagent 扩展源码归属 harness/subagent/（.vscodeignore
-  黑名单制自动进包），激活时 ensureSubagentHarness 按 harness.json 的 version 门（只升
-  不降、不覆写本地修改）同步到 <agentDir>/extensions/subagent，pi 原生扩展机制照常
-  加载。改 harness 必须 bump version，否则已安装副本不会更新。落盘红线同样适用：
-  harness 派子进程永不传 --no-session（runsLedger 台账 + 每单独立 --session-dir）。
-- **进程内直连架构（2026-09-09 用户拍板）**：piClient 不再 spawn `pi --mode rpc`，改为经
-  src/piSdk.ts 定位并 import 用户已装的 pi 包（前置条件不变：机器上必须有 pi）。RPC 版整树
-  保留在分支 `rpc-subprocess`。改 piClient 前先读其头注释的「RPC 语义保留对照」——
-  preflight 验收即回、拒收报错文案与 steer 自愈正则的匹配是跨模块契约，别动。
-- **核心/宿主分层（工单四，已接线）**：piCore.ts（核心控制器，禁 import vscode，宿主能力经
-  hostCapabilities.ts 接口注入）+ panel.ts（VS Code adapter：实现 HostCapabilities/UiActions，组装 PiCore）。
-  改核心逻辑（状态机/prompt 组装/事件路由）去 piCore.ts，VS Code UI 流程留 panel.ts；
-  webview 消息路由入口是 core.onWebviewMessage。对账基线与漂移清单见 归档.md 工单四
-- **vsix 瘦身**：vsix 包内 media 只带 `pi-icon.png`/`pi-logo.svg`/`source/pi-icon-small.svg`
-  （.vscodeignore 白名单，2026-10-20 起标签图标/editor-title 按钮用它）；
-  README 截图引用 `raw.githubusercontent.com` 仓库 URL——改截图必须 push 后才在市场生效。
-- **`media/duck.svg` 禁删（2026-09-24 用户拍板）**：欢迎页鸭子的矢量源稿（GPT 从 pi-icon.png
-  逐像素重绘找回）。初代 duck.svg（16×16 crispEdges）从未进过 git，v0.0.57「media 清理」时连
-  工作区一起清掉、无从追查——任何 media 清理/瘦身一律不许碰它，它不进 vsix（白名单不含它）
-  不等于可以从仓库删。已知债务：逐像素 rect 描摹导致 3.4MB，如需瘦身可按 16×16 网格重绘
-  （pi-icon.png 网格中心即纯色原像素），但文件本身永远保留。
-- **webview/main.ts 的类型门禁**：strict:false 下 tsc 零报错（无 @ts-nocheck）；真类型问题用
-  最小断言解决。语法风格不设限（2026-10-29 用户拍板放宽，原「保持 ES5 var」限制废止）：
-  let/const/箭头函数随便用；存量 var 不必刻意回避，也别为迁移而迁移——大批量风格迁移
-  单独成笔，别混进功能提交（防 diff 噪音淹没有效改动）。
-- **模板纪律**：index.html 只放结构 + 占位符（`{{key}}` 运行时变量 / `{{t:key}}` i18n）。CSS/JS 主体
-  绝不写进模板，样式注入在 src/webview-html.ts 的 `headAssets`。
-- **CSP**：nonce 由 getHtml 随机生成，script 标签与 CSP 头必须配对；JS 注入须过 `</script` 转义。
-- **还原边界（工单七，裁决 11）**：还原只对「pi 工具命中」的文件提供；git-only 只展示；
-  write 碰过的未跟踪文件一律不可还原；patch 逆向任一行不符即拒打不落盘
-  （patchRevert.ts）——破坏性操作红线，别「优化」掉任何一道守卫；完整边界与选型
-  溯源见 归档.md 工单七 + 裁决 11
-- **steering 自愈别删**：prompt 被 pi 以 "already processing" 拒收时自动转 steer 重发
-  （piCore.ts 的 prompt 分支），这是 busy 标志竞态的兜底，不是临时代码。
-- **4 秒 pendingPrompt 兜底别删**：/llama 等命令式应答不触发 agent_start，没有它面板 busy 永久卡死
-  （piCore.ts 的 4s 兑底）。
-- **注释文化**：记录事故教训的注释（为什么这么写、踩过什么坑）必须随逻辑走，丢注释比丢代码严重。
-- **会话持久化格式**（`--- 代码上下文: ---`、`--- 附件: ---` 分隔标记）是磁盘格式，不参与 i18n。
-- **版本号口径（2026-09-23 用户拍板；遇到「版本回退/跳号」不用排查）**：`npm run ship`
-  跟的是**线上版本线**（从市场版 bump，发布号只增不复用）；本地 `npm run package` 测试包号
-  **随便**，不参与递增纪律。并行发布流（`chore: release` 提交）会按市场线改写 package.json
-  版本——看到本地版本号「变小/跳号」是发布流正常现象，**不是事故、不要再排查**；施工会话只
-  交代码，版本/发版归 ship 所在会话管。
-- **登录：TUI 只能由真 node 承载（2026-11-05 沙箱实测，别重走三条死路）**：pi 的
-  `/login` 是 TUI 专属命令，SDK 里没有、`pi auth` 也只有读/校验（无 login）。内置 pi 只
-  解决了 SDK 侧（对话），登录终端必须找**真 node**：`piSdk.findNodeRuntime()`（桌面宿主
-  是 Electron → 扫 PATH 找 node；远端/纯 node 宿主直接用 `process.execPath`）+ 内置
-  `vendor/pi/dist/bundle/cli.js`，即 `shellPath: node, shellArgs: [cli]`；没有 node 则退
-  PATH 上的 `pi`；两者都无 → 明确告知并引导装 Node.js（API key 方式始终零安装）。
-  三条已死的路（重测一次就是复蹈覆车）：① 终端 `env: {ELECTRON_RUN_AS_NODE:"1"}` 把
-  Code.exe 当 node —— **VS Code 终端的自定义 env 传不进 pty**，结果是 GUI 的 Code.exe
-  被拉起、弹出新窗口（用户实际撞过的症状）；② `.cmd` 启动器里自己 set 能跑
-  （`cli.js --version` → 1.5.0），但 Electron 当 node 时 **stdin 不是 TTY**，TUI 静默退出；
-  ③ `sendText('"exe" "cli"')` 拼引号 —— PowerShell 当字符串表达式报「意外的标记」
-  （cmd/bash 又能过），且 node-pty 会把内层引号转义掉。首屏「pi 可用吗」同理看内置
-  `bundledPiVersion()`，不看 PATH 探测。
-- **协议同步**：新增/修改跨边界消息时三处同步——发送方、接收方、protocol.ts。
-- **子 agent 显示名/调用分类两层分离（2026-09-24 用户拍板）**：展示层显示调用方给的名字
-  （随便取，subagentNames 台账），实际调用归 pi 注册分类（subagentNameGuard 在 tool_call
-  归位，默认 worker 优先）——否则老报 Unknown agent；pi 内容零改动。编译红线：
-  subagentSnapshot 保持零 import（webview 共享编译无 node 类型 + node 裸跑用例相对导入要
-  扩展名），显示名查表经 setDisplayNameLookup 依赖倒置注入（panel.ts，与 setPiClientDebug
-  同款）；subagentNames 是纯逻辑叶，别往里 import 东西/加 fs（宿主半边在 subagentNameGuard）。
-- **会话必须落盘（审计红线，2026-09-22 用户拍板）**：插件任何路径禁止 `--no-session`/
-  ephemeral（piClient 遇之显式抛错，禁令焊死在适配器入口）——会话文件是 pi 操作的唯一
-  审计痕迹，「无痕模式」删文件等破坏性操作无从追查。piChat.sessionMode 只留 continue/new，
-  旧 settings.json 的 ephemeral 残值归一为 continue（安全降级）。
-- **钱的显示：pi 记账 + 时段估算两行并存（2026-11-17 用户拍板方案 A，2026-11-05 的
-  「pi 算的、壳只搬」为止部分废止）**：pi 的 models 目录每模型只有**一套价**（≈厂商高峰价），
-  而 DeepSeek 按时段计价 → 空闲时段干活时账单只有 pi 数的一半。所以弹层「合计」保持 pi
-  `getSessionStats().cost` 当**对账锚点**不动，另加一行「时段价估算」按 `domain/priceTable.ts`
-  （高峰/空闲两档、按 usage 桶的整点时间戳判定）算「与账单同口径」的那份钱；页脚恒美元、
-  显示估算值，pi 记账进 title。价目表在 `<agentDir>/pi-vscode-pricing.json`（⚙ 菜单/命令
-  `piChat.openPriceTable` 打开，坏文件逐项回落内置），表里没有的模型**不估价**（标「无价目」）。
-  换模型加价走内置技能 `harness/skills/pricing-table`（用户截图 → agent 写 JSON），别改代码；
-  也别把估算塞进 pi 的 models.json（那是 pi 自己的配置，插件只读它）。
-  对账实测：2026-11-17 08:52–08:58 = 61 次 / 13,207,373 tok → 空闲价 ¥0.601，平台 ¥0.60。
+1. **能用 pi 原生能力就用 pi**：新功能先查 pi 的公开 API / TUI 行为 / 扩展生态三处，都不行才自己写。（§二）
+2. **会话必须落盘**：任何路径禁止 `--no-session` / ephemeral，禁令焊在 `piClient` 入口。（§十一）
+3. **还原守卫不许「优化」**：只还原 pi 工具命中的文件；`write` 碰过的未跟踪文件不可还原；
+   patch 逆向任一行不符即拒打不落盘。（§七）
+4. **两处兜底不许删**：steering 自愈（"already processing" 转 steer）、4s pendingPrompt 兜底。（§八）
+5. **改 harness 必须 bump `harness.json` 的 version**（只升不降，不 bump 已装副本不更新）。（§三）
+6. **核心禁 import vscode**：核心逻辑进 `piCore.ts`，宿主能力经 `HostCapabilities` 注入。（§五）
+7. **协议同步三处**：发送方、接收方、`protocol.ts`。（§九）
+8. **模板只放结构**：`index.html` 里不许有 CSS/JS 主体，样式进 `headAssets`；CSP nonce 必须配对。（§九）
+9. **webview tsc 零报错**（`strict:false` 也要零，不许 `@ts-nocheck`）。（§九）
+10. **版本号口径**：`ship` 跟市场线；本地测试包号跳号/回退不是事故，别排查。（§十二）
+11. **pi 内置随包分发**：不要求用户装 node/npm/pi。（§一）
+12. **注释文化**：记录事故教训的注释必须随逻辑走，丢注释比丢代码严重。（§八）
+
+## 工作方法：边干边记
+
+**每个会话都要留下可续的进度，不靠记忆、不靠摘要。**
+
+- 每完成一个**可验证的步骤**（一个文件改完 / 一个单收单 / 一个 bug 定位 / 一个决策拍板），
+  **立刻**往 [PROGRESS.md](PROGRESS.md) 追加一行：`<时间> ✅ <做了什么> → 下一步：<什么>`。
+- **不许攒到会话末尾再写**：压缩、断线、上下文被摘掉时，"打算写"的东西一起没。
+- 新会话或压缩后，第一件事：读 `PROGRESS.md` 最后 20 行 + `git log --oneline -10` +
+  `git status`，再动手。
+- `PROGRESS.md` **只记状态，不记细节**（细节进 commit message 与 `docs/history/`）；
+  超过 100 行时把旧段落截到 `docs/history/progress-<年月>.md`。
+- 破坏性操作前先写一行「准备做 X，回滚方式 Y」——中途断了也知道停在哪。
 
 ## 压缩后第一件事（上下文被摘掉时）
 
-> 为什么写在这里：AGENTS.md 进的是 **system prompt**，每轮重发、**不参与压缩**；
-> 写进对话或交接文档的内容会被摘要稀释，写在这里不会被摘掉。
+> 为什么写在这里：AGENTS.md 进的是 **system prompt**，每轮重发、**不参与压缩**。
+> 写进对话的内容会被摘要稀释，写在这里不会被摘掉。
 
-- 压缩的代价（pi 实现口径）：只有最近 `20k token` 原文保留，其余变成 7 段摘要；
-  工具输出每条**只留前 2000 字符**、thinking 全部丢弃。摘要 prompt 只要求保留“文件路径、函数名、错误信息”，
+- 压缩的代价（pi 实现口径）：只有最近 `20k token` 原文保留，其余变 7 段摘要；
+  工具输出每条**只留前 2000 字符**、thinking 全部丢弃。摘要只保证「文件路径、函数名、错误信息」，
   **不保证**保留被否决的方案、踩过的坑、边界禁令。
-- 所以看到上下文突然变短、或出现压缩摘要块时，**先重读再动手**：
-  `AGENTS.md` 的「不可破坏的约定」→ 当前工单（DIRECTOR.md / dispatch 文件）→ 相关 `交接-*.md` →
-  `ROLLBACK.md` → `git log --oneline -12` + `git status`。
+- 看到上下文突然变短或出现压缩摘要块时，**先重读再动手**：`PROGRESS.md` → 本文件「铁律」→
+  当前工单 → 相关 `docs/history/*.md` → `ROLLBACK.md` → `git log --oneline -12` + `git status`。
 - 摘要只回答「接到哪一步」，工单与提交记录回答「哪些路不许再走」。
-  **不许凭摘要里的记忆做破坏性操作**（删文件、reset、改协议、跨边界合并）。
+  **不许凭摘要里的记忆做破坏性操作**。
 
-## 工具用法（省上下文，2026-11-18 用户拍板）
+## 工具用法（省上下文）
 
 - **查代码只用 read / grep / find / ls 工具，bash 只跑命令**（构建、测试、git、node 脚本、目录操作）。
-  禁止用 bash 里的 `grep`/`sed`/`awk`/`cat`/`head`/`tail` 读源码——每次切片都进上下文，切口还各不相同，
-  越到后面越拼不出全貌。实测代价（2026-11-18 会话）：416 轮里 334 次 bash，其中 167 次 grep、105 次 sed，
-  `webview/main.ts` 被扒 93 次，`read` 工具只用了 3 次。
-- 例外只有一种：对 bundle/生成物/超大文件做一次性取证（`dist/bundle/*.js`、数百 MB 的 jsonl），
+  禁止用 bash 里的 `grep`/`sed`/`awk`/`cat`/`head`/`tail` 读源码——每次切片都进上下文，切口各不相同，
+  越到后面越拼不出全貌。实测代价：416 轮里 334 次 bash（167 grep + 105 sed），`read` 只用了 3 次。
+- 例外：对 bundle / 生成物 / 超大文件（`dist/`、`vendor/`、数百 MB 的 jsonl）做一次性取证，
   用 shell 过滤后仍要收窄输出，并在回复里说明为什么不能走工具。
-- **改完统一编译一次**，不许拿 `npm run compile` 当探针反复跑（同一会话跑了 41 次）。
-- 大面积搜索先收窄再打（限定目录/后缀/`-l`），禁止无过滤的全仓 `grep -rn` 直接灌进上下文。
+- **改完统一编译一次**，不许拿 `npm run compile` 当探针反复跑。
+- 大面积搜索先收窄再打（限定目录/后缀/`-l`），禁止无过滤的全仓 `grep -rn`。
 
 ### 共享工作树提交纪律（多会话并行时）
 
-- **禁止 `git add -A`；提交用 pathspec 直提：`git commit -m "..." -- <自己的文件...>`**，
-  不要用「`git add` 后裸 `git commit`」——index 是共享的，别人同一时刻 `git add` 的内容
-  会被你的 `commit` 一起带走（实测撞过一次 `unable to write new_index`）。
-- 提交后立刻 `git show --stat HEAD` 自检：文件集必须与本单声称的范围一致，多一个都算事故。
-- 工作树里别人的未提交改动（未跟踪文件/其它模块的 M）一律不碰、不暂存、不提交；
-  发现与本单文件重叠先停下问用户，不要自行合并。
+- **禁止 `git add -A`**；提交用 pathspec 直提 `git commit -m "..." -- <自己的文件>`——
+  index 是共享的，别人同刻 `git add` 的内容会被你的 commit 一起带走。
+- 提交后立刻 `git show --stat HEAD` 自检文件集，多一个都算事故。
+- 别人的未提交改动一律不碰；文件重叠先停下问用户。
 
-### Windows/git 实操坑（实测过，别再踩）
+### Windows/git 实操坑
 
-- **本仓 `core.autocrlf=true`**：`git checkout -- <文件>` 会把工作区写成 CRLF（blob 仍是 LF）。
-  `git status` 出现假 ` M` 时先 `git update-index --refresh -- <文件>` 再看，别直接提交。
-- **未跟踪文件不能靠 pathspec 直提**：新建文件必须先 `git add -- <显式路径>`，再
-  `git commit -m ... -- <pathspec>`（否则报 `pathspec did not match`）。
-- **git-bash 的 `/tmp` ≠ node 的 `/tmp`**：bash 里 `/tmp` 映射到 `%TEMP%`，node 解析成 `D:\tmp`。
-  跨进程传临时文件路径一律用 `$TEMP` / `process.env.TEMP`。
+- 本仓 `core.autocrlf=true`：`git checkout --` 会把工作区写成 CRLF；假 ` M` 先 `git update-index --refresh -- <文件>`。
+- 未跟踪文件不能靠 pathspec 直提：先 `git add -- <显式路径>`，再 commit。
+- git-bash 的 `/tmp` ≠ node 的 `/tmp`（node 解析成 `D:\tmp`）；跨进程传路径用 `$TEMP`。
 
-## 文档纪律（2026-11-19 用户拍板）
+## 文档纪律
 
-- **仓库只存结论，不存过程**。长期值钱的只有三件：决策（为什么这样做）、边界（什么不许动）、
-  当前状态（还有什么没做）。编译输出、测试数字、逐字核对过程只在收单那一刻有用。
+- **仓库只存结论，不存过程**：长期值钱的是决策、边界、当前状态。编译输出、测试数字只在收单那刻有用。
 - `REPORT-*` / `TEST-*` / `SCOUT-*` 写**项目内** `.pi/reports/`（已 gitignore、不进 vsix），
-  当次验收用；收单时把 1-5 行「决策 / 坑 / 遗留债」抽进 `交接-*.md` 或 `DIRECTOR.md` 注记，
-  **归档后即抛**（删文件）。**不许往 C 盘 / %TEMP% 写，也不许入库**（2026-11-19 用户拍板）。
-- `交接-*.md`：**一个战役一份**，收编该战役所有单的结论与坑；战役结束不再堆新文件。
-- `归档.md`：只写「工单号 + 结论 + commit 哈希」，**不存过程**（2026-11 已达 288KB，
-  警号：过程文档进库的终点就是没人读的垃圾场）。
-- 实验教训：`reports/` 12 单堆了 316KB / 3810 行，而每单的关键结论早已在 commit message 里。
+  收单时把 1-5 行「决策 / 坑 / 遗留债」抽进 `docs/history/` 或 `DIRECTOR.md` 注记，**归档后即抛**。
+  不许写 C 盘 / `%TEMP%`，也不许入库。
+- `docs/history/`：**一个战役一份**，战败即归档，不再新增文件名。
+- `归档.md`：只写「工单号 + 结论 + commit 哈希」，不存过程。
+- 派单任务书 `dispatch-t<N>.md` 放根目录，**收单即删**。
 
 ## 命令
 
 | 命令 | 用途 |
 |---|---|
 | `npm run compile` | 完整构建（webview 类型检查 → vite → tsc），提交前必跑 |
-| `npm run package` | 本地打测试 vsix（自动 bump patch；不动 git，版本号随下次提交入库。事故教训：同版本号覆盖打包 → 装旧包无法自证，2026-09-15） |
-| `npm run ship` | 正式发版一条龙：bump 版本 → 构建 → commit → push → publish 到市场 |
+| `npm run package` | 本地打测试 vsix（自动 bump patch，不动 git） |
+| `npm run ship` | 正式发版一条龙（bump → 构建 → commit → push → publish） |
 
-调试：F5（任务 `watch all`，tsc + vite 双 watch 并行）。
+调试：F5（任务 `watch all`，tsc + vite 双 watch）。测试：`npm run test:<名字>`，全部在 `scripts/test/`。
 
 ## 结构
 
 ```
-src/            宿主侧四层归位（5180d8c 纯移动）：
-                core/   piCore.ts 核心控制器 / hostCapabilities.ts 宿主能力接口 /
-                        protocol.ts 消息协议 / i18n.ts
-                pi/     piClient.ts pi 适配器 / piSdk.ts pi 包加载器 /
-                        ensureSubagentHarness.ts 内置 subagent 扩展同步
-                domain/ subagentSnapshot.ts 子 agent 监控快照 / subagentNames.ts 显示名台账/归位 /
-                        subagentNameGuard.ts 派发分类归位钩子 / toolDetail.ts 共享摘要 /
-                        patchRevert.ts edit patch 逆向还原（工单七）/ errorClass.ts /
-                        usageTotals.ts 用量与花费换算 / priceTable.ts 分时段价目表与估算（方案 A）
-                vscode/ extension.ts 入口 / panel.ts VS Code adapter / webview-html.ts 装配 /
-                        sessionsView.ts / sessionCache.ts / piSetup.ts / fileFinder.ts / changes.ts
-harness/        subagent 扩展 / 内置技能源码（随插件分发）：
-                harness/subagent/{index.ts, agents.ts, runsLedger.ts, harness.json}
-                harness/skills/pricing-table/{SKILL.md, skill.json}（换模型加价的技能，
-                src/pi/ensureBundledSkills.ts 按 skill.json 版本门同步到 <agentDir>/skills/）
-webview/        webview 前端源码：main.ts(交互) style.css(样式) index.html(模板)
-dist/webview/   vite 构建产物（不进 git，进 vsix）
-out/            tsc 产物（不进 git，进 vsix）
+src/core/       piCore.ts 核心控制器 / hostCapabilities.ts 宿主接口 / protocol.ts 消息协议 / i18n.ts / subagentLedger.ts
+src/pi/         piClient.ts pi 适配器（RPC 语义对照在头注释）/ piSdk.ts pi 包加载 / ensureSubagentHarness.ts
+src/domain/     subagentSnapshot.ts / subagentNames.ts / toolDetail.ts / patchRevert.ts / priceTable.ts / usageTotals.ts / jsonlTail.ts
+src/vscode/     extension.ts 入口 / panel.ts 适配器 / webview-html.ts 装配 / sessionsView.ts / transcriptTab.ts
+harness/        subagent 扩展（随包分发，改必 bump version）/ skills/pricing-table
+webview/
+  main.ts       368 行：引导 + 装配 + 页面级 chrome
+  core/state.ts
+  features/     sessionView / subagentDock / composer / messageList / statusBar / liveStream / tabs /
+                toolRows / outline / sticky / renderQueue / markdown / linkify / changesPage / ctxPopover
+dist/webview/   vite 产物（不进 git，进 vsix）
+docs/           decisions.md（架构与决策档案）/ history/（战役档案）
 ```
+
+**拆分历史**：`webview/main.ts` 3269 → 368 行（12 刀，2026-11-19），总账与回滚见
+`docs/history/交接-webview拆分完成.md`。

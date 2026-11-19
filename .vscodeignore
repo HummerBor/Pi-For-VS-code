@@ -14,6 +14,8 @@ dist/webview/preview.html
 vite.config.mts
 HANDOVER.md
 交接-*.md
+docs/
+PROGRESS.md
 *.config.mts
 .gitignore
 tsconfig.json
