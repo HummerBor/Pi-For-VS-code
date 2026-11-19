@@ -5,8 +5,9 @@
 
 ## 在做
 
-**真机验收 webview 拆分**。用户已装 `0.1.51`（= 当前 HEAD 的构建，md5 已核）。
-已测到哪一域**未回报**——用户说"一直在测"，没说结果。
+**真机验收 webview 拆分**。用户已装 `0.1.51`（已复核：vsix 内 dist 与本地逐字节同尺寸 + 同时间戳）。
+用户 11-19 回报「一直在使用测试，目前没有遇到问题」——**未按 9 域逐项勾选**，属「持续使用无异常」，
+不是逐域验收。等真出事再按 §七 表 revert。
 
 ## 待办（按优先级）
 
@@ -42,7 +43,7 @@
 | 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 模块表 + 决策理由 + 待验清单） |
 | 架构与事故 | `docs/decisions.md`（17 节：pi 内置 / 壳原则 / harness 版本门 / 还原边界 / 文档治理 / 压缩机制…） |
 | 工单索引 | `归档.md`（只存结论 + commit，历史遗留较臃肿） |
-| 本会话 jsonl | `~/.pi/agent/sessions/--D--work-docs-pi test-pi-vscode--/2026-11-18T08-29-53-267Z_01a1edc6.jsonl` |
+| 交接会话 jsonl | `~/.pi/agent/sessions/--D--work-docs-pi test-pi-vscode--/2026-11-18T08-29-53-267Z_01a1edc6-d4f3-75ed-8bf3-21e0eb1ca403.jsonl` |
 
 ## 上次交接时没定的事
 

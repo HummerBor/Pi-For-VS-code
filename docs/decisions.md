@@ -191,6 +191,19 @@ SDK 侧（对话），登录终端必须找**真 node**：`piSdk.findNodeRuntime
 - 所以 **jsonl 永远是完整原文**（压缩 N 次都在），从 jsonl 提取比 LLM 摘要更保真。
 - 实测（4.51MB / 853 条消息的会话）：只提取 user 意图（每条截 120 字）≈ **1.1k token**；
   加最后 5 段 agent 结论 ≈ **1.6k token**。比压缩保留的 20k 原文小 12 倍。
+- **摘要内容有定式**（源码 `chunk-44DLKSKE.js`）：system prompt 是「You are a context summarization
+  assistant… ONLY output the structured summary」，输出 7 段固定格式 —— Goal / Constraints &
+  Preferences / Progress(Done·In Progress·Blocked) / Key Decisions / Next Steps / Critical Context，
+  另附 `<read-files>` `<modified-files>`。喂给摘要器的输入本身也被砍：`TOOL_RESULT_MAX_CHARS=2000`
+  （工具输出每条只留前 2000 字符）、thinking 全丢。
+- **保留量是默认参数不是玄学**：`SETTINGS_DEFAULTS.compaction = {reserveTokens:16384,
+  keepRecentTokens:20000}`；判据 `contextTokens > contextWindow - 16384`。
+- **另一种「变短」不是压缩（2026-11-19 实测补正）**：本机 488 个会话 / 4.0GB / **0 条 compaction**，
+  但出现 `{type:"context_edit", targetId, replacement:null}` —— 源码是 `_omitRecoveryAttempt`：
+  某次尝试失败后把该条 assistant 消息及其 toolResult 从上下文摘掉，追加墓碑（原文仍在文件里）。
+  别把「上下文变短」一律记成压缩，先看 entry 类型。
+- **jsonl 膨胀主因不是对话**：单个 680MB 会话里 `custom` 33646 条、`message` 仅 526 条（子 agent 帧）。
+  瘦身要打 `custom` 帧，不是打消息。
 - 待做：`scripts/probe/session-digest.mjs` 原型（从 jsonl 提取意图时间线）；插件侧可在压缩后
   注入该摘要，替代不可靠的 LLM 摘要。
 - 跨会话仍然要人工维护的只有**待办**（新会话看不到旧会话 jsonl）—— 那就是 `PROGRESS.md` 的用途。
