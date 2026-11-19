@@ -168,14 +168,6 @@ export function initLiveStream(deps: LiveStreamDeps) {
     p.doneLen += complete.length;
     setMdTail(p, rest.slice(nl + 1));
   }
-  function scheduleStream() {
-    // 三期④：换镜舞蹈退役——timer 与回调都住自己视图闭包，触发时元素/状态天然就是自己的
-    if (!liveRTimer) liveRTimer = setTimeout(function () {
-      liveRTimer = null;
-      if (liveParts) for (var k in liveParts) { var p = liveParts[k]; if (p && p.kind === 'text' && !p.done && p.buf.length > p.doneLen) streamTick(p); }
-      scroll();
-    }, 100);
-  }
   function appendDelta(t, ci) {
     var p = liveBlock(ci, 'text');
     p.buf += t;
@@ -232,11 +224,13 @@ export function initLiveStream(deps: LiveStreamDeps) {
     scroll();
   }
 
-  // scheduleStream 是**存量死代码**（SCOUT-t34-cuts 六.5：全文件只有定义，appendDelta 直接调
-  // streamTick，从未有人调它）。按「存量死代码不动」照搬进本模块保留，不删；要清走单独立票。
+  // scheduleStream 已于工单38 删除（死代码）：SCOUT-t34-cuts 六.5 查出全仓只有定义、无调用点，
+  // 增量渲染走 appendDelta → streamTick 直调（行级增量本身就够便宜，不需要 100ms 合帧定时器），
+  // 当年按「存量死代码不动」照搬保留，本轮清偿。要恢复节流请新开一票并带上真实调用点，
+  // 别只把定义加回来——没有人调的定义迟早再被当成活代码误改。
   return {
     liveEnsure: liveEnsure, liveBlock: liveBlock, finalizeLive: finalizeLive, liveReset: liveReset,
-    appendFinal: appendFinal, setMdTail: setMdTail, streamTick: streamTick, scheduleStream: scheduleStream,
+    appendFinal: appendFinal, setMdTail: setMdTail, streamTick: streamTick,
     appendDelta: appendDelta, appendThink: appendThink, applyLiveSync: applyLiveSync,
     liveToolPart: liveToolPart, bindToolPart: bindToolPart, setPDet: setPDet,
     dropEmptyLive: dropEmptyLive, clearStreamTimer: clearStreamTimer

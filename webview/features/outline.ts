@@ -47,7 +47,10 @@ export function initOutline(deps: OutlineDeps) {
   // ── 消息大纲轨道（用户直令 2026-09-21，对齐 DeepSeek/Codex web）：右缘一列短横线 =
   // 每条用户消息一个锚点；hover 错峰展开文字列表、点击平滑跳转+闪烁、滚动时当前条平滑跟随。
   // 纯视图内 DOM 零协议新增；锚点即 .bubble.user（addUser 单点打标，历史重绘同路径）。
-  // 当前条判定口径：视口上 1/3 线以上最近一条（与阅读位置一致，拉到底时最后一条必中）
+  // 当前条判定口径：视口**中线**（root.scrollTop + root.offsetTop + root.clientHeight / 2，见 olSpy）
+  // 以上最近一条——不是上 1/3 线。选中线与点击跳转的 block:'center' 同一个中线，所以点中条必在线上；
+  // 拉到底时最后一条必中。要改成 1/3 线属行为变更，需产品拍板，别照旧注释改代码。
+  // （outlineResize 里的 1/3 是轨道 maxHeight 上限，与当前条判定无关，别混读）
   var olAnchors: { b: HTMLElement; row: HTMLElement }[] = [];
   var olSpyQueued = false; // rAF 合顿滚动事件，一帧一次布局读
   var olSuspend = false; // renderAll 逐条 addUser 时挂起（每条全量重建 = O(N²)，重绘完一次建好）
