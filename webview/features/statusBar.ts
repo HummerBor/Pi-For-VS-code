@@ -28,6 +28,10 @@ import type { BannerPayload, ChangesFileInfo } from "../../src/core/protocol";
 import { getActiveTabId, type ViewState } from "../core/state";
 import { getTabsList } from "./tabs";
 
+/** 状态行当前「归谁」的显式状态：'' 空 / temp 临时文案 / busy Working 走秒 /
+ *  frozen 本轮用时冻结 / compacting 压缩标签。见 initStatusBar 里 statusKind 的注释 */
+type StatusKind = "" | "temp" | "busy" | "frozen" | "compacting";
+
 export interface StatusBarDeps {
   /** 本视图所属页签 id（原 makeSessionView 的 id 形参）：applyState 判「页头只刷活动页签」、
    *  renderBusyUi 查本页签的子 agent 是否仍在跑 */
@@ -118,7 +122,17 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
   var busyTimer: any = null; var busyStart = 0; // 「主回合在跑」住 S.busy（原局部 streaming）
   var lastElapsed: number | null = null;
   var roundFrozen = ''; // 本轮总用时冻结文本（全收尾才写；新轮清零——一轮一只累计秒表）
-  function setStatus(t) { if (t) { statusEl.classList.remove('busy'); statusEl.textContent = t; } else if (!S.busy) { statusEl.textContent = ''; } }
+  /**
+   * 状态行归属（显式状态）。为什么不能用文本前缀判定（t42 事故，2026-11-19）：applyState 原先用
+   * `statusEl.textContent.indexOf('⏱') !== 0` 判断「这行是不是临时状态」好清掉它；而全收尾的冻结值
+   * roundFrozen 是 fmtDur() 的纯时长（83s / 1m03s），不带任何前缀 → 被判成临时状态擦掉。
+   * 时序（见 applyState 注释）：busy:false → 冻结值上屏 → refreshState 的 state 帧紧随其后到达
+   * → 冻结值活不过一帧。锁判定一律读本变量，不许再嗅文本。
+   */
+  var statusKind = '' as StatusKind;
+  /** 状态行唯一写口：文本与归属一起落，杜绝「文本变了、归属没变」的漂移 */
+  function writeStatus(t: string, kind: StatusKind) { statusEl.textContent = t; statusKind = kind; }
+  function setStatus(t?: string) { if (t) { statusEl.classList.remove('busy'); writeStatus(t, 'temp'); } else if (!S.busy) writeStatus('', ''); }
   // N 刀（2026-09-23 用户点名「没感觉秒开，往这里加个计时器」）：启动秒表——
   // 「正在启动 pi… Ns」实时走秒。旁路 setStatus 直写（同 ⏱/busy 帧先例）；
   // 自守卫：状态行被任何人接管（busy 类/别的文案）即自杀停摆，杜绝「白 Working」
@@ -128,11 +142,11 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
   function startBootTick(base) {
     stopBootTick();
     bootTickStart = Date.now();
-    statusEl.textContent = base;
+    writeStatus(base, 'temp'); // 启动秒表文案就是临时状态（真值 state 帧到达即被清掉）
     bootTickTimer = setInterval(function () {
       var cur = statusEl.textContent || '';
       if (statusEl.classList.contains('busy') || cur.indexOf(base) !== 0) { stopBootTick(); return; }
-      statusEl.textContent = base + ' ' + fmtDur(Date.now() - bootTickStart);
+      writeStatus(base + ' ' + fmtDur(Date.now() - bootTickStart), 'temp');
     }, 1000);
   }
   function stopBootTick() { if (bootTickTimer) { clearInterval(bootTickTimer); bootTickTimer = 0; } }
@@ -206,7 +220,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
       var myStart = busyStart; // 捕获局部：原换镜时代防漂移读；今闭包常量，保留语义
-      statusEl.textContent = (getCompacting() ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s');
+      writeStatus(getCompacting() ? '⏳ ' + L.compacting : frames[0] + ' Working… 0s', getCompacting() ? 'compacting' : 'busy');
       var myTimer: any = setInterval(function () {
         fi = (fi + 1) % frames.length;
         // 白 Working 事故（2026-09-20 用户实测）：本 ticker 只写文本不动 class——镜像漂移时
@@ -224,18 +238,18 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
           return;
         }
         // 实时计数从乐观置位起算（比真实 agent 时间多 1~2s）；结束后以宿主实测耗时为准
-        statusEl.textContent = (getCompacting() ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (getQueueN() > 0 ? L.queuedCount.replace('{n}', getQueueN()) : ''));
+        writeStatus(getCompacting() ? '⏳ ' + L.compacting : frames[fi] + ' Working… ' + fmtDur(Date.now() - myStart) + (getQueueN() > 0 ? L.queuedCount.replace('{n}', getQueueN()) : ''), getCompacting() ? 'compacting' : 'busy');
       }, 120);
       busyTimer = myTimer;
     } else {
       statusEl.classList.remove('busy');
       // B 刀：占位期不清状态行（否则 setBusy(false) 会把「pi 后台启动中… Ns」刷掉，
       // 与 applyState 的守卫成对——漏一道就还是 6 秒零反馈）
-      if (!getBooting()) statusEl.textContent = '';
+      if (!getBooting()) writeStatus('', '');
       if (getCompacting()) {
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
         statusEl.classList.add('busy');
-        statusEl.textContent = '⏳ ' + L.compacting;
+        writeStatus('⏳ ' + L.compacting, 'compacting');
       } else {
         // 全收尾：本轮总用时白字冻结（「完成的话就显示 83s 白色字体就行」）——与走秒同基准
         // （busyStart 起算，含子 agent 全程），数字不跳变；下一轮 setBusy(true) 清零重来。
@@ -244,7 +258,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
         if (!roundFrozen && lastElapsed != null) roundFrozen = fmtDur(lastElapsed);
         if (roundFrozen) {
           statusEl.classList.add('done');
-          statusEl.textContent = roundFrozen;
+          writeStatus(roundFrozen, 'frozen'); // 冻结态：state 帧不许清（见 statusKind 注释）
           statusEl.title = L.turnDuration;
         }
       }
@@ -272,7 +286,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
     setCompactingFlag(v);
     if (v) {
       statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
-      statusEl.textContent = '⏳ ' + L.compacting;
+      writeStatus('⏳ ' + L.compacting, 'compacting');
     }
   }
   function fmtSession(file, name) {
@@ -294,9 +308,11 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
   function applyState(m) {
     // 工单24 二期：页脚（模型/思考/用量）随页签视图走，后台直接渲进隐藏视图；
     // 页头会话标题是页面级（只显示活动页签），后台跳过
-    // ⏱ 本轮耗时刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
-    //（settle 时序：busy:false → ⏱ 上屏 → refreshState 的 state 消息紧随其后到达）
+    // 本轮用时冻结值刚由 setBusy(false, elapsedMs) 写入，不能被这里的临时状态清理冲掉
+    //（settle 时序：busy:false → 冻结值上屏 → refreshState 的 state 消息紧随其后到达）
     // 压缩中不清：压缩标签是持续状态，applyState 的高频刷新（refreshState）不冲掉它
+    // ★ 判据是显式状态 statusKind，不是文本前缀（t42 事故：冻结值是纯时长 83s / 1m03s，
+    //   原先嗅 indexOf('⏱') !== 0 会把它当成临时状态擦掉，冻结值活不过一帧）
     // B 刀（2026-11-04 用户报「提示消失后是灰状态、等一会模型才有」）：占位帧（booting）
     // 不是终值——页脚来自模型记忆/快路径缓存，模型名和标题还得等 pi init 完。这种帧不许
     // 收秒表、不许清状态行，否则 boot 空窗（真机日志实测 6.4s，mr-create 单项 5.3s）里
@@ -305,7 +321,10 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
     setBootingFlag(m.booting === true);
     if (!getBooting()) {
       stopBootTick(); // N 刀：首帧真值状态到达 = 启动结束，秒表收表（文本由下方清理）
-      if (!getCompacting() && statusEl.textContent.indexOf('⏱') !== 0) setStatus(''); // pi 已就绪，清掉「正在启动 pi…」之类的临时状态
+      // pi 已就绪，清掉「正在启动 pi…」之类的临时状态。只清 temp 这一种归属——
+      // frozen（本轮用时）/ busy（Working）/ compacting（压缩标签）都是持续状态，不许清；
+      // 压缩窗口开着时一律锁（getCompacting 与 statusKind 双重防线，压缩标签优先）
+      if (!getCompacting() && statusKind === 'temp') setStatus('');
     }
     // 模型名包进 .chip-label，底栏限宽时省略号截断，全名靠 title（下一行）
     modelEl.innerHTML = ico('cpu') + ' <span class="chip-label">' + esc(m.model ? (m.model.name || m.model.id) : '—') + '</span>';
