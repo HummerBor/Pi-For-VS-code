@@ -66,6 +66,7 @@
 ## 四、验证
 
 1. `npm run compile` 全绿（注意 `tsconfig.json` 只 include `src`，`harness/**` 不进 tsc——所以
+   harness 的类型正确性靠 `node --experimental-strip-types` 或 import 单测兜底，别指望 compile 检查它）
    **例外**：若报错落在**本单没碰的文件**（尤其 `webview/features/composer.ts` /
    `webview/features/messageList.ts` / `webview/style.css` / `webview/index.html`——那是别人正在写的
    半成品），**不改他们的文件**，把原始报错存进回报并标「compile 门禁延后到该批改动落地」，
