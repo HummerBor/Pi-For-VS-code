@@ -599,10 +599,29 @@ if (apply) {
 
 let saved = 0;
 let failed = 0;
+
+// 进度提示（攒包1，2026-11-19）：不给路径时默认目标就是真实会话根（本机 4.1GB / 488 个文件），
+// 逐个流式扫完才出结果，中途几十秒没有任何输出，用户会以为卡死。所以每处理完一批就往 **stderr**
+// 打一行（stdout 留给结果，不能破坏可解析性）。纯观测：不参与任何判定，干跑与 --apply 都打。
+const humanSize = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)}GB` : `${(b / 1e6).toFixed(1)}MB`);
+let doneFiles = 0;
+let doneBytes = 0;
+let lastTickBytes = 0;
+function scanTick(bytes) {
+  doneFiles++;
+  doneBytes += bytes;
+  // 第一条立刻报总数（用户最想知道「一共多少」），之后每 50 个文件或 200MB 一条，收尾再报一条
+  if (doneFiles === 1 || doneFiles % 50 === 0 || doneBytes - lastTickBytes >= 200e6 || doneFiles === list.length) {
+    lastTickBytes = doneBytes;
+    console.error(`[扫描] 已处理 ${doneFiles}/${list.length} 个文件 ${humanSize(doneBytes)}`);
+  }
+}
+
 for (const file of list) {
   const isFrames = path.basename(file) === "frames.jsonl";
   try {
     const r = await (isFrames ? slimFrames(file) : slimSession(file));
+    scanTick(r.before);
     const pct = r.before ? (100 * (r.before - r.after)) / r.before : 0;
     const detail = isFrames
       ? `       ${r.note ?? ""}`
@@ -616,6 +635,13 @@ for (const file of list) {
     if (apply && !isFrames) console.log("       自检通过：上下文条数 / 内容哈希 / thinkingLevel / model / 可达数均与 .bak 一致");
     saved += r.before - r.after;
   } catch (e) {
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      /* 量不到就按 0 计，进度只是观测 */
+    }
+    scanTick(size);
     console.error(`[失败] ${file}: ${e?.message ?? e}`);
     if (e?.fatal) {
       failed++;

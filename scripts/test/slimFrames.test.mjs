@@ -18,6 +18,8 @@
  *   ⑨ 无帧样本 apply 后逐字节不变（不制造无意义改写）
  *   ⑩ 入口守卫（工单40）：--apply 打到真实会话根必须二次确认 --force-real；干跑与显式非 sessions
  *      路径不受影响。真实根一律用临时 HOME（USERPROFILE）顶替，**从不碰真实 ~/.pi/agent/sessions**。
+ *   ⑪ 进度提示（攒包1）：扫真实会话根时 stderr 必须出「[扫描] 已处理 N/M 个文件 X MB」进度行，
+ *      干跑与 --apply 都打、且绝不进 stdout（结果输出要保持可解析）。
  *
  * 跑法：node scripts/test/slimFrames.test.mjs（不进构建链，不需要 npm script）
  */
@@ -399,7 +401,37 @@ try {
   assert.ok(Buffer.byteLength(read(plainSample.file)) < Buffer.byteLength(plainRaw), "⑩ 放行的样本应真瘦身");
   console.log(`⑩-5 显式路径 --apply：退出 ${plainRun.status}（非 sessions 目录，无需 --force-real）`);
 
-  console.log("\n全部通过（①②③④⑤⑥⑦⑧⑨⑩）");
+  // ─────────── ⑪ 进度提示（攒包1）：扫真实会话根时往 stderr 报进度 ───────────
+  // 不给路径时默认目标就是真实会话根（本机 4.1GB / 488 个文件），旧版扫完才出结果、中途几十秒
+  // 零输出，用户会以为卡死。判据：干跑与 --apply 都打；只走 stderr（stdout 留给可解析结果）；
+  // 按批打、不刷屏。同样用临时 HOME 顶替真实根。
+  const progHome = fs.mkdtempSync(path.join(root, "home-prog-"));
+  const progRoot = path.join(progHome, ".pi", "agent", "sessions", "proj-prog");
+  for (let i = 0; i < 3; i++) {
+    const dir = path.join(progRoot, `p${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    buildSession(dir); // 每份 ~2.5MB，过 --min-mb 1 的阈值
+  }
+  const progEnv = { HOME: progHome, USERPROFILE: progHome };
+  const progDry = run(["--min-mb", "1"], progEnv);
+  assert.equal(progDry.status, 0, `⑪ 干跑应退出 0：${progDry.stderr}`);
+  const progLines = progDry.stderr.split("\n").filter((l) => l.startsWith("[扫描]"));
+  assert.ok(progLines.length > 0, `⑪ 扫描阶段 stderr 必须有进度行（实际 stderr：${progDry.stderr}）`);
+  assert.match(progLines[0], /^\[扫描\] 已处理 1\/3 个文件 [\d.]+MB$/, `⑪ 第一条进度应立刻报出总数：${progLines[0]}`);
+  assert.match(progLines.at(-1), /^\[扫描\] 已处理 3\/3 个文件 [\d.]+MB$/, `⑪ 收尾要报满：${progLines.at(-1)}`);
+  assert.ok(progLines.length <= 3, `⑪ 3 个文件最多 3 行进度，不许刷屏（实际 ${progLines.length} 行）`);
+  assert.doesNotMatch(progDry.stdout, /\[扫描\]/, "⑪ 进度不许进 stdout（结果输出要保持可解析）");
+  console.log(`⑪ 干跑进度：stderr ${progLines.length} 行「${progLines[0]}」…「${progLines.at(-1)}」，stdout 无进度行`);
+
+  const progApplyDir = fs.mkdtempSync(path.join(root, "prog-apply-"));
+  const progApplySample = buildSession(progApplyDir);
+  const progApply = run(["--apply", progApplySample.file], progEnv);
+  assert.equal(progApply.status, 0, `⑪ --apply 应退出 0：${progApply.stderr}`);
+  assert.match(progApply.stderr, /\[扫描\] 已处理 1\/1 个文件 /, `⑪ --apply 也要打进度：${progApply.stderr}`);
+  assert.doesNotMatch(progApply.stdout, /\[扫描\]/, "⑪ --apply 的进度也不许进 stdout");
+  console.log("⑪ --apply：stderr 同样有进度行，stdout 无进度行");
+
+  console.log("\n全部通过（①②③④⑤⑥⑦⑧⑨⑩⑪）");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
   console.log(`样本已删：${root}`);
