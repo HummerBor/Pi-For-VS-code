@@ -1,31 +1,41 @@
-# PROGRESS.md — 当前进度
+# PROGRESS.md — 交接卡
 
-> **规则**：每完成一个可验证步骤就追加一行（`时间 ✅ 做了什么 → 下一步`），不许攒到会话末尾。
-> 只记状态，不记细节（细节进 commit / `docs/decisions.md`）。新会话或压缩后先读最后 20 行。
-> **滚动窗口**：日志只留最近 25 条，超出删最旧的（不归档，事实已在 git log）；全文件恒 ≤ 70 行。
+> 只记「新会话怎么接上」，不记动作流水（那些在 `git log`）。
+> 每次接任先读这篇，再读 `AGENTS.md` 的「铁律」与「工作方法」两节。
 
-## 当前状态（2026-11-19 19:40）
+## 在做
 
-**在做**：真机验收（用户装机中，包 = `archive/pi-for-vscode-0.1.50-split-done.vsix`，已装成 0.1.51，md5 一致）
+真机验收 webview 拆分。用户已装 `0.1.51`（= `archive/pi-for-vscode-0.1.50-split-done.vsix` 同一构建，md5 已核）。
+已跑完冒烟四步？**未知——用户说"一直在测"，具体测到哪一域未回报。**
 
-**已完成**
-- webview/main.ts 拆分收官：3269 → 368 行，12 刀（第 3 刀 → 6c-2），全部 compile + 16 组回归 + 逐字核对
-- 子 agent 送帧收敛：删 `frames.jsonl` 双写、失联判定改 pid、删掉私加的 5s 轮询（`ae66924` / `fd268ce`）
-- 浮窗时间：完成行显示固定时刻，秒表只在活行跑（`89946be`）
-- 文档治理：`docs/decisions.md` 抽走架构细节、6 份交接移入 `docs/history/`、AGENTS.md 瘦身
-- 回滚设施：tag `baseline-before-split` + `archive/` 四份 vsix + `ROLLBACK.md`
+## 待办（按优先级）
 
-**待办（按优先级）**
-1. 真机验收 9 个域（清单见 `docs/history/交接-webview拆分完成.md` §七）
-2. `applyState` 只认 `⏱` 前缀 → 冻结用时被 state 帧清掉（既有 bug，需单独立票）
-3. 6b 页面级 chrome 未搬（可选，≈230 行，不做也能维护）
-4. `slim-subagent-frames.mjs` 修好前禁止 `--apply`（会洗掉会话历史）
-5. `scheduleStream` 死代码、大纲注释口径不符（小债）
+1. **真机验收 9 个域**：清单在 `docs/history/交接-webview拆分完成.md` §七（输入区/流式/工具行/重绘/大纲/渲染队列/页签/状态行/视图工厂），每域都有对应的 `git revert <commit>`
+2. **`applyState` 只认 `⏱` 前缀**：`roundFrozen` 是纯时长 → state 帧会清掉刚冻结的用时。既有 bug，未立票，未修。
+3. **记忆机制方案**（讨论完未落地）：压缩只压「上下文视图」，jsonl 永远保留全文（`_persist` 是 appendFileSync，压缩只多一条 `compaction` 记录）。结论：会话内不需要额外记录，从 jsonl 提取「user 意图时间线（≈1.1k token）+ 最后结论（≈0.5k）」比摘要更保真。**原型脚本 `scripts/probe/session-digest.mjs` 未写。**
+4. **`scripts/migrate/slim-subagent-frames.mjs` 修好前禁止 `--apply`**：会洗掉会话历史（实测 566→21 条）。修复方向见 `docs/history/` 拆分交接 §五 第 8 条。返修单未派。
+5. **6b 页面级 chrome** 未搬（≈230 行，可选；不做 `main.ts` 368 行也可维护）
+6. 小债：`scheduleStream` 死代码（存量，未删）、大纲注释口径（写 1/3 线，代码是 `clientHeight/2`）
 
-## 日志
+## 风险
 
-- 2026-11-19 19:40 ✅ 文档治理：AGENTS.md 191→约 140 行、6 份交接进 docs/history/、新建 docs/decisions.md + PROGRESS.md → 下一步：更新 DIRECTOR.md（去掉只读）
-- 2026-11-19 19:20 ✅ 归档.md 登记拆分战役（12 单 commit 表）+ 交接文档补「关键决策与理由」→ 下一步：会话留痕复核
-- 2026-11-19 18:11 ✅ 拆分收官 6c-2：main.ts 844→368，16 组回归全绿，打 `split-done` 包 → 下一步：真机验收
-- 2026-11-19 17:45 ✅ 第 5 刀收官：main.ts 1164→1136，打 `after-knife5` 包 → 下一步：第 6 刀
-- 2026-11-19 17:10 ✅ T2 收单：删 frames.jsonl 双写 + pid 失联判定，删私加 5s 轮询 → 下一步：拆分第 4 刀
+- **12 个拆分单全部只验到「compile + 16 组回归 + 逐字核对 + headless 探针」，真机 0 单验过。** 任何一单都可能真机行为不对，按 §七 表逐域 revert。
+- harness 运行副本已是 **v27**（只升不降）：回退插件版本不会自动降级，需手动改名 `<agentDir>/extensions/subagent`。
+- 记忆/文档机制今天刚改（AGENTS 191→121 行、`docs/` 分层、PROGRESS 滚动窗口），**规则本身只有 1 天寿命，没经过实战检验**。
+
+## 关键位置
+
+| 东西 | 位置 |
+|---|---|
+| 回滚锚点 | tag `baseline-before-split` = `9530019` |
+| 安装包（4 份） | `archive/`（as-shipped / split-baseline / after-knife5 / split-done） |
+| 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 模块表 + 决策理由） |
+| 架构与事故档案 | `docs/decisions.md`（15 节） |
+| 回滚步骤 | `ROLLBACK.md` |
+| 本会话 jsonl | `~/.pi/agent/sessions/--D--work-docs-pi test-pi-vscode--/2026-11-18T08-29-53-267Z_01a1edc6.jsonl` |
+
+## 上次交接时没定的事
+
+- 全局 `~/.pi/agent/AGENTS.md` 是否加「边干边记」：已商量不改（避免每个项目多一个文件）
+- `DIRECTOR.md` 只读属性已去掉，未设回
+- 报告/台账制度已砍：只留 `PROGRESS.md`（本文件）+ `git log` + `归档.md`（战役一段）
