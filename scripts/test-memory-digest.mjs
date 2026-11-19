@@ -48,16 +48,17 @@ function parseSessionMessages(file) {
 	return out;
 }
 
-/** 在 sessions/** 里挑一个「够真实」的样本：≤3MB（大文件解析慢）、≥10 条消息、
- *  含 assistant 文本与 toolResult——三个条件放一起才能同时覆盖「结论」与「不抽 toolResult」。 */
-function findRealSample() {
+/** 在 sessions/** 里挑「够真实」的样本：≤3MB（大文件解析慢）、≥10 条消息、
+ *  含 assistant 文本与 toolResult——三个条件放一起才能同时覆盖「结论」与「不抽 toolResult」。
+ *  工单41：一次取多份（默认 3），否决清单的抽取量必须在多份样本上都能看，单份容易碰运气。 */
+function findRealSamples(limit = 1) {
 	const root = path.join(os.homedir(), ".pi", "agent", "sessions");
-	if (!fs.existsSync(root)) return null;
+	if (!fs.existsSync(root)) return [];
 	let files = [];
 	try {
 		files = fs.readdirSync(root, { recursive: true, withFileTypes: true }).filter((d) => d.isFile() && d.name.endsWith(".jsonl"));
 	} catch {
-		return null;
+		return [];
 	}
 	const candidates = files
 		.map((d) => path.join(d.parentPath ?? d.path, d.name))
@@ -69,6 +70,7 @@ function findRealSample() {
 			}
 		})
 		.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
+	const out = [];
 	for (const file of candidates.slice(0, 60)) {
 		let messages;
 		try {
@@ -78,12 +80,14 @@ function findRealSample() {
 		}
 		const assistants = messages.filter((m) => m.role === "assistant").length;
 		const toolResults = messages.filter((m) => m.role === "toolResult").length;
-		if (messages.length >= 10 && assistants >= 2 && toolResults >= 1) return { file, messages };
+		if (messages.length >= 10 && assistants >= 2 && toolResults >= 1) out.push({ file, messages });
+		if (out.length >= limit) break;
 	}
-	return null;
+	return out;
 }
 
-const real = findRealSample();
+const realSamples = findRealSamples(3);
+const real = realSamples[0] ?? null;
 
 // ── 真实样本：结构 / 预算 / toolResult 不外泄 ──────────────────────────────
 if (!real) {
@@ -173,17 +177,65 @@ check("计划句不进结论节（「接下来」类）", () => {
 	assert.deepStrictEqual(d.sections[2].items, [], "计划句过期即废，不许占预算");
 });
 
-check("否决清单：命中五个信号词、单条 ≤150、最多 10 条", () => {
+check("否决清单：命中四类信号词、单条 ≤120、最多 24 条", () => {
 	const sentences = [];
 	for (let i = 0; i < 15; i++) sentences.push(`方案${i}不采用，因为不行${"否".repeat(200)}`);
 	const d = buildDigest([{ role: "assistant", content: [{ type: "text", text: sentences.join("。") }] }]);
 	assert.ok(d.sections[3].items.length > 0, "否决句必须被抽");
-	assert.ok(d.sections[3].items.length <= 10, "最多 10 条");
-	for (const it of d.sections[3].items) assert.ok(Array.from(it).length <= 151, "单条 ≤150 字 + 省略号");
+	assert.ok(d.sections[3].items.length <= 24, "最多 24 条（REJECT_LIMIT）");
+	for (const it of d.sections[3].items) assert.ok(Array.from(it).length <= 121, "单条 ≤120 字 + 省略号");
+	// 一期那五个原词一个不许退（句子必须 ≥8 字，否则会被短句防噪音规则拦下）
 	for (const word of ["不采用", "放弃", "否决", "因为不行", "改成"]) {
-		const one = buildDigest([{ role: "assistant", content: [{ type: "text", text: `这件事${word}了` }] }]);
-		assert.ok(one.sections[3].items.length === 1, `信号词「${word}」应命中否决清单`);
+		const one = buildDigest([{ role: "assistant", content: [{ type: "text", text: `这件事我们决定${word}了，先记一笔` }] }]);
+		assert.ok(one.sections[3].items.length === 1, `一期原信号词「${word}」应命中否决清单`);
 	}
+	// 工单41 加宽的四类代表词：直接否定 / 对比裁决 / 原因否定 / 已知失败
+	for (const word of ["砍掉", "别再自研", "换成", "改用", "应该用", "而不是", "行不通", "扛不住", "会崩", "不支持", "踩坑", "丢数据", "退化"])
+		assert.ok(buildDigest([{ role: "assistant", content: [{ type: "text", text: `这一版${word}了，原因是实测过了` }] }]).sections[3].items.length === 1, `加宽后的信号词「${word}」应命中否决清单`);
+});
+
+check("总预算常量仍是 4000（工单41 防顺手改）", () => {
+	assert.strictEqual(DIGEST_TOKEN_BUDGET, 4000, "DIGEST_TOKEN_BUDGET 必须仍是 4000");
+});
+
+check("防噪音：<8 字短句 / 过程句 / 表格行不进否决清单", () => {
+	const one = (text) => buildDigest([{ role: "assistant", content: [{ type: "text", text }] }]).sections[3].items;
+	assert.deepStrictEqual(one("不用了"), [], "<8 字的命中句不收（闲聊/感叹）");
+	assert.deepStrictEqual(one("有坑"), [], "3 字感叹不收");
+	assert.deepStrictEqual(one("跑完了，tsc 零报错"), [], "「报错」是过程/状态句，不是取舍");
+	assert.deepStrictEqual(one("你实测 1471ms 才回来"), [], "裸词「实测」是取证叙述");
+	assert.deepStrictEqual(one("撤销栈要自己维护，不能靠 execCommand"), [], "「撤销栈」是编辑器术语，不是撤销方案");
+	assert.deepStrictEqual(one("要不要我加一道提示"), [], "「要不要」是征询，不是裁决");
+	assert.deepStrictEqual(one("| 现在靠 textarea 白送的 | 换成 contenteditable 后 |"), [], "markdown 表格行不收");
+	// 同一句只收一次：两条消息里重复同一句话
+	const dup = buildDigest([
+		{ role: "assistant", content: [{ type: "text", text: "方案 A 不采用，因为实测踩坑了。其他都好。" }] },
+		{ role: "assistant", content: [{ type: "text", text: "方案 A 不采用，因为实测踩坑了。换个角度。" }] },
+	]);
+	assert.strictEqual(dup.sections[3].items.length, 1, "同一句只收一次");
+});
+
+check("conclusions 超预算时从头部裁：留下的是最新的几条（工单41 裁剪方向）", () => {
+	const msgs = [];
+	for (let i = 0; i < 38; i++) msgs.push({ role: "user", content: `第${i}条：${"己".repeat(700)}` });
+	for (let i = 0; i < 10; i++) msgs.push({ role: "assistant", content: [{ type: "text", text: `第${i}轮结论：${"庚".repeat(150)}` }] });
+	const d = buildDigest(msgs);
+	const concl = d.sections[2].items;
+	assert.ok(d.stats.dropped.conclusions > 0, "样本必须真的触发结论裁剪（否则这条断言没意义）");
+	assert.ok(concl.length > 0, "样本要触发部分裁剪，而不是全灭（全灭验不了方向）");
+	assert.ok(d.stats.dropped.conclusions < 10, "结论不应被全部裁光");
+	assert.ok(concl[concl.length - 1].includes("第9轮结论"), "最新结论必须留下（头部 pop）");
+	assert.ok(!concl[0].includes("第0轮结论"), "最旧结论必须被裁掉");
+});
+
+check("user / decisions / rejections 仍从尾部裁（保最早的意图与最早的否决）", () => {
+	// 造一个必须先动 conclusions、再动 user 的输入；user 被裁时留最早的
+	const msgs = [];
+	for (let i = 0; i < 60; i++) msgs.push({ role: "user", content: `第${i}条：${"己".repeat(700)}` });
+	const d = buildDigest(msgs);
+	assert.ok(d.stats.dropped.user > 0, "这个样本必须触发 user 裁剪");
+	assert.ok(d.sections[0].items[0].startsWith("第0条"), "user 从尾部裁：最早的必须留下");
+	assert.ok(!d.text.includes("第59条"), "user 从尾部裁：最新的先被裁掉");
 });
 
 check("toolResult 正文与自定义角色一律不抽（合成指纹）", () => {
@@ -221,7 +273,8 @@ check("超预算按 TRIM_PRIORITY 裁剪（结论先削光，否决清单与裁�
 	// ② 否决清单与裁决句一条不少（最不可再生的信息）
 	assert.strictEqual(d.stats.dropped.rejections, 0, "rejections 一条都不许砍");
 	assert.strictEqual(d.stats.dropped.decisions, 0, "decisions 一条都不许砍");
-	assert.strictEqual(d.sections[3].items.length, 10, `否决清单应保持满 10 条，实际 ${d.sections[3].items.length}`);
+	// 埋了 12 条，REJECT_LIMIT 是 24，故 12 条全部保留（不是被截到 10）
+	assert.strictEqual(d.sections[3].items.length, 12, `否决清单应保持满 12 条，实际 ${d.sections[3].items.length}`);
 	assert.deepStrictEqual(d.sections[1].items, ["用 B"], "用户裁决句必须保住");
 	assert.strictEqual(
 		d.stats.dropped.total,
@@ -253,5 +306,20 @@ check("0 条 / 畸形输入不抛，返回空结构", () => {
 		for (const k of KEYS) assert.strictEqual(d.stats.dropped[k], 0, `空输入的 dropped.${k} 必须为 0`);
 	}
 });
+
+// ── 真实样本×3：否决清单抽取量（工单41 主观测项：加宽前 10/1/0） ────────────
+if (realSamples.length) {
+	const counts = [];
+	for (const sample of realSamples) {
+		const d = buildDigest(sample.messages);
+		const items = d.sections[3].items;
+		counts.push(items.length);
+		console.log(`样本 ${path.basename(sample.file)}: 消息 ${sample.messages.length} 条 → 否决 ${items.length} 条（estTokens ${d.estTokens}）`);
+		for (const it of items.slice(0, 3)) console.log(`    · ${it.replace(/\s+/g, " ").slice(0, 90)}`);
+	}
+	check("真实样本·至少两份的否决清单 ≥5 条（加宽前是 10/1/0）", () => {
+		assert.ok(counts.filter((n) => n >= 5).length >= 2, `样本否决条数 ${counts.join(" / ")}：至少两份要 ≥5`);
+	});
+}
 
 console.log(`test-memory-digest: ${passed}/${total} 通过${real ? `（真实样本 ${real.messages.length} 条消息，estTokens ${buildDigest(real.messages).estTokens}）` : "（无真实样本）"}`);
