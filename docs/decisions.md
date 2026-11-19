@@ -207,3 +207,32 @@ SDK 侧（对话），登录终端必须找**真 node**：`piSdk.findNodeRuntime
 - 待做：`scripts/probe/session-digest.mjs` 原型（从 jsonl 提取意图时间线）；插件侧可在压缩后
   注入该摘要，替代不可靠的 LLM 摘要。
 - 跨会话仍然要人工维护的只有**待办**（新会话看不到旧会话 jsonl）—— 那就是 `PROGRESS.md` 的用途。
+
+## 十八、常驻记忆与压缩接力（2026-11-19 用户拍板的分层方案）
+
+**论点：会话可以短，记忆必须长。** 目标不是「永不压缩」（上下文窗口是物理上限，没有成熟方案），
+而是压缩后**不必重新摸环境**。四层各解决一个问题：
+
+| 层 | 载体 | 解决什么 | 现状 |
+|---|---|---|---|
+| L0 常驻 | `AGENTS.md` 进系统提示、每轮重发、**压缩免疫**（pi 原生发现 `AGENTS.md`/`CLAUDE.md`，`--no-context-files` 可关；另有 `.pi/APPEND_SYSTEM.md` / `<agentDir>/APPEND_SYSTEM.md`、`SYSTEM.md`） | 铁律与边界不被摘要稀释 | 已用（≤3k token） |
+| L1 交接卡 | `PROGRESS.md`（≤1.5k token） | 压缩/断线后「接到哪一步」 | 已用 |
+| L2 压缩层 | `session_compact` 注入指针（已实装）→ `session_before_compact` 接管摘要（未实装） | 压完知道回哪读 | 一期在 `harness/memory/` |
+| L3 档案 | jsonl 原文（压缩不删）+ `git log` + `docs/history/`（只读）+ `归档.md` | 结论与事实永久可查 | 已用 |
+
+**指针 > 摘要**：60 token 指向最新文件，胜过 4k 历史快照——摘要会丢「被否决的方案 / 踩过的坑 / 边界禁令」，指针不会。
+
+**关键取舍**：①**文件 > 记忆服务**——不引向量库/Mem0：外部依赖 + 黑盒记忆错了比没有更糟，与「插件就是壳」冲突；
+②**章节制 > 无限会话**——本机已有 680MB / 34184 entries 的会话（`message` 仅 526 条），打开即卡。
+
+**遗留**：`session_before_compact` 接管摘要待二期（先看 `memory-digest` 探针质量）；`messageList.ts` 不渲染
+`role:"custom"` → 指针模型看得见、用户看不见（阻塞于他人 WIP）。
+
+## 十九、多 agent 并发 git 的 index 坑（2026-11-19 实测）
+
+- 现象：多个 agent 同时 `git` 操作 → `fatal: Unable to write new index file`。
+- **危险的不是报错，是「提交成功但 index 未刷新」**：t34 实测，改动进了 commit，但 index 里留着旧 blob，
+  别人下一次提交会把它**静默回滚**。
+- 处置：撞到后必须 `git add -- <自己的文件>` 对齐，`git diff --cached --stat` 为空才算干净；
+  提交后一律 `git show --stat HEAD` 自检文件集；协作中禁用 `git add -A`，用 pathspec 直提。
+- 结论：收单记账、批量改动这类写操作**串行做**，别并发提交。
