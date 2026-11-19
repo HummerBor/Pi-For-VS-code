@@ -151,3 +151,46 @@ SDK 侧（对话），登录终端必须找**真 node**：`piSdk.findNodeRuntime
 - 会话列表的右键菜单已改为复制 jsonl 路径（`9530019`），原生 cut/copy/paste 在这个列表里无意义。
 - 浮窗时间口径（`89946be`）：完成行显示**固定时刻**（`16:47` / 跨天 `11-17 09:40`），
   秒表只在有活行时跑，收尾即 `clearInterval`。
+
+## 十六、文档与流程治理（2026-11-19 用户拍板，一次大清理）
+
+**判断标准：只留唯一事实源；某件事的「第二份副本」一律删。**
+
+保留的六个事实源：
+
+| 载体 | 回答什么 | 增长方式 |
+|---|---|---|
+| `git log` / commit message | **事实**：改了什么、为什么 | 自然增长 |
+| `AGENTS.md` | **约束**：每次都要遵守的 12 条铁律 | 固定（细节进本篇） |
+| `PROGRESS.md` | **状态**：在做 / 待办 / 风险 | 滚动窗口，恒定 ≤70 行 |
+| `docs/decisions.md`（本篇） | **决策**：为什么这么设计、哪条路不许走 | 按需追加 § |
+| `docs/history/` | **战役档案**：一个战役一份 | 每战役 +1 |
+| `归档.md` | **工单索引**：工单号 + 结论 + commit | 一单一两行 |
+
+删掉的东西（都是第二/第三份副本，且都不进 git、不参与任何自动化）：
+
+- `reports/` 17 份过程报告（316KB）——结论在 commit message 里；报告写 `.pi/reports/`（gitignored），当次验收后即抛
+- 18 个 `dispatch-t<N>.md` 派单令 —— 收单即删
+- `ROLLBACK.md` —— 内容已在 `docs/history/` §四 + 本篇 §三
+- `archive/` 4 份 vsix（15MB）—— 包能从任意 commit `npm run package` 重建
+- `%LOCALAPPDATA%\pi-reports\` 归档目录 —— 不许往 C 盘写
+
+**AGENTS.md 为什么要瘦身**：191 → 121 行。原「不可破坏的约定」90 行 21 条，混着事故经过
+（如登录那条写了 5 行三条死路），模型在 90 行里抓不住重点，约束力反而下降。现在只留 12 条
+**行为铁律**（每条 1-2 行 + `§N` 指针），细节全在本篇。
+
+**流程制度的教训**：不要依赖 agent 自觉。这轮 12 单「收单写 DIRECTOR 台账」一次都没执行，
+因为该动作不在「派单→施工→回报→验收→派下一单」的执行路径上。旁路动作在上下文一长时必被优化掉。
+结论：台账制度砍掉，只留 `git commit`（不靠自觉）+ `PROGRESS.md`（滚动窗口，只记状态）。
+
+## 十七、压缩与记忆机制（2026-11-19 结论）
+
+- **压缩不删 jsonl**。`SessionManager._persist` 是 `appendFileSync`；`appendCompaction` 只追加一条
+  `{type:"compaction", summary, firstKeptEntryId, tokensBefore, details}`，旧消息一行没删。
+- 上下文变短是**读取时过滤**：`buildSessionContext` 从 `firstKeptEntryId` 开始取，之前的跳过。
+- 所以 **jsonl 永远是完整原文**（压缩 N 次都在），从 jsonl 提取比 LLM 摘要更保真。
+- 实测（4.51MB / 853 条消息的会话）：只提取 user 意图（每条截 120 字）≈ **1.1k token**；
+  加最后 5 段 agent 结论 ≈ **1.6k token**。比压缩保留的 20k 原文小 12 倍。
+- 待做：`scripts/probe/session-digest.mjs` 原型（从 jsonl 提取意图时间线）；插件侧可在压缩后
+  注入该摘要，替代不可靠的 LLM 摘要。
+- 跨会话仍然要人工维护的只有**待办**（新会话看不到旧会话 jsonl）—— 那就是 `PROGRESS.md` 的用途。
