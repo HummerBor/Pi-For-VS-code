@@ -81,18 +81,21 @@ webview/features/
 5. **deps 注释指代漂移**：部分 `features/*.ts` 的 deps 注释写「住 main.ts」，实际已搬走（6c-2 报告 §六有行号清单）。
 6. **`sessionView.ts` 搬入块里两条到期注释**：按零差异原则未改。
 7. **大纲判定口径与注释不符**：注释写「视口上 1/3 线」，代码用 `clientHeight / 2` 中线（5g 报告记录）。
+8. **`scripts/migrate/slim-subagent-frames.mjs` 现在不能上真数据（红线）**：它只删行、不重接
+   `parentId`。299MB 样本实测：体积 299.92 → 20.69MB（-93.1%），但用 pi 自带 `SessionManager`
+   加载后**上下文 566 → 21 条、thinkingLevel high → off、从 leaf 只 24/619 可达**——等于把会话历史洗掉。
+   修复方向已验证可行：被删节点的 `parentId` 上溯压缩（只改 92 行、体积不变、566 条完全复原）+
+   temp/fsync/rename 原子替换 + `.bak` 存在即拒跑 + `--apply` 后自检回滚 + `frames.jsonl` 终态守卫 +
+   流分支改 `JSON.parse` 判类型。**修完之前禁止对 `~/.pi/agent/sessions/**` 跑 `--apply`**。
 
-## 六、证据归档位置
+## 六、证据去哪了
 
-各单的过程证据（REPORT-t34~t46、TEST-t32、SCOUT-t34-* 共 17 份，316KB）已按 2026-11-19 新纪律
-**移出仓库**，存在：
+各单的过程证据（REPORT-t34~t46、TEST-t32、SCOUT-t34-* 共 17 份，316KB）**已删**，没归档、
+没入 git（2026-11-19 用户拍板：仓库不收、C 盘也不堆）。长期结论已在本篇 §一/§二/§五，
+更早的记录用 `git log` / `git show <commit>` 查（13 份 REPORT 曾在 git 历史里，能取回）。
 
-```
-%LOCALAPPDATA%\pi-reports\pi-vscode\2026-11\
-```
-
-需要看某单的“验证输出原文”时去那里翻；长期结论已在本篇 §一/§二/§五，
-更早的记录用 `git log` / `git show <commit>` 查。
+> 删报告前唯一抽出来保住的东西：
+> **`scripts/migrate/slim-subagent-frames.mjs` 现在不能上真数据**（详见 §五 第 8 条）。
 
 ## 七、真机验收状态（未验，装机后第一件事）
 
