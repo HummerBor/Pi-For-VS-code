@@ -203,6 +203,7 @@
     "test:html": "node scripts/test/html.test.mjs",
     "test:customnote": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/customMessage.test.mjs",
     "test:ctx": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/ctxBreakdown.test.mts",
+    "test:statusbar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test/statusBar.test.mjs",
     "package": "node scripts/release/bump-version.mjs && npm run compile && npx @vscode/vsce package",
     "release": "npm run compile && npx @vscode/vsce package",
     "ship": "node scripts/release/bump-from-market.mjs && npm run release && node scripts/release/publish.js",
