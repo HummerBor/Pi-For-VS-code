@@ -196,17 +196,51 @@ check("toolResult 正文与自定义角色一律不抽（合成指纹）", () =>
 	assert.ok(!d.text.includes(MARK), "toolResult/custom 正文不许进 digest");
 });
 
-check("超预算从尾部裁剪，且四节标题结构不塌", () => {
+check("超预算按 TRIM_PRIORITY 裁剪（结论先削光，否决清单与裁决句一条不少）", () => {
 	const big = [];
+	const rejections = [];
 	for (let i = 0; i < 400; i++) {
 		big.push({ role: "user", content: `第${i}条用户长消息：${"丙".repeat(700)}` });
 		big.push({ role: "assistant", content: [{ type: "text", text: `第${i}轮结论：${"丁".repeat(180)}` }] });
 	}
+	// 否决句 + 裁决句各埋一批：它们是本次裁剪**不该动**的信息
+	for (let i = 0; i < 12; i++) rejections.push(`方案${i}不采用，因为实测踩坑${"戊".repeat(100)}`);
+	big.push({ role: "assistant", content: [{ type: "text", text: rejections.join("。") }] });
+	big.push({ role: "user", content: "用 B" }); // 紧跟 assistant = 裁决句
+
 	const d = buildDigest(big);
 	assert.ok(d.estTokens <= DIGEST_TOKEN_BUDGET, `裁剪后 estTokens=${d.estTokens} 仍超预算`);
-	assert.ok(d.stats.dropped > 0, "这种输入必须触发裁剪（stats.dropped > 0）");
+	assert.ok(d.stats.dropped.total > 0, "这种输入必须触发裁剪（stats.dropped.total > 0）");
 	assert.deepStrictEqual(d.sections.map((s) => s.key), KEYS, "裁剪不许把节点删掉");
-	assert.ok(d.sections[0].items.length > 0, "裁剪从尾部开始：用户原话必须比结论留得多");
+
+	// ① 第一刀落在 conclusions（可再生的那节先削），且结论被削光后 user 才动
+	assert.ok(d.stats.dropped.conclusions > 0, "被砍的第一批必须来自 conclusions");
+	assert.deepStrictEqual(d.sections[2].items, [], "结论应被削光（它是最可再生的一节）");
+	assert.ok(d.stats.dropped.user > 0, "结论削光还不够时，才轮到 user");
+
+	// ② 否决清单与裁决句一条不少（最不可再生的信息）
+	assert.strictEqual(d.stats.dropped.rejections, 0, "rejections 一条都不许砍");
+	assert.strictEqual(d.stats.dropped.decisions, 0, "decisions 一条都不许砍");
+	assert.strictEqual(d.sections[3].items.length, 10, `否决清单应保持满 10 条，实际 ${d.sections[3].items.length}`);
+	assert.deepStrictEqual(d.sections[1].items, ["用 B"], "用户裁决句必须保住");
+	assert.strictEqual(
+		d.stats.dropped.total,
+		d.stats.dropped.user + d.stats.dropped.decisions + d.stats.dropped.conclusions + d.stats.dropped.rejections,
+		"total 必须等于按节计数之和",
+	);
+});
+
+check("刚好超预算时只削 conclusions，user 一条不动（裁剪粒度按节）", () => {
+	// 用户消息按 301 字截断 ≈ 101 token 一条；先把「无结论」的底子顶到 ~3700 token，
+	// 再甩一批结论把总预算顶破——只有结论需要被削，用户原话一条不该少。
+	const msgs = [];
+	for (let i = 0; i < 37; i++) msgs.push({ role: "user", content: `第${i}条：${"己".repeat(700)}` });
+	for (let i = 0; i < 8; i++) msgs.push({ role: "assistant", content: [{ type: "text", text: `第${i}轮结论：${"庚".repeat(150)}` }] });
+	const d = buildDigest(msgs);
+	assert.ok(d.stats.dropped.total > 0, "样本必须真的超预算（否则这条断言没意义）");
+	assert.ok(d.stats.dropped.conclusions > 0, "先砍 conclusions");
+	assert.strictEqual(d.stats.dropped.user, 0, "conclusions 够削时不许动 user");
+	assert.strictEqual(d.sections[0].items.length, 37, "用户原话必须一条不少");
 });
 
 check("0 条 / 畸形输入不抛，返回空结构", () => {
@@ -215,7 +249,8 @@ check("0 条 / 畸形输入不抛，返回空结构", () => {
 		assert.deepStrictEqual(d.sections.map((s) => s.key), KEYS, "空输入也要四节齐全");
 		for (const s of d.sections) assert.deepStrictEqual(s.items, [], "空输入各节必须为空");
 		assert.strictEqual(d.estTokens, estimateTokens(d.text));
-		assert.ok(d.stats.dropped === 0);
+		assert.strictEqual(d.stats.dropped.total, 0);
+		for (const k of KEYS) assert.strictEqual(d.stats.dropped[k], 0, `空输入的 dropped.${k} 必须为 0`);
 	}
 });
 

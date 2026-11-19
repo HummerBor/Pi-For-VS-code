@@ -10,7 +10,8 @@
  * （pi.appendEntry，不进 LLM 上下文），用来在真机上观察抽取质量；**不接管摘要**
  * （不 return {compaction}，二期单再议）。
  *
- * 抽取规则（派单书 §二.6，顺序即优先级 = 越靠前越不可再生）：
+ * 抽取规则（派单书 §二.6；下面 ①→④ 是**展示/抽取**顺序，超预算时的裁剪优先级
+ * 另算一套，见 TRIM_PRIORITY）：
  *   ① 用户原话：全文；>300 字取「首 200 + 末 100」加省略号
  *   ② 用户裁决句：user 消息 <80 字且上一条是 assistant（短回复 = 拍板/纠偏）
  *   ③ 每轮结论：assistant 纯文本块的最后一段（忽略 toolCall / thinking），单条截 200 字
@@ -20,7 +21,8 @@
  * （过期即废）、文件清单（pi 的 preparation.fileOps 本来就有，重复抽只挤预算）。
  *
  * 总量硬上限 DIGEST_TOKEN_BUDGET = 4000 token（按 字符数/3 粗估，与派单书同口径）；
- * 超了从**尾部**逐条砍（先砍否决清单末尾，最后才动用户原话）——保住最不可再生的那批。
+ * 超了按 **TRIM_PRIORITY**（可再生性由易到难）逐节逐条砍：conclusions → user → decisions → rejections。
+ * 注意裁剪顺序**不是**展示顺序（SECTION_ORDER）的倒序：倒序会把否决清单当垃圾先丢掉（工单39）。
  */
 
 /** 压缩事件里真正喂给本模块的形状（pi 的 CompactionPreparation.messagesToSummarize 子集） */
@@ -38,13 +40,18 @@ export interface DigestSection {
 	items: string[];
 }
 
+/** 按节计的裁剪条数；`total` 是旧口径的单数字（保留，观测量/断言都还认它） */
+export type DigestDropped = { total: number } & Record<DigestSectionKey, number>;
+
 export interface DigestStats {
 	total: number;
 	user: number;
 	assistant: number;
 	toolResult: number;
-	/** 因总预算不足被砍掉的条目数（>0 = 这次压缩的信息量大到超兜了） */
-	dropped: number;
+	/** 因总预算不足被砍掉的条目数。升级为按节计数（工单39）：真机上要能一眼看出
+	 *  「这次把否决清单砍没了」还是「只削了点结论」，一个总数看不出砍在了哪。
+	 * `total` 保留总数口径（>0 = 这次压缩的信息量大到超兜了）。 */
+	dropped: DigestDropped;
 }
 
 export interface Digest {
@@ -86,8 +93,18 @@ const SECTION_TITLES: Record<DigestSectionKey, string> = {
 	rejections: "否决清单",
 };
 
-/** 节顺序 = 不可再生性顺序，也是超预算时从尾部砍的顺序（反向） */
+/** 展示顺序（固定，不许跟着裁剪策略动）：user → decisions → conclusions → rejections */
 const SECTION_ORDER: DigestSectionKey[] = ["user", "decisions", "conclusions", "rejections"];
+
+/** 超预算裁剪顺序 = 按「可再生性」由易到难，**与展示顺序解耦**（工单39）：
+ *  1 conclusions 每轮结论：大部分能从代码 / git log / 归档重建，先削它最不心疼
+ *  2 user 用户原话：已有「首 200 + 末 100」截断兜底，且问题大意能靠结论反推
+ *  3 decisions 用户裁决句：不可再生（「行 / 不改 / 用 B」只在对话里出现过一次），尽量保
+ *  4 rejections 否决清单：**最不可再生**——「试过 X 不行、因为 Y」只存在于历史对话，
+ *    代码和 git log 里都查不到，丢了就得重新踩坑；宁可把别的砍光也不动它。
+ * 反例（工单34 实测）：旧实现按展示顺序从尾部砍，最后一节恰好是 rejections，
+ * 61.5MB 会话超预算时否决清单剩 0 条、user 却留了 81 条 —— 最贵的信息先被扔掉。 */
+export const TRIM_PRIORITY: DigestSectionKey[] = ["conclusions", "user", "decisions", "rejections"];
 
 /** 字符数/3 粗估（Array.from 以码点计，避免代理对把长度算成两倍） */
 export function estimateTokens(text: string): number {
@@ -165,7 +182,13 @@ export function buildDigest(messages: DigestInputMessage[] | undefined | null): 
 		conclusions: new Set(),
 		rejections: new Set(),
 	};
-	const stats: DigestStats = { total: list.length, user: 0, assistant: 0, toolResult: 0, dropped: 0 };
+	const stats: DigestStats = {
+		total: list.length,
+		user: 0,
+		assistant: 0,
+		toolResult: 0,
+		dropped: { total: 0, user: 0, decisions: 0, conclusions: 0, rejections: 0 },
+	};
 
 	for (let i = 0; i < list.length; i++) {
 		const msg = list[i];
@@ -234,21 +257,23 @@ function renderSections(sections: DigestSection[]): string {
 		.join("\n\n");
 }
 
-/** 超预算就从尾部逐条砍：否决清单末尾 → 每轮结论 → 用户裁决 → 用户原话。
- *  返回砍掉的条数（写进 stats.dropped，真机上看到 >0 说明这次压缩量过大）。 */
-function enforceBudget(sections: DigestSection[]): number {
-	let dropped = 0;
-	while (estimateTokens(renderSections(sections)) > DIGEST_TOKEN_BUDGET) {
-		let cut = false;
-		for (let i = sections.length - 1; i >= 0; i--) {
-			if (sections[i].items.length > 0) {
-				sections[i].items.pop();
-				dropped++;
-				cut = true;
-				break;
-			}
+/** 超预算就按 TRIM_PRIORITY 逐节砍（节内仍从尾部逐条 pop，那是抽取代数的先后，不改语义）：
+ *  先把 conclusions 削光，再动 user，然后 decisions，最后才轮到 rejections。
+ *  返回按节计的裁剪条数（写进 stats.dropped）：真机上既要知道砍了多少、更要知道砍在哪。
+ *  注：每 pop 一条重算一次 token，复杂度 O(n²)；与旧实现同口径，条目数量级（≤ 数百条）可接受。 */
+function enforceBudget(sections: DigestSection[]): DigestDropped {
+	const dropped: DigestDropped = { total: 0, user: 0, decisions: 0, conclusions: 0, rejections: 0 };
+	const byKey = new Map(sections.map((s) => [s.key, s] as const));
+	const overBudget = () => estimateTokens(renderSections(sections)) > DIGEST_TOKEN_BUDGET;
+	for (const key of TRIM_PRIORITY) {
+		if (!overBudget()) break; // 已经削够了：后面的节（decisions / rejections）一条不动
+		const section = byKey.get(key);
+		if (!section) continue; // 防御：sections 由本模块构造，四节恒定齐全
+		while (section.items.length > 0 && overBudget()) {
+			section.items.pop();
+			dropped[key]++;
+			dropped.total++;
 		}
-		if (!cut) break; // 全空还超预算 = 只剩节标题，不可能发生；防御性退出
 	}
-	return dropped;
+	return dropped; // 全砍光还超预算 = 只剩节标题，不可能发生；防御性退出
 }
