@@ -31,7 +31,7 @@
 | 安装包（4 份） | `archive/`（as-shipped / split-baseline / after-knife5 / split-done） |
 | 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 模块表 + 决策理由） |
 | 架构与事故档案 | `docs/decisions.md`（15 节） |
-| 回滚步骤 | `ROLLBACK.md` |
+| 回滚步骤 | 本篇「关键位置」+ `docs/history/交接-webview拆分完成.md` §四 |
 | 本会话 jsonl | `~/.pi/agent/sessions/--D--work-docs-pi test-pi-vscode--/2026-11-18T08-29-53-267Z_01a1edc6.jsonl` |
 
 ## 上次交接时没定的事

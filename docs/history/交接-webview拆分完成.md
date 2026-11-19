@@ -1,6 +1,6 @@
 # 交接：webview/main.ts 拆分完成（2026-11-19）
 
-> 自包含。接手只需读本篇 + `AGENTS.md` + `ROLLBACK.md`。
+> 自包含。接手只需读本篇 + `AGENTS.md` + `PROGRESS.md`。
 > 起点：`webview/main.ts` 3269 行 / 单 IIFE / 148 个函数。
 > 终点：**368 行**（引导 + 装配 + 页面级 chrome），14 个 `features/` 模块 + `core/state.ts`。
 
@@ -78,7 +78,7 @@ webview/features/
 
 ## 四、回滚
 
-见 `ROLLBACK.md`。三道保险：
+三道保险（回滚步骤已并入本篇，不再单独维护 ROLLBACK.md）：
 - tag `baseline-before-split` = `9530019`
 - `archive/pi-for-vscode-0.1.50-as-shipped.vsix`（拆分前装机版）
 - `archive/pi-for-vscode-0.1.50-split-done.vsix`（拆分完成版）
@@ -86,6 +86,9 @@ webview/features/
   `archive/pi-for-vscode-0.1.50-after-knife5.vsix`（第 5 刀收尾）
 
 单刀回退：`git revert <该刀 commit>`。
+
+**装回旧版后子 agent 面板异常**：harness 只升不降，需把 `<agentDir>/extensions/subagent` 改名或删掉，
+旧插件才会重新同步内置版本（详见 `docs/decisions.md` §三）。
 
 ## 五、遗留债（交接时未做，按优先级）
 
