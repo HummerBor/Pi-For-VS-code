@@ -45,3 +45,5 @@ media/动画
 
 # 派单任务书：过程产物，用毕即删，不入库（dispatch skill §1）
 dispatch-t*.md
+# 派单任务书：写在 task 参数里，仅重派/长跑才落文件（.pi/dispatch，不入库）
+.pi/dispatch/
