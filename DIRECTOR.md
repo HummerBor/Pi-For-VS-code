@@ -60,6 +60,24 @@
 >
 > **工单35（已结单 2026-11-19，`5781dbf`）——全文已迁 `归档.md`，本区零残留。**
 
+> **工单36（待施工）——`slim-subagent-frames.mjs` 返修（数据红线，修好前禁 `--apply`）**
+>
+> 背景：脚本只删行、不重接 `parentId`。299MB 样本实测：体积 299.92→20.69MB（-93.1%），但用 pi 自带
+> `SessionManager` 加载后**上下文 566→21 条、thinkingLevel high→off、从 leaf 只 24/619 可达**——
+> 等于把会话历史洗掉。修法清单见 `docs/history/交接-webview拆分完成.md` §五 第 8 条。
+>
+> **范围**：只改 `scripts/migrate/slim-subagent-frames.mjs` + `scripts/test/test-migration.mjs`。
+> 修法：被删节点的 `parentId` 上溯压缩（只改引用行、体积不变、561→566 条完全复原）+
+> temp/fsync/rename 原子替换 + `.bak` 存在即拒跑 + `--apply` 后自检失败自动回滚 +
+> `frames.jsonl` 终态守卫 + 流分支改 `JSON.parse` 判类型（不用字符串 include）。
+>
+> **边界**：严禁对 `~/.pi/agent/sessions/**` 跑 `--apply`（只能用拷贝到临时目录的样本）；
+> 不跑 `npm run compile`（`.mjs` 不在构建链里，且另一个单在编译，并发抢 `dist/`）；
+> 不动 `src/`、`webview/`、`harness/`、任何 md。
+>
+> **验收**：① 样本 `--apply` 后 566 条完全复原、体积仍 ≈-93%；② `.bak` 存在时拒跑且退出码 ≠0；
+> ③ 断电模拟（中途 kill）不出半成品（temp 不覆盖原文件）；④ `npm run test:migration` 基线不降。
+
 > 历史：工单33 判死、工单32 收单存查（两单全文均已迁 归档.md）。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
