@@ -27,7 +27,11 @@
 ## 二、范围
 
 - `scripts/migrate/slim-subagent-frames.mjs`
-- `scripts/test/test-migration.mjs`（扩充断言；既有用例一条不许删）
+- **新建** `scripts/test/slimFrames.test.mjs`（仓里原本**没有**这个脚本的测试；`npm run test:migration`
+  指向的是 `scripts/test/modelMemoryMigration.test.mts`，是另一个东西，别拿它当“基线”）
+
+> ⚠️ **不许改 `package.json`**（它正在被别人的改动持有，加 npm script 会冲突）。新测试直接用
+> `node scripts/test/slimFrames.test.mjs` 跑，不需要 npm script。
 
 ## 三、边界（违反即退单）
 
@@ -40,7 +44,7 @@
 
 ## 四、验证
 
-1. `node scripts/test/test-migration.mjs`（或 `npm run test:migration`）全绿，基线不降
+1. `node scripts/test/slimFrames.test.mjs` 全绿（自建，自包含：自己造样本、自己断言、零外部依赖）
 2. 用一份**手工构造的小样本**（几百行足够，不必 299MB）跑完整 `--apply`：
    - 断言 `SessionManager` 加载后消息条数与改前**完全相等**
    - 断言体积显著下降

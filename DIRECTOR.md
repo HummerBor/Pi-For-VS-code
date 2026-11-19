@@ -78,6 +78,37 @@
 > **验收**：① 样本 `--apply` 后 566 条完全复原、体积仍 ≈-93%；② `.bak` 存在时拒跑且退出码 ≠0；
 > ③ 断电模拟（中途 kill）不出半成品（temp 不覆盖原文件）；④ `npm run test:migration` 基线不降。
 
+> **工单37（待施工）——`归档.md` 瘦身：3,340 行 → 400-600 行**
+>
+> 背景：仓库最后一个膨胀源（≈74k token）。“只追加、只迁入、不删”→ 长成现在这样。
+> 按新标准（`AGENTS.md` 文档预算）：**每工单 3-5 行** = 工单号 + 标题 + 结论 + commit 哈希。
+>
+> **保留（一条不许丢）**：所有 commit 哈希；工单号与标题；判死裁决与**理由**；“七、未结账目”
+> “八、后续排队”“同批删除清单”三节全文；事故教训里**未被 `docs/decisions.md` 收录**的部分。
+> **删**：过程叙述（读过什么文件、跑了几次探针、逐条断言输出、命令回显、中途回合）。
+>
+> **边界**：只改 `归档.md`，不碰任何其它文件；不合并不同工单；不丢哈希；不跑 `npm run compile`。
+> 旧版全文在 git 历史里，但**改完必须自查哈希集合没变小**。
+>
+> **验收**：行数 400-600；改前所有 7 位以上 hex 哈希在改后全部还在（脚本比对）；
+> 工单标题数不变；三节决策全文在位。
+>
+> **工单38（待施工）——小债两笔：`scheduleStream` 死代码 + 大纲注释口径**
+>
+> 背景：`webview/features/liveStream.ts:171` 的 `scheduleStream` 是存量死代码（随 5b 搬进来时留的，
+> 文件内注释已自认）；`webview/features/outline.ts:50` 注释写“视口上 1/3 线”，代码却用
+> `clientHeight / 2` 中线。
+>
+> **范围**：删 `scheduleStream` 定义与导出（先全仓 grep 确认无调用）；把 outline.ts:50 注释
+> 改成与代码一致（**只改注释，不改行为**）。
+>
+> **边界**：不动滚动判定阈值（改行为需产品拍板）；不碰 `composer.ts` / `messageList.ts` /
+> `sessionView.ts` / `style.css` / `index.html` / `piCore.ts` / `i18n.ts` / `protocol.ts` /
+> `package.json`（正在被别人未提交改动持有）；不跑 `npm run compile`（用 `npm run typecheck:webview`）。
+>
+> **验收**：`grep -rn scheduleStream webview/` 只剩历史注释（无定义无调用）；
+> `npm run typecheck:webview` 零报错；`git show --stat` 只含两个文件。
+
 > 历史：工单33 判死、工单32 收单存查（两单全文均已迁 归档.md）。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
