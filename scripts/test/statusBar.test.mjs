@@ -149,6 +149,27 @@ ok("busy:false 也不清压缩标签（renderBusyUi 压缩分支）", statusEl.t
 stateFrame();
 ok("压缩中连续刷新仍是压缩标签（不回退成冻结用时）", statusEl.textContent === "⏳ " + L.compacting, `实际 ${JSON.stringify(statusEl.textContent)}`);
 
+
+console.log("\n冻结态 → 手动压缩 → 回冻结（工单42 残留 3b）：");
+// 事故：.done 只在 busy 分支被摘，所以「本轮冻结态 → 用户手动点压缩」时元素同时挂
+// .done + .busy，压缩提示被白字/加粗盖住，看着像「已完成」。修法：class 也归 writeStatus。
+compactingFlag = false;
+bootingFlag = false;
+bar.setBusy(true, 83000);
+bar.setBusy(false);
+ok("前置：冻结态只挂 .done（无 .busy）", statusEl.has("done") && !statusEl.has("busy"));
+bar.setCompacting(true);
+ok("进入压缩：.done 被摘掉", !statusEl.has("done"));
+ok("进入压缩：.busy 在（压缩沿用忙态视觉）", statusEl.has("busy"));
+ok("进入压缩：文字是压缩提示", statusEl.textContent === "⏳ " + L.compacting, `实际 ${JSON.stringify(statusEl.textContent)}`);
+compactingFlag = false;
+bar.setBusy(false, 83000); // 压缩结束：宿主发 busy:false，renderBusyUi 回渲染冻结值
+ok("压缩结束回冻结：.done 回来", statusEl.has("done"));
+ok("压缩结束回冻结：busy 类被摘掉", !statusEl.has("busy"));
+ok("压缩结束回冻结：文字回到本轮用时", statusEl.textContent === "1m23s", `实际 ${JSON.stringify(statusEl.textContent)}`);
+bar.setStatus("临时状态：正在读文件");
+ok("临时状态既不挂 .done 也不挂 .busy", !statusEl.has("done") && !statusEl.has("busy"));
+
 bar.dispose();
 
 // ── 源码口径守卫：不许留下文本嗅探（t42 的根因）──
@@ -158,6 +179,16 @@ const sniff = "indexOf('" + String.fromCharCode(0x23f1) + "')";
 console.log("\n文本嗅探残留：");
 ok("代码里不再用文本前缀判断状态行归属", code.indexOf(sniff) === -1);
 ok("applyState 的清状态改判显式状态 statusKind", /statusKind === 'temp'/.test(code));
+// 3b：class 归属收口到唯一写口 writeStatus —— 外面（含 applyState / renderBusyUi / setCompacting）
+// 一句裸 classList.add/remove('done'|'busy') 都不许有，否则又会出现 .done + .busy 同挂
+const wsAt = code.indexOf("function writeStatus");
+const wsEnd = code.indexOf("function setStatus");
+const outsideWs = code.slice(0, wsAt) + code.slice(wsEnd);
+const wsBody = code.slice(wsAt, wsEnd);
+console.log("\n状态行 class 归属：");
+ok("writeStatus 抽到（守卫定位点有效）", wsAt > 0 && wsEnd > wsAt);
+ok("writeStatus 之外零裸写 .done/.busy", !/classList\.(add|remove)\(['"](done|busy)['"]/.test(outsideWs));
+ok("摘 class 在写口内（每次写入先全摘再按 kind 挂）", /classList\.remove\('done'\)/.test(wsBody) && /classList\.remove\('busy'\)/.test(wsBody));
 
 console.log("\nstatusBar: " + pass + " passed, " + fail + " failed");
 if (fail) process.exit(1);

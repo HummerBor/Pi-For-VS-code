@@ -130,9 +130,24 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
    * → 冻结值活不过一帧。锁判定一律读本变量，不许再嗅文本。
    */
   var statusKind = '' as StatusKind;
-  /** 状态行唯一写口：文本与归属一起落，杜绝「文本变了、归属没变」的漂移 */
-  function writeStatus(t: string, kind: StatusKind) { statusEl.textContent = t; statusKind = kind; }
-  function setStatus(t?: string) { if (t) { statusEl.classList.remove('busy'); writeStatus(t, 'temp'); } else if (!S.busy) writeStatus('', ''); }
+  /**
+   * 状态行唯一写口：文本、归属、class 三件一起落，杜绝「文本变了、归属/class 没变」的漂移。
+   * t42 起管归属；工单42 残留 3b（2026-11-26）起连 class 一起收口 —— 此前 .done 只在 busy
+   * 分支被摘，于是「本轮冻结态 → 用户手动点压缩」时元素同时挂 .done + .busy，压缩中本该是
+   * 「⏳ 正在压缩」的蓝字脉动，却被 .done 的白字/加粗盖住，**看着像已经完成**（纯视觉，数据没错）。
+   * class 归属按 kind 唯一决定：frozen → 只 .done（白字冻结用时）；busy / compacting → 只 .busy
+   * （压缩沿用既有「复用高亮+脉动」视觉，不新造）；temp / '' → 都不挂。
+   * 除本函数外不许再碰 #status 的这两个 class（statusBar.test.mjs 有源码守卫）。
+   */
+  function writeStatus(t: string, kind: StatusKind) {
+    statusEl.textContent = t;
+    statusKind = kind;
+    statusEl.classList.remove('done');
+    statusEl.classList.remove('busy');
+    if (kind === 'frozen') statusEl.classList.add('done');
+    else if (kind === 'busy' || kind === 'compacting') statusEl.classList.add('busy');
+  }
+  function setStatus(t?: string) { if (t) writeStatus(t, 'temp'); else if (!S.busy) writeStatus('', ''); }
   // N 刀（2026-09-23 用户点名「没感觉秒开，往这里加个计时器」）：启动秒表——
   // 「正在启动 pi… Ns」实时走秒。旁路 setStatus 直写（同 ⏱/busy 帧先例）；
   // 自守卫：状态行被任何人接管（busy 类/别的文案）即自杀停摆，杜绝「白 Working」
@@ -215,8 +230,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
     if (S.busy || subLiveNow()) {
       if (!busyStart) busyStart = Date.now(); // 重放/恢复的孤儿子 agent：从发现起算，不报 1970
       roundFrozen = ''; // 本轮进行中，冻结值作废
-      statusEl.classList.remove('done');
-      statusEl.classList.add('busy');
+      // class（摘 .done、挂 .busy）由下面的 writeStatus 按 kind 一并归位，这里不再裸写
       var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       var fi = 0;
       var myStart = busyStart; // 捕获局部：原换镜时代防漂移读；今闭包常量，保留语义
@@ -242,13 +256,14 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
       }, 120);
       busyTimer = myTimer;
     } else {
-      statusEl.classList.remove('busy');
       // B 刀：占位期不清状态行（否则 setBusy(false) 会把「pi 后台启动中… Ns」刷掉，
       // 与 applyState 的守卫成对——漏一道就还是 6 秒零反馈）
       if (!getBooting()) writeStatus('', '');
+      // 占位期文案留着，但上一拍若是忙态，把归属改回 temp —— 否则 .busy 会挂在启动占位文案上
+      // （原先这里是一句裸 classList.remove('busy')，3b 起摘 class 只许走 writeStatus）
+      else if (statusKind === 'busy' || statusKind === 'compacting') writeStatus(statusEl.textContent || '', 'temp');
       if (getCompacting()) {
         // 压缩中（如压缩期间发消息被 preflight 拒收 → busy:false）：保住压缩标签不清空
-        statusEl.classList.add('busy');
         writeStatus('⏳ ' + L.compacting, 'compacting');
       } else {
         // 全收尾：本轮总用时白字冻结（「完成的话就显示 83s 白色字体就行」）——与走秒同基准
@@ -257,8 +272,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
         if (!roundFrozen && busyStart) roundFrozen = fmtDur(Date.now() - busyStart);
         if (!roundFrozen && lastElapsed != null) roundFrozen = fmtDur(lastElapsed);
         if (roundFrozen) {
-          statusEl.classList.add('done');
-          writeStatus(roundFrozen, 'frozen'); // 冻结态：state 帧不许清（见 statusKind 注释）
+          writeStatus(roundFrozen, 'frozen'); // 冻结态：state 帧不许清（见 statusKind 注释）；.done 由写口挂上
           statusEl.title = L.turnDuration;
         }
       }
@@ -285,7 +299,7 @@ export function initStatusBar(deps: StatusBarDeps): StatusBarApi {
   function setCompacting(v) {
     setCompactingFlag(v);
     if (v) {
-      statusEl.classList.add('busy'); // 复用高亮+脉动，同「忙」视觉
+      // 复用高亮+脉动，同「忙」视觉；同时摘掉可能残留的 .done（冻结态手动压缩的 3b 事故）
       writeStatus('⏳ ' + L.compacting, 'compacting');
     }
   }
