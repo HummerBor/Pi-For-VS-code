@@ -16,6 +16,11 @@ vendor/
 # .vscodeignore 已把 dist/ 白名单收口到 webview/）
 scripts/.preview/
 
+# 过程报告（REPORT/TEST/SCOUT）不入库（2026-11-19 用户拍板）：
+# 仓库是源码仓不是档案馆。报告写 `%LOCALAPPDATA%/pi-reports/<项目>/<年月>/`，
+# 只把「决策/坑/遗留债」1-5 行抽进交接-*.md 或 DIRECTOR 注记。
+reports/
+
 # webview vite 构建产物
 dist/
 webview-body.tmp

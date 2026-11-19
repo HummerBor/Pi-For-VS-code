@@ -82,7 +82,19 @@ webview/features/
 6. **`sessionView.ts` 搬入块里两条到期注释**：按零差异原则未改。
 7. **大纲判定口径与注释不符**：注释写「视口上 1/3 线」，代码用 `clientHeight / 2` 中线（5g 报告记录）。
 
-## 六、真机验收状态（未验，装机后第一件事）
+## 六、证据归档位置
+
+各单的过程证据（REPORT-t34~t46、TEST-t32、SCOUT-t34-* 共 17 份，316KB）已按 2026-11-19 新纪律
+**移出仓库**，存在：
+
+```
+%LOCALAPPDATA%\pi-reports\pi-vscode\2026-11\
+```
+
+需要看某单的“验证输出原文”时去那里翻；长期结论已在本篇 §一/§二/§五，
+更早的记录用 `git log` / `git show <commit>` 查。
+
+## 七、真机验收状态（未验，装机后第一件事）
 
 本轮所有交付只验到「compile + 回归 + 逐字核对 + headless 探针」，**真机行为一项都没验过**。
 装机包：`archive/pi-for-vscode-0.1.50-split-done.vsix`。
