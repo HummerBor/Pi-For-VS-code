@@ -1,6 +1,11 @@
 # dispatch-t34 — 记忆接力一期：压缩后指针注入 + digest 探针
 
 > 派单日 2026-11-19。工单全文见 `DIRECTOR.md`「工单34」。收单即删本文件。
+>
+> 模型换自 `xiaomi/mimo-v2.6-flash`（402 余额不足），现用 `deepseek/deepseek-flash`。
+> pi 运行时已升级到 **0.1.54**（证据路径：`c:/Users/Administrator/.vscode/extensions/hummerbor.pi-for-vscode-0.1.54/vendor/pi/dist/bundle/chunks/chunk-44DLKSKE.js`，已核验钩子仍在）。
+> 工作区有**别人**未提交的 668 行改动（`webview/features/composer.ts` 等，与本题无关）——
+> **一律不碰**，也不许为了让它们编过而修他们的文件。
 
 ## 一、背景（已由总监取证，不用重查）
 
@@ -61,7 +66,10 @@
 ## 四、验证
 
 1. `npm run compile` 全绿（注意 `tsconfig.json` 只 include `src`，`harness/**` 不进 tsc——所以
-   harness 的类型正确性靠 `node --experimental-strip-types` 或 import 单测兜底，别指望 compile 检查它）
+   **例外**：若报错落在**本单没碰的文件**（尤其 `webview/features/composer.ts` /
+   `webview/features/messageList.ts` / `webview/style.css` / `webview/index.html`——那是别人正在写的
+   半成品），**不改他们的文件**，把原始报错存进回报并标「compile 门禁延后到该批改动落地」，
+   本单只交 node 单测与版本门自查。
 2. 新增 `scripts/test-memory-digest.mjs`：从 `~/.pi/agent/sessions/**` 取一个真实 jsonl，
    解析出 `messagesToSummarize` 形状（role + content blocks），喂纯函数，断言：
    - 四节齐全且顺序稳定

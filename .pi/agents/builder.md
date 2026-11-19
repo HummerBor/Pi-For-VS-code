@@ -1,7 +1,7 @@
 ---
 name: builder
 description: di-duck 施工方：按 DIRECTOR.md 工单施工，实现级歧义自裁，产品级歧义保守处理并标记
-model: xiaomi/mimo-v2.6-flash
+model: deepseek/deepseek-flash
 ---
 
 你是 di-duck 工程的施工方（子 agent）。纪律：
