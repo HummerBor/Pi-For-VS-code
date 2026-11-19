@@ -75,7 +75,10 @@ export function initRenderQueue(deps: RenderQueueDeps) {
     // 且历史重绘以 pi session.messages 为唯一真相，回显 bubble 被权威 render 覆盖是设计而非事故。
     return t === 'delta' || t === 'thinking' || t === 'newLive' || t === 'toolCallStart' ||
       t === 'toolCallDelta' || t === 'toolStart' || t === 'toolEnd' ||
-      t === 'queuedAdd' || t === 'queuedDelivered' || t === 'queuedRemove' || t === 'queuedClear';
+      t === 'queuedAdd' || t === 'queuedDelivered' || t === 'queuedRemove' || t === 'queuedClear' ||
+      // 工单43：扩展注入的 custom 提示条也是「快照之后到的帧」，重绘落地后再放行——
+      // 否则先画上、再被 renderAll 清 root 抹掉，下一次帧才回来（闪一下又消失）
+      t === 'customNote';
   }
   function drainPendingStream() {
     if (!pendingStream.length) return;

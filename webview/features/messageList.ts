@@ -25,6 +25,9 @@
  */
 import { toolDetail } from "../../src/domain/toolDetail";
 import { isEditRetryable } from "../../src/domain/errorClass"; // 余额/配额/鉴权类错误不给「修改后重试」入口
+// 工单43：`role:"custom"` 消息的挑选口径（display 语义/黑名单/文本拼接）在 domain 层，
+// 与宿主侧 piCore.webviewMessages 同一份——两边各写一分必对不上（同 R8 总闸的教训）
+import { customMessageText, isRenderableCustomMessage } from "../../src/domain/customMessage";
 
 export interface MessageListDeps {
   /** 消息区根（原 makeSessionView 的 root） */
@@ -323,6 +326,35 @@ export function initMessageList(deps: MessageListDeps) {
     d.appendChild(body);
     return d;
   }
+  /** 工单43：`role:"custom"` 消息 → 一条低调的系统提示条（**不是**用户气泡、**也不是**助手气泡）。
+   *
+   * 为什么要有它：扩展经 pi.sendMessage 注入的消息会进 LLM 上下文（模型看得见），但面板
+   * 此前只认 user/assistant/toolResult/bashExecution/compactionSummary，`custom` 落到 else
+   * 没有任何分支——用户视角「模型突然去翻文档」无法解释（压缩指针 memory-pointer 就是这场景）。
+   * 它也不该画成气泡：这句话不是用户说的、也不是助手说的，是「系统/扩展说的」。
+   *
+   * 两路进本构造（同一份 DOM）：①历史重绘（renderAll 收到 role:"custom"）
+   * ②实时（宿主的 customNote 帧，见 piCore message_start）。
+   * `customType` 作角标 + title（多来源可分辨是哪个扩展注入的）；正文纯文本 + esc 转义，
+   * 不走 markdown（注入内容是给模型的提示语，不是文档）。 */
+  function makeCustomNote(customType, text, timestamp) {
+    var ct = String(customType || 'custom');
+    var note = el('div', 'custom-note');
+    note.setAttribute('data-custom-type', ct); // 供定位/自动化断言（样式一律走 .custom-note）
+    var tag = el('span', 'custom-note-tag', ct);
+    tag.title = ct + (typeof timestamp === 'number' ? ' · ' + new Date(timestamp).toLocaleTimeString() : '');
+    note.appendChild(tag);
+    var body = el('div', 'custom-note-body');
+    body.innerHTML = esc(text).replace(/\n/g, '<br>'); // esc 必走：注入内容来自扩展，不当地文本
+    note.appendChild(body);
+    return note;
+  }
+  /** 实时路径（宿主 customNote 帧）：追加一条提示条并跟滞（不 setFollowingEnd——
+   *  提示条不该把正在翻历史的用户拽回底部，scroll() 自带「仅跟随时拉底」判定） */
+  function addCustomNote(customType, text, timestamp) {
+    root.appendChild(makeCustomNote(customType, text, timestamp));
+    scroll();
+  }
   function renderAll(list) {
     setOlSuspend(true); // 重绘期逐条 addUser 不重建轨道（O(N²)），结尾一次建好
     root.innerHTML = '';
@@ -422,6 +454,12 @@ export function initMessageList(deps: MessageListDeps) {
       }
       else if (m.role === 'bashExecution') { root.appendChild(el('div', 'tool ok', '! ' + m.command)); }
       else if (m.role === 'compactionSummary') { root.appendChild(makeCompaction(m)); }
+      // 工单43：扩展注入的 custom 消息（display 为真、非 subagent 专属通道、有文本）。
+      // 宿主侧已滤过一轮（piCore.webviewMessages），此处再判一次是保命：老宿主/直喂 jsonl
+      // 的路径不该把 display:false 的注入内容露给人看。插在循环末尾 = 真实时间位置不变
+      else if (m.role === 'custom') {
+        if (isRenderableCustomMessage(m)) root.appendChild(makeCustomNote(m.customType, customMessageText(m.content), m.timestamp));
+      }
     }
     // 队列条幂等重建（R12 ①）：queuebar 三个成员属队列域（5f 未搬），调用与事故原委见
     // main.ts 的 rebuildQueuebar（工单十八补刀3：先清再建，与 uiState 原子分支谁先谁后都不叠加）
@@ -466,6 +504,8 @@ export function initMessageList(deps: MessageListDeps) {
   return {
     /** 用户气泡（当场回显 + 历史重绘同一路径）+ 子 agent 回报卡 */
     addUser: addUser,
+    /** 扩展注入的 custom 消息实时上屏（宿主 customNote 帧，工单43） */
+    addCustomNote: addCustomNote,
     /** 整树重绘（切历史 / uiState 快照 / 压缩后重建） */
     renderAll: renderAll,
     /** 瞬时 toast（同文去重、跨重渲重挂） */

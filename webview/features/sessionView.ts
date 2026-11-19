@@ -435,6 +435,8 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
   });
   // 别名：handleMsg 的调用点按原符号名调（正文零改）
   var addUser = msgList.addUser; var renderAll = msgList.renderAll;
+  // 工单43：扩展注入的 custom 消息实时上屏（宿主 customNote 帧 → 同一条提示条）
+  var addCustomNote = msgList.addCustomNote;
   // notice / clearNotice 用函数声明（提升）转调：composer 的 deps 在本函数更早处求值，
   // 那时 var 别名还没赋值（undefined）；函数声明不受这个顺序影响
   function notice(text) { msgList.notice(text); }
@@ -483,6 +485,9 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
     if (m.type === 'user') {
       addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images, m.attachNames);
     }
+    // 工单43：扩展注入的 custom 消息（display 为真的）实时上屏；历史重绘走 render 快照里的
+    // role:"custom"（renderAll 整树重建后由快照接管，不重复）
+    else if (m.type === 'customNote') addCustomNote(m.customType, m.text, m.timestamp);
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     // 探针实锤（probe-toolblocks.mjs）：pi 每输出一个 toolCall 就是一条独立 assistant 消息——
     // 同名合并靠 DOM 相邻判定（空壳 bubble 已移除、思考/正文 bubble 天然插队断连续），

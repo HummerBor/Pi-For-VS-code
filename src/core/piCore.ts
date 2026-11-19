@@ -23,10 +23,16 @@ import type {
   HostToWebview,
   PiEvent,
   PiUnknownEvent,
+  SessionMessage,
   ToolChangedFile,
   WebviewToHost,
 } from "./protocol";
 import { subagentSnapshot } from "../domain/subagentSnapshot";
+import {
+  customMessageText,
+  filterCustomMessagesForWebview,
+  isRenderableCustomMessage,
+} from "../domain/customMessage";
 import { estimateContextBreakdown } from "../domain/ctxBreakdown";
 import { buildUsage, deriveUnitPrices } from "../domain/usageTotals";
 import { estimateCost, parsePriceTable, type PriceTable } from "../domain/priceTable";
@@ -514,7 +520,7 @@ export class PiCore {
             }
             if (msgs.length) {
               this.fastRenderMsgs = msgs;
-              this.post({ type: "render", messages: msgs });
+              this.post({ type: "render", messages: this.webviewMessages(msgs) });
               mark("fast-render");
             }
           }
@@ -536,7 +542,7 @@ export class PiCore {
         await this.refreshState();
         mark("state");
         const d = await client.getMessages();
-        this.post({ type: "render", messages: d?.messages ?? [] });
+        this.post({ type: "render", messages: this.webviewMessages(d?.messages ?? []) });
         mark("render");
         this.replaySubagentRuns(d?.messages ?? []);
         // F′ 刀：boot 链尾终值快照（0.1.42 修法取回）——真值必达兕底：中途丢的 state/render
@@ -636,6 +642,16 @@ export class PiCore {
     }
   }
 
+  /** 工单43：送 webview 的消息流派生——只剔「不该给用户看的 custom 消息」
+   *  （display 非真、subagent 专属通道类型、无文本），其余角色逐条原样、顺序不动。
+   *  为什么要有这道口：`role:"custom"` 消息此前要么被 webview 静默穿落（渲染侧没有分支），
+   *  要么得靠一次性重绘才可能露面；口径本身（display 语义、黑名单）全在
+   *  domain/customMessage.ts，这里只是把它套在每个出 webview 的 render 口上——
+   *  四处（快路径/启动/切会话/收工重绘）同一口径，禁止各写一份。 */
+  private webviewMessages(msgs: SessionMessage[]): SessionMessage[] {
+    return filterCustomMessagesForWebview(msgs);
+  }
+
   /** UI 真相全量重发（工单十五刀5）：webview 不自养影子状态，页签切回/重建时由核心把
    *  pi 会话真相一次推齐——消息重绘（session.messages）+ busy（真实耗时）+ 排队（queued
    *  数组）+ 权限模式 + 压缩横幅。webviewReady 与页签切换共用。
@@ -690,7 +706,7 @@ export class PiCore {
       this.post({
         type: "uiState",
         tabId: this.tabKey,
-        messages: msgs,
+        messages: this.webviewMessages(msgs),
         ...(live ? { live } : {}),
         busy: this.busy,
         compacting: this.compacting,
@@ -2001,7 +2017,7 @@ export class PiCore {
       const r = await client.switchSession(file);
       if (r?.cancelled) { this.releaseSessionClaim(); return; }
       const d = await client.getMessages();
-      this.post({ type: "render", messages: d?.messages ?? [] });
+      this.post({ type: "render", messages: this.webviewMessages(d?.messages ?? []) });
       this.replaySubagentRuns(d?.messages ?? []);
       this.post({ type: "notice", text: this.L.sessionRestored });
       await this.refreshState();
@@ -2532,7 +2548,7 @@ export class PiCore {
             codeInfo: item.codeInfo,
           });
         }
-        this.post({ type: "render", messages: msgs });
+        this.post({ type: "render", messages: this.webviewMessages(msgs) });
         this.replaySubagentRuns(msgs);
       } catch {
         // ignore
@@ -2581,6 +2597,21 @@ export class PiCore {
           const text = extractText((e.message as Record<string, unknown>).content);
           // 三态（2026-11-13 补「已终止」）：用户 kill 的 async 单也会回传，否则主 agent 还以为在跑
           if (/^\[子 agent \S+ (完成|失败|已终止)\]/.test(text)) this.post({ type: "user", text });
+        } else if (e.message?.role === "custom") {
+          // 工单43：扩展注入的 custom 消息（pi.sendMessage，display 为真的才给人看）实时上屏。
+          // 对齐 pi TUI（interactive-mode.js message_start：role==="custom" 直接 addMessageToChat，
+          // 内部 if (message.display) 才画）——壳此前只认 assistant/user，压缩指针这类注入
+          // “模型看得见、用户看不见”直到下一次整树重绘才可能露面（display:false 的则永远不该露面）。
+          // 重绘路径同一条消息在 messages 里带 role:"custom"，renderAll 整树重建后由快照接管，不重复。
+          const cm = e.message as Record<string, unknown>;
+          if (isRenderableCustomMessage(cm)) {
+            this.post({
+              type: "customNote",
+              customType: String(cm.customType ?? "custom"),
+              text: customMessageText(cm.content),
+              ...(typeof cm.timestamp === "number" ? { timestamp: cm.timestamp } : {}),
+            });
+          }
         }
         break;
       }

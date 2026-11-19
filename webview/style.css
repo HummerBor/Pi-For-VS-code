@@ -765,6 +765,36 @@ details.think.compaction-flash>summary {
   margin: 4px 8px;
 }
 
+/* ── 工单43：扩展注入的 custom 消息（role:"custom"，如 harness/memory 的压缩指针）
+   一条低调的系统提示，不是气泡：左对齐、小字、虚线边、不抢戏。
+   它属于「系统/扩展说的」——模型看得见，用户也必须看得见（以前被静默穿落）。
+   角标 = customType（title 另带时间），多来源可分辨；正文 pre-wrap 保留换行。
+   两路渲染（历史重绘 / 实时 customNote 帧）同 class，视觉一致 */
+.custom-note {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 4px 8px 4px 0;
+  padding: 3px 6px;
+  font-size: 11px;
+  opacity: .8;
+  border: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, .4));
+  border-radius: 3px;
+}
+.custom-note-tag {
+  flex: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  opacity: .7;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, .18));
+}
+.custom-note-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── 工单31：原图缩略图——user 气泡内多张横排；等比不裁切（object-fit 对原始尺寸
    不干预，只钳高：height 钳 96px 宽自适应，点击可进 VS Code 内置预览看原图）。
    两路渲染（当场回显 / 历史重绘）同 class，settled 重绘覆盖后视觉一致。

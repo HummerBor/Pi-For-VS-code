@@ -823,7 +823,8 @@ export type HostToWebview =
   | TabsMsg
   | LiveSyncMsg
   | CtxDetailMsg
-  | UiStateMsg;
+  | UiStateMsg
+  | CustomNoteMsg;
 
 /* ══════════════ pi RPC 命令响应（宿主 ← pi） ══════════════ */
 
@@ -1046,4 +1047,20 @@ export interface WvSubagentOpenHandleMsg {
 export interface WvSubagentOpenLabelMsg {
   type: "subagentOpenLabel";
   label: string;
+}
+
+/** 工单43：扩展注入的 custom 消息**实时**上屏（`role:"custom"`，判定口径见
+ *  domain/customMessage.ts——display 为真、非 subagent 专属通道、有文本）。
+ *  历史/重绘路径不走这里：同一条消息在 RenderMsg / UiStateMsg 的 SessionMessage 里
+ *  带 `role:"custom"` 出现，renderAll 整树重建后由快照接管（不重复）。
+ *  本帧只解决「本轮立刻可见」——此前 message_start 只认 user/assistant，
+ *  注入消息要等下一次整树重绘才可能露面的问题。 */
+export interface CustomNoteMsg {
+  type: "customNote";
+  /** 注入方标识（memory-pointer / 别的扩展自定义类型），webview 作角标 + title */
+  customType: string;
+  /** 纯文本正文（content 里的 text 项拼起来，图片项不画） */
+  text: string;
+  /** pi 的 message.timestamp（ms）；缺省 = 老数据没带，webview 不显示时间 */
+  timestamp?: number;
 }
