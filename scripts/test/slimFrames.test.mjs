@@ -16,6 +16,8 @@
  *   ⑦ compaction.firstKeptEntryId 指向被删帧时重映射，压缩点之后的上下文一条不丢
  *   ⑧ frames.jsonl 只留最后一行，且逐字节一致
  *   ⑨ 无帧样本 apply 后逐字节不变（不制造无意义改写）
+ *   ⑩ 入口守卫（工单40）：--apply 打到真实会话根必须二次确认 --force-real；干跑与显式非 sessions
+ *      路径不受影响。真实根一律用临时 HOME（USERPROFILE）顶替，**从不碰真实 ~/.pi/agent/sessions**。
  *
  * 跑法：node scripts/test/slimFrames.test.mjs（不进构建链，不需要 npm script）
  */
@@ -334,7 +336,70 @@ try {
   assert.equal(read(plainFile), `${plain.join("\n")}\n`, "⑨ 无帧样本必须逐字节不变");
   console.log("⑨ 无帧样本：apply 后逐字节不变（没帧就不改内容）");
 
-  console.log("\n全部通过（①②③④⑤⑥⑦⑧⑨）");
+  // ─────────── ⑩ 入口守卫（工单40）：真实会话根的 --apply 必须二次确认 ───────────
+  // sessionsRoot = $HOME/.pi/agent/sessions（Windows 取 USERPROFILE，POSIX 取 HOME）。
+  // 测试一律用临时 HOME 顶替它，**绝不向真实 ~/.pi/agent/sessions 写任何东西**。
+  const fakeHome = fs.mkdtempSync(path.join(root, "home-"));
+  const fakeRoot = path.join(fakeHome, ".pi", "agent", "sessions", "proj-guard");
+  fs.mkdirSync(fakeRoot, { recursive: true });
+  const fakeSample = buildSession(fakeRoot);
+  const fakeRaw = read(fakeSample.file);
+  const fakeEnv = { HOME: fakeHome, USERPROFILE: fakeHome }; // 两个都设：POSIX 走 HOME，Windows 走 USERPROFILE
+
+  // ⑩-1 --apply 不给路径 = 默认扫真实根 → 拒跑，退出码 1，打印会改多少文件
+  const guardDefault = run(["--apply", "--min-mb", "1"], fakeEnv);
+  assert.equal(guardDefault.status, 1, `⑩ 未给路径的 --apply 必须拒跑（实际 ${guardDefault.status}）：${guardDefault.stderr}`);
+  assert.match(guardDefault.stderr, /拒绝执行/, "⑩ 拒跑要有明确提示");
+  assert.match(guardDefault.stderr, /--force-real/, "⑩ 提示里要写清开关名");
+  assert.match(guardDefault.stderr, /改写 1 个文件/, "⑩ 提示里要报会改多少个文件");
+  assert.equal(read(fakeSample.file), fakeRaw, "⑩ 拒跑时文件不许动");
+  assert.equal(fs.existsSync(`${fakeSample.file}.bak`), false, "⑩ 拒跑时不许落 .bak");
+  assert.equal(fs.existsSync(`${fakeSample.file}.slim-tmp`), false, "⑩ 拒跑时不许留 tmp");
+  console.log(`⑩-1 无路径 --apply：退出 ${guardDefault.status}；${guardDefault.stderr.trim().split("\n")[2]?.trim()}`);
+
+  // ⑩-2 显式给了 sessionsRoot 下的文件（等价于动真实根）→ 同样要 --force-real
+  const guardExplicit = run(["--apply", fakeSample.file], fakeEnv);
+  assert.equal(guardExplicit.status, 1, `⑩ 显式指向 sessions 根的 --apply 也要拒跑（实际 ${guardExplicit.status}）`);
+  assert.match(guardExplicit.stderr, /目标落在真实会话根下/, "⑩ 提示要区分「显式指向根下」");
+  assert.equal(read(fakeSample.file), fakeRaw, "⑩ 拒跑时文件不许动");
+  console.log(`⑩-2 显式指向 sessions 根：退出 ${guardExplicit.status}（同样拒跑）`);
+
+  // ⑩-3 干跑不带参数 → 仍可扫真实根统计（真实 HOME，但阈值调到没文件命中，避免真读 4GB）
+  const dryReal = run(["--min-mb", "100000"]);
+  assert.equal(dryReal.status, 0, `⑩ 干跑真实根必须放行（实际 ${dryReal.status}）：${dryReal.stderr}`);
+  assert.ok(
+    dryReal.stdout.includes(path.join(os.homedir(), ".pi", "agent", "sessions")),
+    `⑩ 干跑应仍默认指向真实会话根：${dryReal.stdout.trim()}`
+  );
+  // 干跑带真样本（临时 HOME 下的假根）→ 打印统计、一个字节不写
+  const dryFake = run(["--min-mb", "1"], fakeEnv);
+  assert.equal(dryFake.status, 0, `⑩ 干跑假根应退出 0：${dryFake.stderr}`);
+  assert.match(dryFake.stdout, /干跑/, "⑩ 干跑应标明是干跑");
+  assert.equal(read(fakeSample.file), fakeRaw, "⑩ 干跑不写盘");
+  assert.equal(fs.existsSync(`${fakeSample.file}.bak`), false, "⑩ 干跑不许落 .bak");
+  assert.equal(fs.existsSync(`${fakeSample.file}.slim-tmp`), false, "⑩ 干跑不许留 tmp");
+  console.log(`⑩-3 干跑：真实根径 ${path.join(os.homedir(), ".pi", "agent", "sessions")} 放行（退出 ${dryReal.status}），假根统计后字节未变`);
+
+  // ⑩-4 --force-real 放行：进入执行流程并真改——**只在临时 HOME 顶替的假根上跑**
+  const forced = run(["--apply", "--force-real", "--min-mb", "1"], fakeEnv);
+  assert.equal(forced.status, 0, `⑩ --force-real 应放行：${forced.stderr}`);
+  assert.ok(forced.stdout.includes(fakeSample.file), "⑩ 改的必须是假根里的样本（不能被真实根替代）");
+  const forcedAfter = read(fakeSample.file);
+  assert.ok(Buffer.byteLength(forcedAfter) < Buffer.byteLength(fakeRaw), "⑩ 放行后应真瘦身");
+  assert.equal(read(`${fakeSample.file}.bak`), fakeRaw, "⑩ .bak 必须是改前原文");
+  assert.equal((await measure(fakeSample.file)).n, (await measure(`${fakeSample.file}.bak`)).n, "⑩ 放行后上下文条数一致");
+  console.log(`⑩-4 --force-real：退出 ${forced.status}，假根样本 ${(Buffer.byteLength(fakeRaw) / 1e6).toFixed(2)}MB → ${(Buffer.byteLength(forcedAfter) / 1e6).toFixed(2)}MB，.bak 逐字节一致`);
+
+  // ⑩-5 显式给非 sessions 路径（$TEMP 下）→ --apply 直接放行，不被无关的 --force-real 卡住
+  const plainDir2 = fs.mkdtempSync(path.join(root, "plain-"));
+  const plainSample = buildSession(plainDir2);
+  const plainRaw = read(plainSample.file);
+  const plainRun = run(["--apply", plainSample.file], fakeEnv);
+  assert.equal(plainRun.status, 0, `⑩ 非 sessions 路径的 --apply 应直接放行：${plainRun.stderr}`);
+  assert.ok(Buffer.byteLength(read(plainSample.file)) < Buffer.byteLength(plainRaw), "⑩ 放行的样本应真瘦身");
+  console.log(`⑩-5 显式路径 --apply：退出 ${plainRun.status}（非 sessions 目录，无需 --force-real）`);
+
+  console.log("\n全部通过（①②③④⑤⑥⑦⑧⑨⑩）");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
   console.log(`样本已删：${root}`);

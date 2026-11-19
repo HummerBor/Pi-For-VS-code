@@ -36,10 +36,18 @@
 //   6. 帧类型一律 `JSON.parse` 后判 `customType`（旧版用 `line.includes("subagent-async-stream")`
 //      判类型——任何 toolResult 正文里出现这串字的行都会被当帧删掉，是真实的数据丢失路径）。
 //
+// 入口守卫（工单40 补刀，2026-11-19）：脚本不给路径时**默认目标就是真实会话根**，所以
+// `--apply` 一条命令就能改写本机全部会话（实测 4.1GB / 488 个）。上面的 .bak 守卫只挡得住第二次，
+// 挡不住第一次。因此：`--apply` 且（未给路径 或 给了落在 sessionsRoot 下的路径）时，必须再带
+// `--force-real`，否则**拒跑**（退出码 1，打印会改多少文件 + 建议先单文件试）。
+// 干跑（不带 --apply）不受影响——那是它平时的用法；显式给非 sessions 路径的 --apply 也照旧放行。
+//
 // 用法：
-//   node scripts/migrate/slim-subagent-frames.mjs                 # 干跑：扫 >20MB 的会话，只报账
-//   node scripts/migrate/slim-subagent-frames.mjs --apply         # 真改（写 <file>.bak 后原子替换）
-//   node scripts/migrate/slim-subagent-frames.mjs <file> [more…]  # 指定文件
+//   node scripts/migrate/slim-subagent-frames.mjs                 # 干跑：扫 >20MB 的会话，只报账（可扫真实根）
+//   node scripts/migrate/slim-subagent-frames.mjs <file> [more…]  # 干跑指定文件
+//   node scripts/migrate/slim-subagent-frames.mjs --apply <file>  # 真改指定文件（非 sessions 目录直接放行）
+//   node scripts/migrate/slim-subagent-frames.mjs --apply --force-real
+//                                                                 # 真改整个真实会话根（⚠️ 危险动作二次确认）
 //   node scripts/migrate/slim-subagent-frames.mjs --min-mb 1      # 调扫描阈值
 //
 // ⚠️ 真改前先关掉对应会话所在窗口：pi 正在 append 的文件被原子替换，会让它的写指针落空。
@@ -52,6 +60,7 @@ import crypto from "node:crypto";
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
+const forceReal = args.includes("--force-real");
 const minMbIdx = args.indexOf("--min-mb");
 const minMb = minMbIdx >= 0 ? Number(args[minMbIdx + 1]) || 20 : 20;
 const explicit = args.filter((a, i) => !a.startsWith("--") && !(minMbIdx >= 0 && i === minMbIdx + 1));
@@ -537,6 +546,36 @@ const list = targets();
 if (!list.length) {
   console.log(`没有找到 >${minMb}MB 的会话/帧文件（${sessionsRoot}）`);
   process.exit(0);
+}
+
+// 入口守卫（工单40）：--apply 打到真实会话根（未给路径 = 默认扫根；或显式给了根下文件）时必须
+// 二次确认 --force-real。干跑不拦（平时就是用来看统计的），非 sessions 路径的 --apply 也不拦。
+if (apply && !forceReal) {
+  const rel = (p) => path.relative(sessionsRoot, p);
+  const insideRoot = (p) => {
+    const r = rel(p);
+    return r === "" || (!r.startsWith("..") && !path.isAbsolute(r));
+  };
+  const hits = explicit.length ? list.filter(insideRoot) : list;
+  if (hits.length) {
+    const totalBytes = hits.reduce((s, f) => {
+      try {
+        return s + fs.statSync(f).size;
+      } catch {
+        return s;
+      }
+    }, 0);
+    const why = explicit.length ? "目标落在真实会话根下" : "没给路径，默认目标就是真实会话根";
+    console.error("[拒绝执行] 这是对真实会话目录的破坏性改写，需要二次确认：");
+    console.error(`  ${why}：${sessionsRoot}`);
+    console.error(`  本次会改写 ${hits.length} 个文件，合计 ${(totalBytes / 1e6).toFixed(1)}MB（逐个原子替换 + 落 .bak，自检不过会回滚）`);
+    for (const f of hits.slice(0, 5)) console.error(`    - ${f}`);
+    if (hits.length > 5) console.error(`    …另 ${hits.length - 5} 个`);
+    console.error("确认要动真实会话，再加 --force-real 重跑：");
+    console.error(`  node ${path.basename(process.argv[1] ?? "slim-subagent-frames.mjs")} --apply --force-real`);
+    console.error("更稳的姿势：先单文件小范围试 `--apply <某个会话 .jsonl>`，确认无误再扩到整个根。");
+    process.exit(1);
+  }
 }
 
 // 修法 3：.bak 存在即拒跑。先整体体检：一个不合格就一个文件都不动。
