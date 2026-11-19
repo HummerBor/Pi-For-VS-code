@@ -37,7 +37,41 @@
 > 做新单前若与旧单边界相关先查归档，勿凭记忆执行旧单条目。
 > **工单号一律阿拉伯数字**（工单23 起，用户拍板 2026-09-15；存量编号不改）
 
-> **当前无待施工工单**（2026-11-16：工单33 判死、工单32 收单存查，两单全文均已迁 归档.md）。
+> **工单34（待施工）——记忆接力一期：压缩后指针注入 + digest 探针**
+>
+> 背景：压缩（pi `compaction`）后模型不知道「该重读哪些文件」，导致每次压缩都从头摸。实测证据在
+> `docs/decisions.md` §十七：jsonl 永完整、摘要丢被否方案、压后可注入。用户 2026-11-19 拍板整体方案
+> （常驻层 / 交接卡 / 压缩层 / 档案层 四层），本单只做压缩层一期。
+>
+> **范围**：新建 `harness/memory/{index.ts,harness.json}`（version:1）；`src/pi/ensureSubagentHarness.ts`
+> 泛化为多 bundle 同步（现有 subagent bundle 的版本门行为不许变）。两个钩子：
+> ① `pi.on("session_compact")` → 用 `pi.sendMessage({customType:"memory-pointer",content:[...]},
+> `{triggerTurn:false})` 注入一条 **≤60 token** 固定指针（重读 AGENTS.md / PROGRESS.md）。
+> ② `pi.on("session_before_compact")` → 算 digest 但 **不接管**：仅 `pi.appendEntry("memory-digest",{...})`
+> 落盘（custom 帧不进上下文），供真机观察抽取质量。抽取逻辑必须是**纯函数**、可被 node 直接 import。
+>
+> **边界（不许顺手做）**：不返回 `{compaction}` 接管摘要（二期另立单）；不改 `reserveTokens`/`keepRecentTokens`；
+> 不改压缩触发时机；钩子内零网络、零 fs 写；不新增第九个 `pi.on` 之外的钩子；不动 webview 与 `piCore`。
+>
+> **验收**：① 手动压缩后面板出现一条 memory-pointer 消息，jsonl 新增 1 条 `custom_message` + 1 条
+> `custom(memory-digest)`；② `scripts/test-memory-digest.mjs` 用真实 jsonl 喂抽取函数，断言 4 段结构与
+> ≤4k token；③ `npm run compile` 全绿 + 全部 `test:*` 基线不降；④ `harness.json` 版本只升不降，
+> 已装 `extensions/subagent` 不被误覆写。
+>
+> **工单35（待施工）——文档预算落地：AGENTS 三条硬预算 + PROGRESS 去工单化**
+>
+> 背景：`归档.md` 已长到 3,323 行 / 74k token，同一机制正在 PROGRESS.md 上重演；指针方案要求
+> AGENTS+PROGRESS **必须小**（它们是压缩后要重读的东西）。
+>
+> **范围**：`AGENTS.md` 文档纪律加三条可机械判定预算（单文件 ≤1.5k token / 每条 ≤2 行 /
+> 每小节 ≤1 屏），「边干边记」的行数口径改为 token 口径；`PROGRESS.md` 待办 4 压成一行指针
+> （修法全文进 归档.md 既有条目或本单注记），全文件 ≤1.5k token。
+>
+> **边界**：不动 `归档.md`（单独单，等你拍板）；不动 `docs/decisions.md`；不动本文件施工工单区。
+>
+> **验收**：三个文件的 token 数当场量出来写进回报；`grep` 能查到预算条款；`git show --stat` 只含预期文件。
+
+> 历史：工单33 判死、工单32 收单存查（两单全文均已迁 归档.md）。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
 
