@@ -108,6 +108,46 @@ export interface FootData {
   } | null;
 }
 
+/** R 刀快路径的 jsonl 读法（工单43 遗留 3a，2026-11-19）：会话文件原文 → 消息流。
+ *
+ *  为什么单拎成函数：快路径原先只认 `type:"message"`，扩展注入的 `custom_message` 条目
+ *  （`harness/memory` 的压缩指针 `customType:"memory-pointer"` 就是这种）在「权威 render
+ *  未到」的 2~7s 窗口里被整条吞掉，用户先看到缺提示、随后补上（闪烁；内容不丢但不可信）。
+ *  纯 字符串→数组，无宿主依赖：node 裸跑用例可直接断言（scripts/test/fastRender.test.mjs）。
+ *
+ *  三条口径钉死，别在这里加判断：
+ *  - `custom_message` 条目（`{type, customType, content, display, details, timestamp}`，
+ *    pi 的 appendCustomMessageEntry 必写这三项）映射成 pi 投影的 Message 形状
+ *    `{role:"custom", customType, content, display}`——**挑选口径仍归
+ *    domain/customMessage.ts**（出口在 webviewMessages → filterCustomMessagesForWebview）。
+ *    这里再写一份「要不要给人看」就是第二个真相源，两侧迟早分裂。
+ *  - 只原样搬运 `content`（`string | Content[]` 都交给 customMessageText 拼文本），
+ *    不在快路径里另写拼串逻辑。
+ *  - 顺序 = 文件行序（jsonl 追加即时间序）：不排序、不去重、不折叠。
+ *  半行/坏行跳过（进程被杀的尾部常态），不因一行坏掉丢整份历史。 */
+export function fastRenderMessagesFromJsonl(text: string): SessionMessage[] {
+  const msgs: SessionMessage[] = [];
+  for (const ln of text.split("\n")) {
+    if (!ln.trim()) continue;
+    try {
+      const e = JSON.parse(ln);
+      if (e && e.type === "message" && e.message) {
+        msgs.push(e.message);
+      } else if (e && e.type === "custom_message") {
+        // display 原样透传（缺省就是 false 语义，由谓词判定）；timestamp 有则带，缺则不补假值
+        msgs.push({
+          role: "custom",
+          customType: e.customType,
+          content: e.content,
+          display: e.display,
+          ...(e.timestamp != null ? { timestamp: e.timestamp } : {}),
+        });
+      }
+    } catch { /* 崩溃尾部半行跳过 */ }
+  }
+  return msgs;
+}
+
 export class PiCore {
   static readonly viewId = "piChat.view"; // 保持与原 panel.ts 相同的视图 id 常量位
 
@@ -506,21 +546,22 @@ export class PiCore {
         const last = this.freshTab || this.restoreBlocked ? undefined : this.getSessionForWs(cwd);
         // R 刀快路径（2026-09-23 用户方案）：历史渲染不等 pi——会话文件就是记录本身
         // （jsonl 的 type:"message" entry.message {role,content,timestamp} 与
-        // session.messages 同形，探针实测核对过）。先把记忆会话的消息读出来画上，
+        // session.messages 同形，探针实测核对过；扩展注入的 custom_message 条目也在其中
+        // 映射成 role:"custom"，见 fastRenderMessagesFromJsonl，工单43 遗留 3a）。先把记忆会话的消息读出来画上，
         // pi 就绪后由链路 render 覆盖为权威版本——services 全树扫描（6s 级）从此不挡显示
         try {
           if (last && fs.existsSync(last)) {
-            const msgs: any[] = [];
-            for (const ln of fs.readFileSync(last, "utf8").split("\n")) {
-              if (!ln.trim()) continue;
-              try {
-                const e = JSON.parse(ln);
-                if (e && e.type === "message" && e.message) msgs.push(e.message);
-              } catch { /* 崩溃尾部半行跳过 */ }
-            }
+            // jsonl 读法单拎成 fastRenderMessagesFromJsonl（工单43 遗留 3a）：原先只认
+            // type:"message"，扩展注入的 custom_message（压缩指针）在权威 render 到之前的
+            // 2~7s 窗口里整条缺失，提示晚到=闪烁。挑选口径不在这里判——快路径与权威 render
+            // 共用同一个出口 webviewMessages（domain/customMessage.ts），两处不得分裂。
+            // 过滤后再存成 fastRenderMsgs：启动期 uiState 快照拿的就是这份基线（同口径）。
+            const msgs = this.webviewMessages(
+              fastRenderMessagesFromJsonl(fs.readFileSync(last, "utf8"))
+            );
             if (msgs.length) {
               this.fastRenderMsgs = msgs;
-              this.post({ type: "render", messages: this.webviewMessages(msgs) });
+              this.post({ type: "render", messages: msgs });
               mark("fast-render");
             }
           }
