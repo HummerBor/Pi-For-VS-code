@@ -42,3 +42,6 @@ media/动画
 .pi/tmp/
 # 施工报告（项目内、不入库、验收后即抛）
 .pi/reports/
+
+# 派单任务书：过程产物，用毕即删，不入库（dispatch skill §1）
+dispatch-t*.md
