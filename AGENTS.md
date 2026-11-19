@@ -39,8 +39,9 @@
 - **不许攒到会话末尾再写**：压缩、断线、上下文被摘掉时，"打算写"的东西一起没。
 - 新会话或压缩后，第一件事：读 `PROGRESS.md` 最后 20 行 + `git log --oneline -10` +
   `git status`，再动手。
-- `PROGRESS.md` **只记状态，不记细节**（细节进 commit message 与 `docs/history/`）；
-  超过 100 行时把旧段落截到 `docs/history/progress-<年月>.md`。
+- `PROGRESS.md` **只记状态，不记细节**（细节进 commit message 与 `docs/decisions.md`）；
+  **滚动窗口**：日志只留最近 25 条，超出就删最旧的（**不归档**——已完成的事实已在 `git log` 里，
+  归档只是把膨胀从根目录挪到 `docs/`）。文件恒定在 70 行以内。
 - 破坏性操作前先写一行「准备做 X，回滚方式 Y」——中途断了也知道停在哪。
 
 ## 压缩后第一件事（上下文被摘掉时）
