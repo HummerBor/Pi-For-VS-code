@@ -143,7 +143,10 @@ const SECTION_TITLES: Record<DigestSectionKey, string> = {
 	user: "用户原话",
 	decisions: "用户裁决句",
 	conclusions: "每轮结论",
-	rejections: "否决清单",
+	// 工单41：改名「否决清单」→「取舍与否决」。实测真实样本里 ② 类对比变更（改成/换成）占大头
+	// （19 条里 14 条），而「这里用的是 B 不是 A」与「X 被排除」对下一轮的作用完全一样：都阻止它改回去。
+	// 本节目的是「别重复被排除的路」，不是「变更日志」也不是「纯否决」，名字得对得上语义。
+	rejections: "取舍与否决",
 };
 
 /** 展示顺序（固定，不许跟着裁剪策略动）：user → decisions → conclusions → rejections */
