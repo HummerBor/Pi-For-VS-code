@@ -28,6 +28,9 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     seeCode: "请看这段代码",
     seeImage: "请看这张图片",
     seeFiles: "请看附件文件",
+    // 图片附件在输入框里的位置标记（{n} = 序号）。它只活在输入框正文里，发送时会被剥掉、
+    // 图片本体仍走 images[] 视觉通道；文件附件不用它（文件名本身就是 token）
+    imgToken: "[图片{n}]",
     sendFail: "发送失败: ",
     autoQueued: "⏳ agent 忙碌中，已自动转为排队插话",
     aborted: "⏹ 已中断当前任务（已发送的消息保留在会话中）",
@@ -565,6 +568,7 @@ export const STRINGS: Record<Lang, Record<string, any>> = {
     seeCode: "Please look at this code",
     seeImage: "Please look at this image",
     seeFiles: "Please look at the attached files",
+    imgToken: "[Image {n}]",
     sendFail: "Send failed: ",
     autoQueued: "⏳ Agent busy, message queued as steering automatically",
     aborted: "⏹ Current task aborted (sent messages are kept in the session)",

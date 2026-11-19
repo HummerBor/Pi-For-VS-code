@@ -1011,31 +1011,24 @@ export class PiCore {
           this.post({ type: "notice", text: tuiOnly[firstTok] });
           break;
         }
-        this.dbg("prompt: images=" + (m.images ? m.images.length : 0) + " files=" + (m.files ? m.files.length : 0) + " busy=" + this.busy);
+        this.dbg("prompt: images=" + (m.images ? m.images.length : 0) + " textLen=" + String(m.text || "").length + " busy=" + this.busy);
         let text = m.text;
         const codeInfo = m.attachCode && this.codeCtx ? this.codeCtx.name + " " + this.codeCtx.range : undefined;
-        // 附件文件（顶部胶囊行，可多个）→ 拼进消息文本
-        if (Array.isArray(m.files) && m.files.length) {
-          for (const f of m.files) {
-            if (!f) continue;
-            if (f.path) {
-              // 路径模式：让 pi 自己读文件，不把内容内联进 prompt
-              text = "--- 附件: " + (f.name || "file") + " (路径: " + f.path + ")\n请用 read 工具读取此文件。\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
-            } else if (typeof f.text === "string" && f.text.length) {
-              // 不用 ``` 包裹：文件内容本身可能含 ``` 会提前闭合围栏；用唯一结束行分界
-              text = "--- 附件: " + (f.name || "file") + " ---\n" + f.text + "\n--- 附件结束: " + (f.name || "file") + " ---\n\n" + text;
-            }
-          }
-        }
+        // 文件附件不再有独立头部块（2026-11-19 用户裁决）：输入框里就插在正文中的 token 已在
+        // webview 侧还原成绝对路径，模型看到的就是「句子里一段路径」，与 pi TUI 粘贴文件一致。
+        // 故这里只剩代码上下文一种前置注入。
         if (m.attachCode && this.codeCtx) {
           const c = this.codeCtx;
           text = "--- 代码上下文: " + c.rel + " (" + c.range + ") ---\n" + c.text + "\n--- 代码上下文结束 ---\n\n" + text;
         }
-        // 气泡显示实际发送的内容：有文字显示文字；纯代码附带/纯图片时显示对应的占位语（与会话记录一致）
-        const displayText = m.text || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : m.files?.length ? this.L.seeFiles : m.text);
+        // 气泡显示实际发送的内容：**优先用 webview 给的原文**（带附件 token），否则会甩一条
+        // `C:\...\Temp\pi-attach-<时间戳>-xxx.md` 给用户看；纯代码附带/纯图片时再退到占位语
+        const shown = typeof m.displayText === "string" && m.displayText ? m.displayText : m.text;
+        const displayText = shown || (codeInfo ? this.L.seeCode : m.images?.length ? this.L.seeImage : shown);
         // 工单十六：发送核心抽成 sendPromptCore（乐观 busy/4s 兜底/steer 自愈/自动命名全套语义），
-        // 本 case 只留斜杠拦截与附件组装——取回重排队（retrieveQueued）的 idle 首项复用同一链路
-        await this.sendPromptCore(text, displayText, m.text, { images: m.images, fileCount: m.files?.length ?? 0, codeInfo });
+        // 本 case 只留斜杠拦截与附件组装——取回重排队（retrieveQueued）的 idle 首项复用同一链路。
+        // titleText（自动命名）也给原文：用路径当会话名毫无意义
+        await this.sendPromptCore(text, displayText, shown, { images: m.images, codeInfo, attachNames: m.attachNames });
         break;
       }
       case "abort":
@@ -1157,7 +1150,17 @@ export class PiCore {
             this.post({ type: "notice", text: this.L.attachTempFail + String(err?.message ?? err).slice(0, 120) });
           }
         } else if (typeof m.text === "string" && m.text.length) {
-          this.post({ type: "addFiles", files: [{ name: String(m.name || "file"), text: m.text }] });
+          // 纯文本通道已废弃（2026-11-19）：附件一律落成带路径的条目（上面两条），webview 侧
+          // 只认 path。旧客户端若真发来纯文本，这里直接落临时文件给路径，统一走路径语义
+          const buf = Buffer.from(m.text, "utf8");
+          const safeName = String(m.name || "file").replace(/[\\/:*?"<>|]/g, "_");
+          const tmp = path.join(os.tmpdir(), "pi-attach-" + Date.now() + "-" + safeName);
+          try {
+            fs.writeFileSync(tmp, buf);
+            this.post({ type: "addFiles", files: [{ name: safeName, path: tmp }] });
+          } catch (err: any) {
+            this.post({ type: "notice", text: this.L.attachTempFail + String(err?.message ?? err).slice(0, 120) });
+          }
         }
         break;
       case "attachUri":
@@ -1444,11 +1447,12 @@ export class PiCore {
     text: string,
     displayText: string,
     titleText: string,
-    opts?: { images?: { data: string; mimeType: string }[]; fileCount?: number; codeInfo?: string }
+    opts?: { images?: { data: string; mimeType: string }[]; fileCount?: number; codeInfo?: string; attachNames?: string[] }
   ): Promise<void> {
     const client = this.ensureClient();
     const images = opts?.images;
     const codeInfo = opts?.codeInfo;
+    const attachNames = opts?.attachNames;
     // 乐观反馈：立刻显示工作状态，不等 agent_start 事件（省掉 1~2s 的无反馈空窗）
     const wasBusy = this.busy;
     // 刀6：乐观置位由下方 pendingPrompt 承担（isStreaming 尚未翻转的空窗），不再写镜像
@@ -1473,7 +1477,7 @@ export class PiCore {
     } else {
       // 工单31：乐观回显透传原图（webview→宿主同回合二次传递，本地 postMessage 非网络通道），
       // 气泡直接画缩略图不再只有数字；agent_settled 后整页 render 重绘覆盖，两路视觉一致
-      this.post({ type: "user", text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo, images });
+      this.post({ type: "user", text: displayText, imageCount: images?.length ?? 0, fileCount: opts?.fileCount ?? 0, codeInfo, images, attachNames });
     }
     let steered = false;
     // 4s 兜底必须在 await 之前武装：agent_start 事件可能比 prompt 的 RPC 响应先到
@@ -1983,7 +1987,7 @@ export class PiCore {
       };
       walk(root, 0);
     }
-    this.post({ type: "fileList", files });
+    this.post({ type: "fileList", files, root: root || "" });
   }
 
   /** 从历史面板点击某条会话 → 切换过去 */

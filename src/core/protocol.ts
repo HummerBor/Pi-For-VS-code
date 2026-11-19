@@ -19,8 +19,18 @@ export interface WvReadyMsg {
 }
 export interface WvPromptMsg {
   type: "prompt";
+  /** 真正发给模型的正文（附件 token 已还原：文件 → 绝对路径） */
   text: string;
+  /** 给用户看的正文（带 `@文件名` / `[图片N]` token）。气泡、排队条、会话自动命名用它，
+   *  否则界面上甩一条 `C:\...\Temp\pi-attach-<时间戳>-xxx.md` 给用户看。
+   *  不给则回落 text（旧客户端） */
+  displayText?: string;
+  /** 本次发送里**文件附件**的原始文件名（不带路径）。气泡把 `@名字` 渲染成胶囊靠它：
+   *  displayText 里的 `@rules.md` 与用户手打的 @ 提示无法区分，只有宿主／webview 知道
+   *  哪几个是真附件。重开会话时没有它，改由 messageList 从 `pi-attach-*` 路径反推 */
+  attachNames?: string[];
   images?: { data: string; mimeType: string }[];
+  /** @deprecated 2026-11-19：文件附件改成正文里的路径，宿主不再收 files */
   files?: { name: string; text?: string; path?: string }[];
   attachCode?: boolean;
 }
@@ -274,6 +284,8 @@ export interface UserMsg {
   /** 原图 base64（工单31）：当场发送回显带图渲染缩略图；排队气泡等无数据路径不带此字段，
    *  仍由 imageCount 兑底数字胶囊 */
   images?: { data: string; mimeType: string }[];
+  /** 本条消息的文件附件名（气泡把 `@名字` 画成胶囊用） */
+  attachNames?: string[];
 }
 export interface NewLiveMsg {
   type: "newLive";
@@ -455,6 +467,9 @@ export interface WorkspaceFile {
 export interface FileListMsg {
   type: "fileList";
   files: WorkspaceFile[];
+  /** 工作区根（绝对路径）：webview 靠它把 rel 拼成绝对路径——@ 选中的文件按真附件处理
+   *  （胶囊 + 发给模型的是绝对路径），不带上它就只能当纯文本提及 */
+  root?: string;
 }
 export interface StateMsg {
   type: "state";

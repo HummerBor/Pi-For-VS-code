@@ -48,8 +48,12 @@
           <div class="pm-item" id="pm-at"></div>
         </div>
         <input type="file" id="file" multiple style="display:none">
-        <div id="attachbar"></div>
-        <textarea id="input" placeholder="{{t:inputPlaceholder}}" disabled></textarea>
+        <!-- 输入区：正文里插附件 token（@文件名 / [图片1]），胶囊底色由镜像层 #inputmirror 画。
+             两层同字体同尺寸同换行 —> 天然对齐；镜像层 pointer-events:none，输入全部归 textarea -->
+        <div id="inputwrap">
+          <div id="inputmirror" aria-hidden="true"><div></div></div>
+          <textarea id="input" placeholder="{{t:inputPlaceholder}}" disabled></textarea>
+        </div>
         <!-- disabled 至 main.js 绑定按键后启用：消灭「输入框已画、按键未绑」的死窗口（V 刀 2026-09-23） -->
         <div id="ctoolbar">
           <span id="attach" class="tb-btn" title="{{t:attachTitle}}"></span>

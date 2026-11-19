@@ -35,6 +35,8 @@ export interface MessageListDeps {
   ico: (name: string, size?: number) => string;
   /** HTML 转义（子 agent 回报卡的 codeInfo 等） */
   esc: (s: any) => string;
+  /** 工作区根（@ 选中的文件发出去是绝对路径，气泡要按根缩成 `@文件名`） */
+  getRoot: () => string;
   /** 文件路径/符号可点（features/linkify.ts） */
   linkify: (root: HTMLElement | null) => void;
   /** markdown 渲染（features/markdown.ts） */
@@ -75,8 +77,7 @@ export interface MessageListDeps {
 }
 
 export function initMessageList(deps: MessageListDeps) {
-  var root = deps.root; var el = deps.el; var ico = deps.ico; var esc = deps.esc;
-  var linkify = deps.linkify; var renderRich = deps.renderRich; var L = deps.lang;
+  var root = deps.root; var el = deps.el; var ico = deps.ico; var esc = deps.esc;  var linkify = deps.linkify; var renderRich = deps.renderRich; var L = deps.lang;
   var scroll = deps.scroll; var vpost = deps.post;
   var adoptSticky = deps.adoptSticky; var updateStickyChip = deps.updateStickyChip; var observeSticky = deps.observeSticky;
   var toolStart = deps.toolStart; var toolEnd = deps.toolEnd; var resetToolRows = deps.resetToolRows;
@@ -97,7 +98,127 @@ export function initMessageList(deps: MessageListDeps) {
     }
     return out;
   }
-  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number, images?: any[]) {
+  // 用户气泡里的临时附件路径缩写 + 胶囊化（2026-11-19）：字节通道（OS 拖入/剪贴板）的附件
+  // 落在 <tmp>/pi-attach-<时间戳>-<原名>，插件发给模型的、会话 jsonl 里存的都是这条完整路径。
+  // 气泡里直接甩出来又长又难读，所以渲染时缩回 `@原名` —— 和刚发出时（prompt 的
+  // displayText）看到的形态一模一样，否则会出现「刚发时好看、重开变长路径」的不一致。
+  // 只作用于用户气泡；**助手/工具输出一律不碰**（那里改字等于篡改模型结果）。
+  // 匹配口径锁死在我们自己造的名字上（pi-attach-<纯数字>-），用户的文件不可能长这样；
+  // 分段替换：路径里带空格时前两段接不上，最后一段只剩裸名兑底，宁可少缩也不吞正文。
+  function shortenAttachPaths(s: string, names: string[]): string {
+    var out = String(s || '')
+      .replace(/[A-Za-z]:\\[^\s"'<>|]*?pi-attach-\d+-([^\s"'<>|]+)/g, function (m, n) { if (names.indexOf(n) < 0) names.push(n); return '@' + n; })
+      .replace(/\/[^\s"'<>|]*?pi-attach-\d+-([^\s"'<>|]+)/g, function (m, n) { if (names.indexOf(n) < 0) names.push(n); return '@' + n; })
+      .replace(/pi-attach-\d+-([^\s"'<>|]+)/g, function (m, n) { if (names.indexOf(n) < 0) names.push(n); return '@' + n; });
+    // 工作区内的绝对路径（@ 选中的文件发送后就是绝对路径）→ 也缩成 `@文件名`：
+    // 不缩的话「刚发出是胶囊、重开会话变成一长串 C:\...\src\a.ts」又是一种不一致。
+    // 只动工作区根下面的路径，用户帖的外部路径原样保留。根为空（还没收到 fileList）就不缩
+    var root = String(deps.getRoot() || '').replace(/[\\/]+$/, '');
+    if (root) {
+      // 先统一成 `/` 再转义，然后把每个 `/` 换成分隔符类（不这么做：Windows 根里的 `\` 会被
+      // escRe 转成 `\\`，再换成分隔符类就成了匹配两个分隔符，永远匹配不上——探针实测）
+      var rootRe = escRe(root.replace(/[\\/]+/g, '/')).replace(/\//g, '[\\\\/]');
+      var re = new RegExp(rootRe + '[\\\\/](?:[^\\s"\'<>|]*[\\\\/])?([^\\s"\'<>|\\\\/]+)', 'g');
+      out = out.replace(re, function (m, n) { if (names.indexOf(n) < 0) names.push(n); return '@' + n; });
+    }
+    return out;
+  }
+  // 气泡正文里的附件 token 就地渲染（2026-11-19 用户要求「气泡里也按输入框那种顺序、
+  // 图片换成缩略图」）：
+  //   `@文件名`  → 胶囊（只给 shortenAttachPaths 缩出来的那几个包，用户手打的 @xxx 不碰）
+  //   `[图片N]`  → 原位一张缩略图（占位 span 先画，内外两层：缩略图由 addUser 后处理填）
+  // 图片按**出现顺序**依次认领 images[]，不信 token 里的编号——用户删过前一张图时编号会
+  // 留空档，顺序才是真相。认领过的在图尾标 used，剩下的图（旧会话/别处发来的无 token 图）
+  // 仍旧模式画在泡底，一个都不丢。
+  function renderUserText(text: string, images: any[], used: boolean[], extraNames?: string[]): string {
+    var names: string[] = [];
+    var plain = shortenAttachPaths(text, names);
+    // 当场发送的那一条：文件附件名由发送方直接告知（displayText 里的 `@名字` 与用户
+    // 手打的 @ 提示无法区分，不能靠正则猜）；从 jsonl 重建时没有这份名单，靠路径反推
+    if (extraNames) for (var e = 0; e < extraNames.length; e++) { var nm = String(extraNames[e] || ''); if (nm && names.indexOf(nm) < 0 && plain.indexOf('@' + nm) !== -1) names.push(nm); }
+    var marks: any[] = [];
+    for (var i = 0; i < names.length; i++) {
+      var tok = '@' + names[i], from = 0, ix;
+      while ((ix = plain.indexOf(tok, from)) !== -1) { marks.push({ start: ix, end: ix + tok.length, kind: 'file', tok: tok }); from = ix + tok.length; }
+    }
+    var tpl = String(L.imgToken || '[图片{n}]').split('{n}');
+    // 图片 token 两种形态：带文件名的 `[截图.png]`（新）与 i18n 兑底 `[图片1]`（无名字的图）。
+    // 带名字的那种靠图片扩展名认（名字过长中段省略时扩展名仍在末尾），不靠 `[]` 乱猜
+    var pat = escRe(tpl[0]) + '\\d+' + escRe(tpl[1] || '') + '|\\[[^\\[\\]\\n]{0,60}?\\.(?:png|jpe?g|gif|webp|bmp)\\]';
+    var re = new RegExp(pat, 'gi');
+    var mm;
+    while ((mm = re.exec(plain))) marks.push({ start: mm.index, end: mm.index + mm[0].length, kind: 'image', tok: mm[0] });
+    marks.sort(function (x, y) { return x.start - y.start; });
+    var html = '', pos = 0, imgIx = 0;
+    for (var k = 0; k < marks.length; k++) {
+      var mk = marks[k];
+      if (mk.start < pos) continue; // 重叠（同名夹同名）：前面的先认领
+      html += esc(plain.slice(pos, mk.start));
+      if (mk.kind === 'file') { html += '<span class="ap-pill">' + esc(mk.tok) + '</span>'; }
+      else {
+        while (imgIx < images.length && used[imgIx]) imgIx++;
+        if (imgIx < images.length && images[imgIx]) {
+          html += '<span class="ap-thumb" data-ix="' + imgIx + '"></span>';
+          used[imgIx] = true; imgIx++;
+        } else {
+          // 没有对应的图（老记录、别的客户端发的）：退回胶囊文字，不凭空造个空位
+          html += '<span class="ap-pill ap-img">' + esc(mk.tok) + '</span>';
+        }
+      }
+      pos = mk.end;
+    }
+    html += esc(plain.slice(pos));
+    return html;
+  }
+  function escRe(s: string): string { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  // 缩略图占位 span → 真实 <img>（点击开原图，交宿主写临时文件走 VS Code 内置预览器）
+  function fillThumbSlots(b: HTMLElement, images: any[]) {
+    var slots = b.querySelectorAll('.ap-thumb');
+    for (var i = 0; i < slots.length; i++) {
+      (function (slot) {
+        var ix = Number(slot.getAttribute('data-ix'));
+        var img0 = images[ix]; if (!img0) return;
+        var im = document.createElement('img');
+        im.alt = '';
+        im.src = 'data:' + (img0.mimeType || 'image/png') + ';base64,' + img0.data;
+        im.addEventListener('click', function (ev) { ev.stopPropagation(); vpost({ type: 'openImage', data: img0.data, mimeType: img0.mimeType || 'image/png' }); });
+        bindThumbHover(im, img0);
+        im.onload = function () { requestAnimationFrame(function () { (b as any)._fullH = b.scrollHeight; updateStickyChip(b as any); }); };
+        slot.appendChild(im);
+      })(slots[i] as HTMLElement);
+    }
+  }
+  // 气泡里缩略图的 hover 大图（2026-11-19 用户要求「行内图太小，鼠标放上去浮一张大的，
+  // 跟输入框胶囊那种一样」）：复用输入框那套 .ap-preview（固定定位、pointer-events:none，
+  // 不会抢鼠标导致闪）。renderAll 会 root.innerHTML='' 把浮层一并扬了，所以按需重建。
+  var imgPrevEl: HTMLElement | null = null;
+  function ensureImgPrev(): HTMLElement {
+    if (imgPrevEl && imgPrevEl.parentNode) return imgPrevEl;
+    imgPrevEl = el('div', 'ap-preview ap-preview-lg');
+    root.appendChild(imgPrevEl);
+    return imgPrevEl;
+  }
+  function showImgPrev(rc: DOMRect, img0: any) {
+    var p = ensureImgPrev();
+    p.innerHTML = '';
+    var big = document.createElement('img');
+    big.src = 'data:' + (img0.mimeType || 'image/png') + ';base64,' + img0.data;
+    p.appendChild(big);
+    p.style.display = 'block';
+    var w = p.offsetWidth, h = p.offsetHeight;
+    var left = Math.max(8, Math.min(rc.left, window.innerWidth - w - 8));
+    var top = rc.top - h - 8;
+    if (top < 8) top = rc.bottom + 8; // 上方放不下就翻到下方
+    p.style.left = left + 'px';
+    p.style.top = top + 'px';
+  }
+  function hideImgPrev() { if (imgPrevEl) imgPrevEl.style.display = 'none'; }
+  // 缩略图 hover 挂大图（行内占位图与泡底图共用）
+  function bindThumbHover(im: HTMLElement, img0: any) {
+    im.addEventListener('mouseenter', function () { showImgPrev(im.getBoundingClientRect(), img0); });
+    im.addEventListener('mouseleave', hideImgPrev);
+  }
+  function addUser(text: string, imageCount?: number, codeInfo?: string, fileCount?: number, images?: any[], attachNames?: string[]) {
     // 子 agent 异步回报特殊标记渲染（2026-09-18 用户拍板升级：不隐藏，改独立卡片——
     // 防止被当成用户自己说的话；前版“直接不展示”作废）。前缀契约在 subagent 扩展的
     // sendUserMessage 处（"[子 agent sa-N 完成|失败|已终止] agent名: 输出"），改格式三处同步
@@ -116,25 +237,32 @@ export function initMessageList(deps: MessageListDeps) {
       return;
     }
     var w = root.querySelector('#welcome'); if (w) w.remove(); var b = el('div', 'bubble user');
-    (b as any)._olText = text || ''; // 大纲轨道条目文案（空文本=代码上下文泡，olText 里有兑底）
+    var shown0 = shortenAttachPaths(text, []);
+    (b as any)._olText = shown0; // 大纲轨道条目文案（空文本=代码上下文泡，olText 里有兑底）
+    var imgsAll = images || [];
+    var used: boolean[] = [];
+    for (var ui = 0; ui < imgsAll.length; ui++) used.push(false);
     adoptSticky(b); // 旧泡摘态 + 换钉住引用（细节与事故注释在 features/sticky.ts 的 adoptSticky）
-    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); }); if (text) { b.textContent = text; } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; }
-    // 工单31：原图缩略图（data URI，CSP img-src data: 已放行）——限高等比在 CSS；点击 → openImage
-    // 交宿主写临时文件走 VS Code 内置预览器开原图（自带缩放），不造 lightbox；stopPropagation
-    // 防 sticky 气泡 toggle（点击缩略图不能触发展开/折叠）
-    if (images && images.length) {
+    b.addEventListener('click', function () { b.classList.toggle('sticky-open'); updateStickyChip(b as any); });
+    if (shown0) { b.innerHTML = renderUserText(text, imgsAll, used, attachNames); } else { b.innerHTML = ico('filecode', 12) + ' ' + L.codeCtxBubble; }
+    fillThumbSlots(b, imgsAll);
+    // 工单31：没在正文里认领到的图（无图片 token 的旧记录 / 别处发来的）仍画在泡底，一个不丢
+    var rest: any[] = [];
+    for (var ri = 0; ri < imgsAll.length; ri++) if (!used[ri]) rest.push(imgsAll[ri]);
+    if (rest.length) {
       var th = el('div', 'thumbs');
-      for (var ti = 0; ti < images.length; ti++) {
+      for (var ti = 0; ti < rest.length; ti++) {
         (function (img0) {
           var im = document.createElement('img');
           im.className = 'thumb';
           im.src = 'data:' + (img0.mimeType || 'image/png') + ';base64,' + img0.data;
           im.addEventListener('click', function (ev) { ev.stopPropagation(); vpost({ type: 'openImage', data: img0.data, mimeType: img0.mimeType || 'image/png' }); });
+          bindThumbHover(im, img0);
           // 工单31：img 异步加载，加载完成前量出的 _fullH 不含图高 → 钉住折叠判定失准；
           // 加载完成后重测（工单28 口径「原位量一次完整内容高」以 img.onload 为准修正）
           im.onload = function () { requestAnimationFrame(function () { (b as any)._fullH = (b as any).scrollHeight; updateStickyChip(b as any); }); };
           th.appendChild(im);
-        })(images[ti]);
+        })(rest[ti]);
       }
       b.appendChild(th);
     }

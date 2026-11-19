@@ -1369,11 +1369,110 @@ details.think.compaction-flash>summary {
   border-color: var(--vscode-focusBorder, #0078d4);
 }
 
-#attachbar {
+/* 附件条已废（2026-11-19）：附件改成正文里的 token + 镜像胶囊，见 #inputmirror */
+#inputwrap {
+  position: relative;
+}
+
+/* 镜像层：把 #input 的文字原样再画一遍，只上胶囊底色、不显字（color:transparent）。
+   尺寸/内边距/字体/换行必须与 #input 逐项一致，差一项就错行。宽高与滚动由
+   composer.ts 的 syncMirror 每帧写入（内部滚动条会让 clientWidth 变窄）。 */
+#inputmirror {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#inputmirror > div {
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  user-select: none;
+}
+
+/* 胶囊 = 只有底色 + 圆角。不许加 padding/边框/字重：inline 元素的横向 padding 与
+   border 都会改变行宽，镜像就会和真文字错位（底色纯视觉，不参与排版） */
+.ap-pill {
+  border-radius: 4px;
+  background: var(--vscode-inputOption-activeBackground, rgba(90, 140, 220, .28));
+  box-shadow: inset 0 0 0 1px rgba(120, 165, 235, .35);
+  box-decoration-break: clone;
+}
+
+.ap-pill.ap-img {
+  background: rgba(160, 120, 220, .28);
+  box-shadow: inset 0 0 0 1px rgba(175, 140, 235, .35);
+}
+
+/* hover 预览（图片缩略图 / 文件全路径）：position:fixed，坐标由 composer.ts 算 */
+.ap-preview {
   display: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 10px 0;
+  position: fixed;
+  z-index: 40;
+  padding: 6px;
+  max-width: 260px;
+  border-radius: 6px;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  pointer-events: none;
+}
+
+.ap-preview img {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  border-radius: 4px;
+}
+
+/* 气泡缩略图的 hover 大图：比输入框那套（242×180）大一圈，但仍是“预览”不是灯箱 */
+.ap-preview-lg {
+  max-width: none;
+}
+
+.ap-preview-lg img {
+  max-width: 460px;
+  max-height: 360px;
+}
+
+.ap-preview .ap-path {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #aaa);
+  word-break: break-all;
+}
+
+/* 用户气泡里的附件展示（2026-11-19）：与输入框镜像胶囊同一套底色，但气泡里不受
+   「不能改行宽」的约束，可以给点内边距把胶囊拉开好看（#inputmirror 里绝对不能加） */
+.bubble .ap-pill {
+  padding: 0 4px;
+}
+
+/* 原位缩略图：只高不宽（宽度按图片比例），行内近似文字高，不把行距顶得太高 */
+.ap-thumb {
+  display: inline-block;
+  vertical-align: -6px;
+  height: 26px;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  background: rgba(128, 128, 128, .18);
+  margin: 0 1px;
+}
+
+.ap-thumb img {
+  display: block;
+  height: 26px;
+  width: auto;
+  max-width: 120px;
+  object-fit: cover;
 }
 
 #ctoolbar #codechip {
@@ -1397,73 +1496,13 @@ details.think.compaction-flash>summary {
   opacity: 1;
 }
 
-.chip-img {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 3px;
-  border-radius: 7px;
-  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .15));
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
-  font-size: 11px;
-  max-width: 260px;
-}
-
-.chip-img img {
-  width: 26px;
-  height: 26px;
-  object-fit: cover;
-  border-radius: 4px;
-  display: block;
-  flex: none;
-}
-
-/* 文件名/尺寸文本单独包一层才能出省略号（text-overflow 对 flex 容器里的裸文本节点不生效） */
+/* 附件条（#attachbar / .chip-img / .chip-file / .chip-x）2026-11-19 整体废止：
+   附件改成正文里的 token + 镜像胶囊（见 #inputmirror .ap-pill），只剩 .chip-label
+   还被状态行的模型名用着 */
 .chip-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* × 永不许被内容挤出 chip 可视区（overflow:hidden 会裁掉它 → 删不掉事故） */
-.chip-x {
-  cursor: pointer;
-  opacity: .6;
-  padding: 0 2px;
-  flex: none;
-}
-
-.chip-file .hint {
-  opacity: .6;
-  font-size: 10px;
-  flex: 0 1 auto;
-}
-
-.chip-file {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px 4px 10px;
-  border-radius: 999px;
-  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .15));
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .3));
-  font-size: 11px;
-  max-width: 240px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.chip-file .chip-label {
-  flex: 0 1 auto;
-}
-
-.chip-file svg,
-.chip-img svg {
-  flex: none;
-}
-
-.chip-x:hover {
-  opacity: 1;
 }
 
 #suggest {
@@ -1587,6 +1626,9 @@ details.think.compaction-flash>summary {
 
 /* 抵消原有左右 10px margin，保持贴列缘时不缩进 */
 #input {
+  position: relative;
+  z-index: 1;   /* 浮在镜像层之上：字和光标归它，胶囊底色透上来 */
+  display: block;
   width: 100%;
   box-sizing: border-box;
   resize: none;

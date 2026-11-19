@@ -128,6 +128,9 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
   // slashCmds / workspaceFiles：宿主 slashList / fileList 回包缓存（页面级，composer 只读）
   var slashCmds = null;
   var workspaceFiles = null;
+  // 工作区根：@ 选中的文件要拼成绝对路径变成真附件（跟拖进来的一模一样），
+  // 光有相对路径拼不出来——由宿主在 fileList 里一并下发
+  var workspaceRoot = '';
 
   // ── 三期整树搬迁（交接 4 六步法）：每页签一个完全隔离的 SessionView 工厂闭包 ──
   // 自己的 DOM/状态/定时器/输入框；routeMsg 经 viewFor(tid).handleMsg 一行直达。换镜机制
@@ -169,7 +172,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
   // 归模块独占（本文件不再持有 pendingImages/pendingFiles/sg*）；页面级 sentHistory /
   // slashCmds / workspaceFiles / codeCtx 一律注入引用或 getter，不复制（见模块头注释）。
   var composer = initComposer({
-    q: q, post: vpost, lang: L, el: el, ico: ico, esc: esc, shorten: shorten,
+    q: q, post: vpost, lang: L, el: el, esc: esc, shorten: shorten,
     notice: notice,
     history: sentHistory,
     getCodeCtx: function () { return codeCtx; }, isCodeOn: function () { return codeOn; },
@@ -177,12 +180,14 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
     histNav: histNav,
     pages: { hasPage: function () { return changesPage.hasPage(); }, close: function () { changesPage.close(); } },
     getSlashCmds: function () { return slashCmds; }, getFiles: function () { return workspaceFiles; },
+    getFilesRoot: function () { return workspaceRoot; },
     resetNotice: function () { clearNotice(); }
   });
   // 别名：bindComposerOnce / bindViewEvents / histNav 的正文照旧按这些名字调（零字差异）
   var send = composer.send; var inputKeydown = composer.inputKeydown; var inputPaste = composer.inputPaste;
   var normalizeInputWidth = composer.normalizeInputWidth; var updateSuggest = composer.updateSuggest;
   var autoSize = composer.autoSize; var handleFiles = composer.handleFiles;
+  var syncMirror = composer.syncMirror; // 程序化写 input.value 的地方要补一刀（胶囊不会自己跟）
   var queuedItems = [];
   // ── 最后一问钉住折叠（粘性气泡）：整块在 features/sticky.ts ──
   // 本视图一套（「当前最后一问」引用 stickyQ 与每视图一个 IntersectionObserver 都在模块内独占，
@@ -418,6 +423,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
   // stickyQ / stickyIO 不进来（R7），addUser 只经 sticky 三缝交接。
   var msgList = initMessageList({
     root: root, el: el, ico: ico, esc: esc, linkify: getLinkify(), renderRich: getRenderRich(), lang: L,
+    getRoot: function () { return workspaceRoot; },
     scroll: scroll, post: vpost,
     adoptSticky: sticky.adoptSticky, updateStickyChip: sticky.updateStickyChip, observeSticky: sticky.observeSticky,
     toolStart: toolStart, toolEnd: toolEnd, resetToolRows: resetToolRows, liveReset: liveReset,
@@ -475,7 +481,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
     // 工单24：重绘在途（延后一拍）时流式事件先排队，等重绘落地再按原序补（见 pendingStream 注释）
     if (renderQ.queueDuringRender(m)) return;
     if (m.type === 'user') {
-      addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images);
+      addUser(m.text, m.imageCount, m.codeInfo, m.fileCount, m.images, m.attachNames);
     }
     else if (m.type === 'newLive') { finalizeLive(); liveReset(); }
     // 探针实锤（probe-toolblocks.mjs）：pi 每输出一个 toolCall 就是一条独立 assistant 消息——
@@ -541,7 +547,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
       renderNativeQueue();
     }
     else if (m.type === 'notice') notice(m.text);
-    else if (m.type === 'fillInput') { followingEnd = true; histIdx = -1; histDraft = ''; input.value = m.text || ''; input.focus(); scroll(); } // 程序化填充同样退出回溯，防旧草稿盖掉回填内容 // 主动动作回底（工单十七要点 3）
+    else if (m.type === 'fillInput') { followingEnd = true; histIdx = -1; histDraft = ''; input.value = m.text || ''; syncMirror(); autoSize(); input.focus(); scroll(); } // 程序化填充同样退出回溯，防旧草稿盖掉回填内容 // 主动动作回底（工单十七要点 3）
     else if (m.type === 'status') {
       // N 刀：启动状态接秒表（实时走秒）；其余状态走普通通道并停秒表
       if (m.text === L.startingPi) startBootTick(m.text); else { stopBootTick(); setStatus(m.text); }
@@ -557,6 +563,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
       removeQueued(m.qid);
       histIdx = -1; histDraft = ''; // 程序化合入同 fillInput 口径：退出回溯
       input.value = input.value ? input.value + '\n\n' + (m.text || '') : (m.text || '');
+      syncMirror(); // 合入后胶囊位置/高度重算
       followingEnd = true; // 取回排队消息=主动动作回底（工单十七验收条，同 fillInput 口径）
       input.focus(); scroll();
     }
@@ -565,7 +572,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
     else if (m.type === 'addImages') composer.addImages(m.images);
     else if (m.type === 'addFiles') composer.addFiles(m.files);
     else if (m.type === 'slashList') { slashCmds = m.commands || []; updateSuggest(); }
-    else if (m.type === 'fileList') { workspaceFiles = m.files || []; updateSuggest(); }
+    else if (m.type === 'fileList') { workspaceFiles = m.files || []; workspaceRoot = m.root || ''; updateSuggest(); }
     else if (m.type === 'state') { applyState(m); ctxPop.scheduleQuery(); }
     else if (m.type === 'ctxDetail') ctxPop.applyDetail(m);
     else if (m.type === 'banner') { banner = m.banner; renderBanner(m.banner); }
@@ -614,6 +621,7 @@ export function initSessionView(deps: SessionViewDeps): SessionViewApi {
         ctxPop.dispose();
         statusBar.dispose(); // 状态行两块秒表（busyTimer/bootTickTimer）归 features/statusBar.ts 独占
         clearStreamTimer();
+        composer.dispose(); // 摘 window 上的镜像 resize 监听（DOM 摘了监听还在 = 留着整棵视图）
         renderQ.dispose(); // 清在途的延时重绘（renderTimer 归 features/renderQueue.ts 独占）
         if (view.parentNode) view.parentNode.removeChild(view);
       }
