@@ -5,31 +5,24 @@
 
 ## 在做
 
-**记忆接力线十二单已收，等 37 落地后统一记账**。`归档.md` 被工单37（归档瘦身）独占，无法落账，
-哈希先存于此：35 `5781dbf`（已记账）· 34 `b8570d5` · 36 `3dce0de` · 38 `56cd0ba` · 39 `551dec1` ·
-40 `f52b4b3` · 41 `d57376c` + `1897cb1`（节改名）· 37 跑着。
-
-**真机验收 webview 拆分**：用户「一直在用没遇问题」→ 判定事实通过（revert 表在交接 §七）。
+**无在施工工单**：记忆接力一期 + 数据安全 + 归档瘦身七单已收（2026-11-19，账在 `归档.md`）。
+**阻塞**：他人未提交的 668 行 WIP（`composer/messageList/sessionView/style/index.html/piCore/i18n/protocol/package.json`），
+面板渲染 `custom`、`applyState` bug 都等它落地。
 
 ## 待办（按优先级）
 
-1. **真机验收 9 个域**：清单在 `docs/history/交接-webview拆分完成.md` §七，每域对应一个 `git revert <commit>`。
-2. **`applyState` 只认 `⏱` 前缀**：state 帧会清掉刚冻结的用时（既有 bug 非拆分引入），未立票。
-3. **记忆机制已落一半**：`harness/memory/` 一期（指针注入 + digest 探针）已完工；二期接管摘要未开。
-   债：面板不渲染 `role:"custom"`（`messageList.ts` 别人持有）、样本已到 3993/4000。
-4. **`slim-subagent-frames.mjs` 修好前禁 `--apply`**（洗会话历史：566→21 条），修法见 `docs/history/交接-webview拆分完成.md` §五 第 8 条。
-5. **`归档.md` 待清**（3,323 行 / 74k token，仓库最后一个膨胀源）：每工单压成 3-5 行，目标 400-600 行。等用户拍板。
-6. **6b 页面级 chrome** 未搬（≈230 行，可选；不做 `main.ts` 368 行也可维护）
-7. 小债：`scheduleStream` 死代码（存量未删）、大纲注释口径（写 1/3 线，代码 `clientHeight/2`）
+1. **面板渲染 `role:"custom"`**：`messageList.ts` 只渲染 5 类角色，memory-pointer 模型看得到、用户看不见（同阻塞于上述 WIP）。
+2. **`applyState` 只认 `⏱` 前缀**：state 帧会清掉刚冻结的用时（既有 bug，非拆分引入），未立票。
+3. **记忆二期未开**：接管摘要（`session_before_compact` 返回 `{compaction}`）需另立单；开口前先调预算（样本已到 3993/4000）。
+4. **真机验收 9 个域**：清单在 `docs/history/交接-webview拆分完成.md` §七，每域对应一个 `git revert <commit>`。
+5. **6b 页面级 chrome** 未搬（≈230 行，可选；不做 `main.ts` 368 行也可维护）。
+6. 小债：`DIRECTOR.md` 只读属性已去掉、未设回；全局 `~/.pi/agent/AGENTS.md` 不加「边干边记」（已商量）。
 
 ## 风险
 
-- **12 个拆分单全部只验到「compile + 16 组回归 + 逐字核对 + headless 探针」，真机 0 单验过。**
-  真机行为不对就按 §七 表逐域 revert。
-- **harness 运行副本已是 v27（只升不降）**：回退插件版本不会自动降级，需把
-  `<agentDir>/extensions/subagent` 改名或删掉，旧插件才会重新同步。
-- **今天定的文档/流程规则只有 1 天寿命**（AGENTS 瘦身、docs 分层、PROGRESS 滚动窗口），
-  未经实战检验；发现不好用直接改，不要因为"文档写了"就硬守。
+- **12 个拆分单真机 0 单验过**（只到 compile + 回归 + 逐字核对 + headless 探针），行为不对按 §七 表逐域 revert。
+- **harness 运行副本版本只升不降**：回退插件版本不会自动降级，需把 `<agentDir>/extensions/subagent`（及 `memory`）改名或删掉才会重同步。
+- **近期定的文档/流程规则未经实战检验**（AGENTS 瘦身、docs 分层、PROGRESS 滚动窗口），不好用直接改，不要因为「文档写了」就硬守。
 
 ## 关键位置
 
@@ -37,13 +30,8 @@
 |---|---|
 | 回滚锚点 | tag `baseline-before-split` = `9530019`（单刀 `git revert <commit>`） |
 | 安装包 | **不存**，`npm run package` 现打（任意 commit 都能重建） |
-| 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 模块表 + 决策理由 + 待验清单） |
-| 架构与事故 | `docs/decisions.md`（17 节：pi 内置 / 壳原则 / harness 版本门 / 还原边界 / 文档治理 / 压缩机制…） |
-| 工单索引 | `归档.md`（只存结论 + commit，历史遗留较臃肿） |
+| 拆分总账 | `docs/history/交接-webview拆分完成.md`（12 刀 commit 表 + 待验清单） |
+| 架构与事故 | `docs/decisions.md`（17 节，§十七 = 压缩机制） |
+| 记忆机制 | `harness/memory/{index.ts,digest.ts}` + `harness/memory/harness.json` v1 |
+| 工单索引 | `归档.md`（只存结论 + commit） |
 | 交接会话 jsonl | `~/.pi/agent/sessions/--D--work-docs-pi test-pi-vscode--/2026-11-18T08-29-53-267Z_01a1edc6-d4f3-75ed-8bf3-21e0eb1ca403.jsonl` |
-
-## 上次交接时没定的事
-
-- `归档.md` 是否按新标准清一遍（见待办 5）—— 等用户拍板
-- 全局 `~/.pi/agent/AGENTS.md` 不加「边干边记」：避免每个项目多一个文件（已商量）
-- `DIRECTOR.md` 只读属性已去掉，未设回
