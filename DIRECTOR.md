@@ -109,6 +109,17 @@
 > **验收**：`grep -rn scheduleStream webview/` 只剩历史注释（无定义无调用）；
 > `npm run typecheck:webview` 零报错；`git show --stat` 只含两个文件。
 
+> **工单39（待施工）——digest 裁剪优先级重排（工单34 返修）**
+>
+> 问题：`harness/memory/digest.ts` 的 `enforceBudget()` 从最后一节开始砍，而最后一节是否决清单——
+> 最不可再生的信息先被砍掉（实测：61.5MB 会话超预算时 rejections 剩 0 条、user 留 81 条）。
+> 改法：另立 `TRIM_PRIORITY`（conclusions → user → decisions → rejections）与展示顺序解耦；
+> `stats.dropped` 改为按节计数（保留总数兼容旧断言）。
+>
+> **边界**：不改展示顺序、不改抽取规则、不改 4000 token 预算、不碰 `index.ts` 钩子行为。
+>
+> **验收**：新增 2 条断言（超预算时 rejections 一条不少；先砍 conclusions）+ 真实样本打印按节计数。
+
 > 历史：工单33 判死、工单32 收单存查（两单全文均已迁 归档.md）。
 
 ## 攒包小刀（随下一版，可与任意工单顺带，不许混笔）
