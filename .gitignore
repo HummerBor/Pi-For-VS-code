@@ -37,6 +37,9 @@ skills
 # 例外：内置技能源码随 vsix 分发（harness/skills/<name>/），必须入库
 !harness/skills/
 !harness/skills/**
+# 例外：本仓开发流程技能（派单/验收/记账）入库，但不随 vsix 分发（.vscodeignore 已排除 .pi/）
+!.pi/skills/
+!.pi/skills/**
 media/动画
 # 会话/助手临时草稿（prompt 中转、冒烟日志、复现产物）——垃圾不入库不碍眼（2026-11-02 用户令）
 .pi/tmp/
