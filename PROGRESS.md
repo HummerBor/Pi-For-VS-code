@@ -6,18 +6,16 @@
 ## 在做
 
 **无在施工工单**：记忆接力一期 + 数据安全 + 归档瘦身七单已收（2026-11-19，账在 `归档.md`）。
-**本轮**：会话列表右键换成自绘一项菜单「复制 jsonl 路径」（`webview/sessions.ts` + `sessionsView.ts` + i18n），已 compile，待用户窗口验收。
-**阻塞**：他人未提交的 668 行 WIP（`composer/messageList/sessionView/style/index.html/piCore/i18n/protocol/package.json`），
-面板渲染 `custom`、`applyState` bug 都等它落地。
+**本次发版**：0.1.48 已发市场（commit `6645640`）——会话行右键换自绘菜单「复制 jsonl 路径」。
+**工作区干净**：此前 668 行 WIP 已由并行会话落地（`custom` 渲染见 `bb66b35`）。
 
 ## 待办（按优先级）
 
-1. **面板渲染 `role:"custom"`**：`messageList.ts` 只渲染 5 类角色，memory-pointer 模型看得到、用户看不见（同阻塞于上述 WIP）。
-2. **`applyState` 只认 `⏱` 前缀**：state 帧会清掉刚冻结的用时（既有 bug，非拆分引入），未立票。
-3. **记忆二期未开**：接管摘要（`session_before_compact` 返回 `{compaction}`）需另立单；开口前先调预算（样本已到 3993/4000）。
-4. **真机验收 9 个域**：清单在 `docs/history/交接-webview拆分完成.md` §七，每域对应一个 `git revert <commit>`。
-5. **6b 页面级 chrome** 未搬（≈230 行，可选；不做 `main.ts` 368 行也可维护）。
-6. 小债：`DIRECTOR.md` 只读属性已去掉、未设回；全局 `~/.pi/agent/AGENTS.md` 不加「边干边记」（已商量）。
+1. **`applyState` 只认 `⏱` 前缀**：state 帧会清掉刚冻结的用时（既有 bug，非拆分引入），未立票。
+2. **记忆二期未开**：接管摘要（`session_before_compact` 返回 `{compaction}`）需另立单；开口前先调预算（样本已到 3993/4000）。
+3. **真机验收 9 个域**：清单在 `docs/history/交接-webview拆分完成.md` §七，每域对应一个 `git revert <commit>`。
+4. **6b 页面级 chrome** 未搬（≈230 行，可选；不做 `main.ts` 368 行也可维护）。
+5. 小债：`DIRECTOR.md` 只读属性已去掉、未设回；全局 `~/.pi/agent/AGENTS.md` 不加「边干边记」（已商量）。
 
 ## 风险
 
