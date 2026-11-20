@@ -6,6 +6,7 @@
 ## 在做
 
 **无在施工工单**：记忆接力一期 + 数据安全 + 归档瘦身七单已收（2026-11-19，账在 `归档.md`）。
+**本轮**：会话列表右键换成自绘一项菜单「复制 jsonl 路径」（`webview/sessions.ts` + `sessionsView.ts` + i18n），已 compile，待用户窗口验收。
 **阻塞**：他人未提交的 668 行 WIP（`composer/messageList/sessionView/style/index.html/piCore/i18n/protocol/package.json`），
 面板渲染 `custom`、`applyState` bug 都等它落地。
 

@@ -282,3 +282,35 @@ body {
   font-size: 12px;
   opacity: .55;
 }
+
+/* 行右键菜单（2026-11-19）：只装一项「复制 jsonl 路径」。
+   为什么自绘而不用原生菜单：原生 webview 菜单只有剪切/复制/粘贴，在非可编辑的会话行上
+   没意义（用户原话「没屌用」）；自绘还能给出可见反馈——直接静默复制用户会以为右键坏了。*/
+#ctx {
+  position: fixed;
+  z-index: 20;
+  min-width: 148px;
+  padding: 4px;
+  font-size: 12px;
+  color: var(--pi-fg);
+  background: var(--pi-suggest-bg);
+  border: 1px solid var(--pi-suggest-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .38);
+}
+
+#ctx .ctx-item {
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#ctx .ctx-item:hover {
+  background: var(--pi-tool-hover);
+}
+
+#ctx .ctx-ok {
+  padding: 5px 10px;
+  color: var(--pi-status-ok);
+}

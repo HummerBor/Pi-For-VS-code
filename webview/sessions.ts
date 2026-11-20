@@ -159,16 +159,53 @@ const L = STRINGS[((document.documentElement.lang || "zh") === "en" ? "en" : "zh
     vscode.postMessage({ type: "svOpen", file, label: items[ridx] ? items[ridx].label : undefined });
   });
 
-  // 右键 = 复制该会话的 jsonl 路径（2026-11-19 用户拍板：原生 cut/copy/paste 菜单在这个
-  //  列表里没屌用——行文字不可编辑）。必须 preventDefault 才能压掉 VS Code webview 自带的
-  //  原生菜单；复制走宿主（vscode.env.clipboard），webview 侧不碰 navigator.clipboard。
+  // ── 行右键菜单（2026-11-19 用户拍板）：原生 webview 菜单只有剪切/复制/粘贴，在非可编辑的
+  //  会话行上没意义；换成唯一一项「复制 jsonl 路径」。必须 preventDefault —— VS Code webview
+  //  pre 脚本的 contextmenu 处理器先判 e.defaultPrevented，为 true 就不弹原生菜单。
+  //  为什么自绘而不用「右键即静默拷」：那样界面毫无反馈，用户会以为右键坏了（实测就是这么报的）。
+  const ctxEl = document.getElementById("ctx") as HTMLElement;
+  let ctxFile = "";
+
+  function closeCtx() {
+    ctxEl.style.display = "none";
+    ctxFile = "";
+  }
+
+  function openCtx(x: number, y: number, file: string) {
+    ctxFile = file;
+    ctxEl.innerHTML = `<div class="ctx-item" data-act="copy">${esc(L.svCopyPath)}</div>`;
+    ctxEl.style.display = "block";
+    // 贴边翻转：菜单被右侧栏裁掉就白做了（先量尺寸再定位）
+    const r = ctxEl.getBoundingClientRect();
+    ctxEl.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 2)) + "px";
+    ctxEl.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 2)) + "px";
+  }
+
   listEl.addEventListener("contextmenu", (e) => {
     const row = (e.target as HTMLElement).closest(".row") as HTMLElement | null;
-    if (!row) return; // 空白处保留原生菜单（搜索框的复制粘贴还要用）
+    if (!row) { closeCtx(); return; } // 空白处保留原生菜单（搜索框的复制粘贴还要用）
     e.preventDefault();
     const file = row.getAttribute("data-file") || "";
-    if (file) vscode.postMessage({ type: "svCopyPath", file });
+    if (file) openCtx(e.clientX, e.clientY, file);
   });
+
+  ctxEl.addEventListener("click", (e) => {
+    const item = (e.target as HTMLElement).closest(".ctx-item") as HTMLElement | null;
+    if (!item || !ctxFile) return;
+    vscode.postMessage({ type: "svCopyPath", file: ctxFile });
+    // 就地变「已复制」提示：复制是宿主侧同步写剪贴板，这里给正向反馈，不靠状态栏（侧栏场景看不到）
+    ctxEl.innerHTML = `<div class="ctx-ok">✓ ${esc(L.svCopyPath)}</div>`;
+    ctxFile = "";
+    window.setTimeout(closeCtx, 900);
+  });
+
+  // 点外部/失焦/滚动/Esc 都关菜单（不关就会悬在列表上方遮行）
+  window.addEventListener("mousedown", (e) => {
+    if (!(e.target as HTMLElement).closest("#ctx")) closeCtx();
+  });
+  window.addEventListener("blur", closeCtx);
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtx(); });
+  listEl.addEventListener("scroll", closeCtx);
 
   // 键盘导航：↑↓ 移动选中（带过滤态换算）、Enter 打开、Esc 清选
   qEl.addEventListener("keydown", (e) => {
